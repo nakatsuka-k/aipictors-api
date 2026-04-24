@@ -35,6 +35,13 @@ export const hasPreviousSubscription = async (db: D1Database, userId: string) =>
   return row !== null
 }
 
+export const getSubscriptionByNanoid = async (db: D1Database, nanoid: string) => {
+  return db
+    .prepare('SELECT * FROM subscriptions WHERE nanoid = ? LIMIT 1')
+    .bind(nanoid)
+    .first<Record<string, unknown>>()
+}
+
 export const upsertSubscription = async (db: D1Database, input: SubscriptionUpsertInput) => {
   await db
     .prepare(`INSERT INTO subscriptions(

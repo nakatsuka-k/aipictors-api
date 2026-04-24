@@ -5,6 +5,7 @@ import { json } from '@/lib/json'
 import {
   disableSubscriptionByStripeId,
   getCurrentSubscription,
+  getSubscriptionByNanoid,
   hasPreviousSubscription,
   upsertSubscription,
 } from '@/lib/subscriptions'
@@ -39,6 +40,17 @@ subscriptionRoutes.use('*', requireInternalAuth)
 subscriptionRoutes.get('/current/:userId', async (c) => {
   const current = await getCurrentSubscription(c.env.AIPICTORS_DB, c.req.param('userId'))
   return json({ error: null, data: current })
+})
+
+subscriptionRoutes.get('/by-nanoid/:nanoid', async (c) => {
+  const authError = requireInternalAuth(c)
+  if (authError !== null) {
+    return authError
+  }
+
+  const nanoid = c.req.param('nanoid')
+  const data = await getSubscriptionByNanoid(c.env.AIPICTORS_DB, nanoid)
+  return json({ error: null, data })
 })
 
 subscriptionRoutes.get('/has-previous/:userId', async (c) => {
