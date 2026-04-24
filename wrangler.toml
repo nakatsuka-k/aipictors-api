@@ -2,15 +2,10 @@ name = "aipictors-api"
 main = "src/index.ts"
 compatibility_date = "2026-04-24"
 account_id = "7f2a200bf2994f36f45e733751a30be6"
-workers_dev = true
-
-routes = [
-	{ pattern = "backend.aipictors.com/healthz", zone_name = "aipictors.com" },
-	{ pattern = "backend.aipictors.com/internal/*", zone_name = "aipictors.com" },
-	{ pattern = "backend.aipictors.com/admin/*", zone_name = "aipictors.com" },
-	{ pattern = "backend.aipictors.com/stripe/*", zone_name = "aipictors.com" },
-	{ pattern = "backend.aipictors.com/webhooks/stripe", zone_name = "aipictors.com" }
-]
+# Custom hostnames are configured in the Cloudflare Dashboard (not here) so `wrangler deploy`
+# does not need Zone → Workers Routes on the API token (fixes CI auth error 10000 on /zones/.../workers/routes).
+# See README "Custom routes (dashboard)".
+workers_dev = false
 
 [[d1_databases]]
 binding = "AIPICTORS_DB"

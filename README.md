@@ -42,35 +42,34 @@ Current scope:
 
 ## Deployment (`backend.aipictors.com`)
 
-This project deploys custom routes on the zone `aipictors.com` (see `wrangler.toml`):
+`wrangler.toml` does **not** declare `routes` on purpose: `wrangler deploy` then only updates the Worker script and bindings (account-scoped APIs). **Custom hostnames are maintained in the Cloudflare Dashboard**, so GitHub Actions can use a narrow token (Workers Scripts + D1) without **Zone → Workers Routes** and without hitting `Authentication error [code: 10000]` on `/zones/.../workers/routes`.
 
-- `backend.aipictors.com/healthz`
-- `backend.aipictors.com/internal/*`
-- `backend.aipictors.com/admin/*`
-- `backend.aipictors.com/stripe/*`
-- `backend.aipictors.com/webhooks/stripe`
+### Custom routes (dashboard)
 
-### Required API Token scopes
+In [Workers & Pages](https://dash.cloudflare.com/) → **aipictors-api** → **Settings** → **Domains & Routes** (or **Triggers**), ensure the Worker is attached to zone **`aipictors.com`** with at least:
 
-GitHub Actions / CI uses `CLOUDFLARE_API_TOKEN`. Uploading the Worker can succeed while **route sync** fails with `Authentication error [code: 10000]` on `/zones/.../workers/routes` if the token cannot manage **Workers Routes** on the zone that serves those hostnames.
+| Route pattern |
+| --- |
+| `backend.aipictors.com/healthz` |
+| `backend.aipictors.com/internal/*` |
+| `backend.aipictors.com/admin/*` |
+| `backend.aipictors.com/stripe/*` |
+| `backend.aipictors.com/webhooks/stripe` |
 
-Create a **Custom API Token** (or extend an existing one) with:
+If these already existed from an earlier Wrangler deploy, you do not need to recreate them. When you add or change hostnames, do it here (or via Terraform), not in `wrangler.toml`, unless you intentionally want Wrangler to manage routes again (then the deploy token needs zone Workers Routes permission).
 
-**Account (this Cloudflare account)**
+`workers_dev` is **false** so the Worker is not served on `*.workers.dev`; traffic is only via the routes above.
+
+### Required API token scopes (CI / `CLOUDFLARE_API_TOKEN`)
+
+**Account** (include this Cloudflare account):
 
 - Workers Scripts — Edit  
 - D1 — Edit  
-- (Optional) Workers KV Storage — Edit — if Wrangler or other tooling needs it  
-- (Optional) Workers Tail — Read — for `wrangler tail` only  
+- (Optional) Workers KV Storage — Edit  
+- (Optional) Workers Tail — Read  
 
-**Zone — include the zone `aipictors.com` (not “All zones” unless you intend to)**
-
-- Workers Routes — Edit (required so Wrangler can call the zone Workers Routes API for `backend.aipictors.com` patterns)  
-- Zone — Read  
-
-Under **Zone resources**, set **Include → Specific zone → `aipictors.com`**. A token scoped only to the account with no zone, or to a different zone, will reproduce the error you see after “Uploaded aipictors-api”.
-
-Alternatively, use a token whose **Account → Workers Routes** permission covers all zones (Wrangler will then use the account-level routes API); that is broader access, so prefer the zone-scoped token above when possible.
+No zone resources are required for `npx wrangler deploy` with the current `wrangler.toml`.
 
 ### Set secrets
 
@@ -89,7 +88,7 @@ CLOUDFLARE_API_TOKEN=... npx wrangler deploy
 
 ## Stripe webhook URL
 
-Use (must match the hostname in `wrangler.toml` routes):
+Use (must match the hostname configured for this Worker in the dashboard):
 
 `https://backend.aipictors.com/webhooks/stripe`
 
