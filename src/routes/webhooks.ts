@@ -85,8 +85,21 @@ webhookRoutes.post('/stripe', async (c) => {
   }
 
   if (event.type === 'invoice.payment_succeeded') {
+    // Try subscription_details.metadata first, then payment_intent.metadata, then invoice.metadata
+    let metadata: Record<string, unknown> = {}
+    
     const subscription = object.subscription_details as { metadata?: Record<string, unknown> } | undefined
-    const metadata = subscription?.metadata ?? {}
+    if (subscription?.metadata) {
+      metadata = subscription.metadata
+    } else {
+      const paymentIntent = object.payment_intent as { metadata?: Record<string, unknown> } | undefined
+      if (paymentIntent?.metadata) {
+        metadata = paymentIntent.metadata
+      } else {
+        metadata = (object.metadata as Record<string, unknown>) ?? {}
+      }
+    }
+    
     const userId = getString(metadata, 'user_id')
     const nanoid = getString(metadata, 'subscription_nanoid')
     const passType = getString(metadata, 'pass_type')

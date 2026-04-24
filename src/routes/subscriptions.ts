@@ -160,8 +160,23 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     form,
   )
 
-  const stripeError = stripeResponse.error as { message?: string } | undefined
+  const stripeError = stripeResponse.error as { message?: string; code?: string } | undefined
   if (stripeError?.message) {
+    // Stripe側でサブスクリプションが存在しない場合はD1をキャンセル済みに更新して正常終了
+    if (stripeError.code === 'resource_missing' || stripeError.message.includes('No such subscription')) {
+      await c.env.AIPICTORS_DB
+        .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
+        .bind(stripeSubscriptionId)
+        .run()
+      return json({
+        error: null,
+        data: {
+          status: 'canceled',
+          stripeStatus: null,
+          cancelAtPeriodEnd: false,
+        },
+      })
+    }
     return json({ error: stripeError.message }, 502)
   }
 
