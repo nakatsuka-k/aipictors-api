@@ -43,11 +43,6 @@ subscriptionRoutes.get('/current/:userId', async (c) => {
 })
 
 subscriptionRoutes.get('/by-nanoid/:nanoid', async (c) => {
-  const authError = requireInternalAuth(c)
-  if (authError !== null) {
-    return authError
-  }
-
   const nanoid = c.req.param('nanoid')
   const data = await getSubscriptionByNanoid(c.env.AIPICTORS_DB, nanoid)
   return json({ error: null, data })
