@@ -1,0 +1,19 @@
+{
+  "name": "aipictors-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.7.2",
+    "valibot": "^0.42.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250410.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.12.0"
+  }
+}
