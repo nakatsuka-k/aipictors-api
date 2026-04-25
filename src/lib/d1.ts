@@ -43,6 +43,14 @@ const schemaStatements = [
     type TEXT NOT NULL,
     processed_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS webhook_debug (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    debug_info TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(event_id)
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_point_ledger_user_created_at
     ON point_ledger(user_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_subscriptions_user_active

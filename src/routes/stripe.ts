@@ -52,20 +52,37 @@ stripeRoutes.post('/checkout/subscription', async (c) => {
 
   const parsed = safeParse(subscriptionCheckoutSchema, await c.req.json())
   if (!parsed.success) {
+    console.error('Invalid checkout request:', parsed.issues)
     return json({ error: 'Invalid body' }, 400)
   }
 
-  const response = await createSubscriptionCheckout({
-    secretKey: c.env.STRIPE_SECRET_KEY,
-    origin: parsed.output.origin,
-    userId: parsed.output.userId,
-    passType: parsed.output.passType,
-    db: c.env.AIPICTORS_DB,
-  }) as { url?: string; error?: { message?: string } }
+  try {
+    const response = await createSubscriptionCheckout({
+      secretKey: c.env.STRIPE_SECRET_KEY,
+      origin: parsed.output.origin,
+      userId: parsed.output.userId,
+      passType: parsed.output.passType,
+      db: c.env.AIPICTORS_DB,
+    }) as { url?: string; error?: { message?: string } }
 
-  if (!response.url) {
-    return json({ error: response.error?.message ?? 'Failed to create checkout session' }, 502)
+    if (!response.url) {
+      const errorMsg = response.error?.message ?? 'Failed to create checkout session'
+      console.error('Checkout session creation failed:', { 
+        userId: parsed.output.userId, 
+        passType: parsed.output.passType, 
+        error: errorMsg 
+      })
+      return json({ error: errorMsg }, 502)
+    }
+
+    console.log('Checkout session created successfully:', { 
+      userId: parsed.output.userId, 
+      passType: parsed.output.passType, 
+      url: response.url?.substring(0, 50) + '...' 
+    })
+    return json({ error: null, data: { url: response.url } })
+  } catch (error) {
+    console.error('Checkout error:', error)
+    return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500)
   }
-
-  return json({ error: null, data: { url: response.url } })
 })

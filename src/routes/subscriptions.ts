@@ -5,6 +5,7 @@ import { json } from '@/lib/json'
 import { getPricingSettings } from '@/lib/pricing'
 import {
   disableSubscriptionByStripeId,
+  getActiveOrRecentSubscription,
   getCurrentSubscription,
   getSubscriptionByNanoid,
   hasPreviousSubscription,
@@ -140,7 +141,9 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
-  const current = await getCurrentSubscription(c.env.AIPICTORS_DB, parsed.output.userId)
+  const current =
+    (await getCurrentSubscription(c.env.AIPICTORS_DB, parsed.output.userId)) ??
+    (await getActiveOrRecentSubscription(c.env.AIPICTORS_DB, parsed.output.userId))
 
   if (!current) {
     return json({ error: 'No active subscription found' }, 404)
@@ -180,6 +183,11 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     return json({ error: stripeError.message }, 502)
   }
 
+  const isCancelAtPeriodEnd = stripeResponse.cancel_at_period_end === true
+  if (!isCancelAtPeriodEnd) {
+    return json({ error: 'Failed to schedule cancellation at period end' }, 502)
+  }
+
   await c.env.AIPICTORS_DB
     .prepare(`UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = ?`)
     .bind(stripeSubscriptionId)
@@ -190,7 +198,7 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     data: {
       status: 'cancellation_requested',
       stripeStatus: typeof stripeResponse.status === 'string' ? stripeResponse.status : null,
-      cancelAtPeriodEnd: stripeResponse.cancel_at_period_end === true,
+      cancelAtPeriodEnd: true,
     },
   })
 })

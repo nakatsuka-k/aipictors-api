@@ -26,6 +26,16 @@ export const getCurrentSubscription = async (db: D1Database, userId: string) => 
     .first<Record<string, unknown>>()
 }
 
+/** キャンセル用: 期間切れでも is_disabled=0 の最新行を返す */
+export const getActiveOrRecentSubscription = async (db: D1Database, userId: string) => {
+  return db
+    .prepare(`SELECT * FROM subscriptions
+      WHERE user_id = ? AND is_disabled = 0
+      ORDER BY current_period_end DESC LIMIT 1`)
+    .bind(userId)
+    .first<Record<string, unknown>>()
+}
+
 export const hasPreviousSubscription = async (db: D1Database, userId: string) => {
   const row = await db
     .prepare('SELECT id FROM subscriptions WHERE user_id = ? LIMIT 1')
