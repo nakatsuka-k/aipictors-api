@@ -163,10 +163,16 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     form,
   )
 
-  const stripeError = stripeResponse.error as { message?: string; code?: string } | undefined
+  const stripeError = stripeResponse.error as { message?: string; code?: string; type?: string } | undefined
   if (stripeError?.message) {
-    // Stripe側でサブスクリプションが存在しない場合はD1をキャンセル済みに更新して正常終了
-    if (stripeError.code === 'resource_missing' || stripeError.message.includes('No such subscription')) {
+    // Stripe側でサブスクリプションが存在しない or 更新不可（すでにキャンセル済み）の場合はD1をキャンセル済みに更新して正常終了
+    const isAlreadyGone =
+      stripeError.code === 'resource_missing' ||
+      stripeError.code === 'subscription_update_forbidden' ||
+      stripeError.message.includes('No such subscription') ||
+      stripeError.message.includes('already been canceled') ||
+      stripeError.message.includes('Updates to a canceled')
+    if (isAlreadyGone) {
       await c.env.AIPICTORS_DB
         .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
         .bind(stripeSubscriptionId)
@@ -181,6 +187,23 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
       })
     }
     return json({ error: stripeError.message }, 502)
+  }
+
+  // Stripe が既にキャンセル済みのサブスクを返した場合も正常終了
+  const stripeStatus = typeof stripeResponse.status === 'string' ? stripeResponse.status : null
+  if (stripeStatus === 'canceled') {
+    await c.env.AIPICTORS_DB
+      .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
+      .bind(stripeSubscriptionId)
+      .run()
+    return json({
+      error: null,
+      data: {
+        status: 'canceled',
+        stripeStatus: 'canceled',
+        cancelAtPeriodEnd: false,
+      },
+    })
   }
 
   const isCancelAtPeriodEnd = stripeResponse.cancel_at_period_end === true
@@ -199,6 +222,58 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
       status: 'cancellation_requested',
       stripeStatus: typeof stripeResponse.status === 'string' ? stripeResponse.status : null,
       cancelAtPeriodEnd: true,
+    },
+  })
+})
+
+subscriptionRoutes.post('/resume-current', async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: 'STRIPE_SECRET_KEY is not configured' }, 500)
+  }
+
+  const parsed = safeParse(cancelCurrentSchema, await c.req.json())
+  if (!parsed.success) {
+    return json({ error: 'Invalid body' }, 400)
+  }
+
+  const current =
+    (await getCurrentSubscription(c.env.AIPICTORS_DB, parsed.output.userId)) ??
+    (await getActiveOrRecentSubscription(c.env.AIPICTORS_DB, parsed.output.userId))
+
+  if (!current) {
+    return json({ error: 'No active subscription found' }, 404)
+  }
+
+  const stripeSubscriptionId = getString(current, 'stripe_subscription_id')
+  if (!stripeSubscriptionId) {
+    return json({ error: 'Stripe subscription id is missing' }, 409)
+  }
+
+  const form = new URLSearchParams()
+  form.set('cancel_at_period_end', 'false')
+
+  const stripeResponse = await postStripeForm(
+    c.env.STRIPE_SECRET_KEY,
+    `/subscriptions/${stripeSubscriptionId}`,
+    form,
+  )
+
+  const stripeError = stripeResponse.error as { message?: string; code?: string } | undefined
+  if (stripeError?.message) {
+    return json({ error: stripeError.message }, 502)
+  }
+
+  await c.env.AIPICTORS_DB
+    .prepare(`UPDATE subscriptions SET status = 'paid' WHERE stripe_subscription_id = ?`)
+    .bind(stripeSubscriptionId)
+    .run()
+
+  return json({
+    error: null,
+    data: {
+      status: 'paid',
+      stripeStatus: typeof stripeResponse.status === 'string' ? stripeResponse.status : null,
+      cancelAtPeriodEnd: false,
     },
   })
 })
