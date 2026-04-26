@@ -97,6 +97,59 @@ subscriptionRoutes.use('*', requireInternalAuth)
 
 subscriptionRoutes.get('/current/:userId', async (c) => {
   const current = await getCurrentSubscription(c.env.AIPICTORS_DB, c.req.param('userId'))
+
+  if (!current) {
+    return json({ error: null, data: null })
+  }
+
+  const stripeSubscriptionId = getString(current, 'stripe_subscription_id')
+  if (!stripeSubscriptionId || !c.env.STRIPE_SECRET_KEY) {
+    return json({ error: null, data: current })
+  }
+
+  try {
+    const stripeSubscription = await getStripe(
+      c.env.STRIPE_SECRET_KEY,
+      `/subscriptions/${stripeSubscriptionId}`,
+    )
+
+    const cancelAtPeriodEnd = stripeSubscription.cancel_at_period_end === true
+    const stripeStatus = getString(stripeSubscription, 'status')
+
+    if (cancelAtPeriodEnd) {
+      await c.env.AIPICTORS_DB
+        .prepare(`UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = ?`)
+        .bind(stripeSubscriptionId)
+        .run()
+
+      return json({
+        error: null,
+        data: {
+          ...current,
+          status: 'cancellation_requested',
+        },
+      })
+    }
+
+    if (stripeStatus === 'canceled') {
+      await c.env.AIPICTORS_DB
+        .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
+        .bind(stripeSubscriptionId)
+        .run()
+
+      return json({
+        error: null,
+        data: {
+          ...current,
+          status: 'canceled',
+          is_disabled: 1,
+        },
+      })
+    }
+  } catch {
+    // Stripe照会失敗時はDB値を返す
+  }
+
   return json({ error: null, data: current })
 })
 
