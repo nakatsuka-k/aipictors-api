@@ -119,6 +119,21 @@ const getPreviewProrationAmount = (invoice: Record<string, unknown>) => {
   return getNumber(invoice, 'amount_due') ?? getNumber(invoice, 'total') ?? 0
 }
 
+const isInvoicePaid = (invoice: Record<string, unknown> | null) => {
+  if (!invoice) {
+    return false
+  }
+
+  const status = getString(invoice, 'status')
+  if (status === 'paid') {
+    return true
+  }
+
+  const amountDue = getNumber(invoice, 'amount_due')
+  const amountRemaining = getNumber(invoice, 'amount_remaining')
+  return amountDue === 0 || amountRemaining === 0
+}
+
 const setPlanPriceData = (
   form: URLSearchParams,
   passType: 'LITE' | 'STANDARD' | 'PREMIUM',
@@ -476,9 +491,10 @@ subscriptionRoutes.post('/change-plan', async (c) => {
 
   const form = new URLSearchParams()
   form.set('proration_behavior', 'always_invoice')
-  form.set('payment_behavior', 'error_if_incomplete')
+  form.set('payment_behavior', 'default_incomplete')
   form.set('cancel_at_period_end', 'false')
   form.set('expand[]', 'latest_invoice')
+  form.set('expand[]', 'latest_invoice.payment_intent')
   form.set('items[0][id]', stripeSubscriptionItemId)
   setPlanPriceData(form, parsed.output.passType, nextAmount)
   form.set('metadata[pass_type]', parsed.output.passType)
@@ -505,10 +521,13 @@ subscriptionRoutes.post('/change-plan', async (c) => {
   const [updatedFirstItem] = updatedItems?.data ?? []
   const updatedPrice = (updatedFirstItem?.price ?? null) as Record<string, unknown> | null
   const latestInvoice = getRecord(stripeUpdate, 'latest_invoice')
+  const paymentIntent = getRecord(latestInvoice ?? {}, 'payment_intent')
   const chargedNowAmountJpy =
     getNumber(latestInvoice ?? {}, 'amount_paid') ??
     getNumber(latestInvoice ?? {}, 'amount_due') ??
     0
+  const hostedInvoiceUrl = getString(latestInvoice ?? {}, 'hosted_invoice_url')
+  const paymentIntentStatus = getString(paymentIntent ?? {}, 'status')
 
   const updatedStatus =
     typeof stripeUpdate.status === 'string' ? stripeUpdate.status : 'active'
@@ -522,6 +541,23 @@ subscriptionRoutes.post('/change-plan', async (c) => {
     getNumber(stripeUpdate, 'current_period_end') ??
     getNumber(current, 'current_period_end') ??
     Math.floor(Date.now() / 1000)
+
+  const paymentPending = !isInvoicePaid(latestInvoice)
+
+  if (paymentPending) {
+    return json({
+      error: null,
+      data: {
+        passType: parsed.output.passType,
+        renewalAmountJpy: nextAmount,
+        chargedNowAmountJpy,
+        status: updatedStatus,
+        requiresAction: true,
+        paymentPageUrl: hostedInvoiceUrl,
+        paymentIntentStatus,
+      },
+    })
+  }
 
   await db.execute(
     `UPDATE subscriptions
@@ -553,6 +589,9 @@ subscriptionRoutes.post('/change-plan', async (c) => {
       renewalAmountJpy: nextAmount,
       chargedNowAmountJpy,
       status: updatedStatus,
+      requiresAction: false,
+      paymentPageUrl: null,
+      paymentIntentStatus,
     },
   })
 })
