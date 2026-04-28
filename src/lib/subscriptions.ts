@@ -6,6 +6,8 @@ export type SubscriptionUpsertInput = {
   isDisabled: boolean
   createdAt: number
   currentPeriodStart: number
+
+  
   currentPeriodEnd: number
   trialStart: number | null
   trialEnd: number | null

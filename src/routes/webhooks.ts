@@ -23,6 +23,44 @@ const getNumber = (record: Record<string, unknown>, key: string) => {
   return null
 }
 
+const getStringByKeys = (record: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = getString(record, key)
+    if (value) {
+      return value
+    }
+  }
+
+  return null
+}
+
+const stripeProductIdToPassType: Record<string, 'LITE' | 'STANDARD' | 'PREMIUM'> = {
+  prod_One9y8yOCumS2G: 'LITE',
+  prod_OaCLGmzAoDVJjY: 'STANDARD',
+  prod_OneEB60sXmxvu1: 'PREMIUM',
+}
+
+const stripePriceIdToPassType: Record<string, 'LITE' | 'STANDARD' | 'PREMIUM'> = {
+  price_1O02qmGjkGNUZhU2amH1gS8U: 'LITE',
+  price_1O02dwGjkGNUZhU2hJZvfT3Y: 'STANDARD',
+  price_1O02vrGjkGNUZhU2Lx0X217T: 'PREMIUM',
+}
+
+const inferPassType = (props: {
+  stripePriceId: string | null
+  stripeProductId: string | null
+}) => {
+  if (props.stripePriceId && stripePriceIdToPassType[props.stripePriceId]) {
+    return stripePriceIdToPassType[props.stripePriceId]
+  }
+
+  if (props.stripeProductId && stripeProductIdToPassType[props.stripeProductId]) {
+    return stripeProductIdToPassType[props.stripeProductId]
+  }
+
+  return null
+}
+
 const getMetadataFromInvoice = (invoice: Record<string, unknown>) => {
   const direct = invoice.subscription_details as { metadata?: Record<string, unknown> } | undefined
   if (direct?.metadata) {
@@ -131,8 +169,8 @@ webhookRoutes.post('/stripe', async (c) => {
     let metadata = getMetadataFromInvoice(object)
     const subscriptionId = getString(object, 'subscription')
 
-    let userId = getString(metadata, 'user_id')
-    let nanoid = getString(metadata, 'subscription_nanoid')
+    let userId = getStringByKeys(metadata, ['user_id', 'user_index'])
+    let nanoid = getStringByKeys(metadata, ['subscription_nanoid', 'pass_id', 'subscription_id'])
     let passType = getString(metadata, 'pass_type')
 
     let subscriptionCurrentPeriodStart: number | null = null
@@ -151,8 +189,10 @@ webhookRoutes.post('/stripe', async (c) => {
           (stripeSubscription.metadata as Record<string, unknown> | undefined) ?? {}
 
         metadata = { ...stripeMetadata, ...metadata }
-        userId = userId ?? getString(stripeMetadata, 'user_id')
-        nanoid = nanoid ?? getString(stripeMetadata, 'subscription_nanoid')
+        userId = userId ?? getStringByKeys(stripeMetadata, ['user_id', 'user_index'])
+        nanoid =
+          nanoid ??
+          getStringByKeys(stripeMetadata, ['subscription_nanoid', 'pass_id', 'subscription_id'])
         passType = passType ?? getString(stripeMetadata, 'pass_type')
 
         subscriptionCurrentPeriodStart = getNumber(stripeSubscription, 'current_period_start')
@@ -165,6 +205,7 @@ webhookRoutes.post('/stripe', async (c) => {
         const price = (firstItem?.price as Record<string, unknown> | undefined) ?? {}
         stripePriceId = getString(price, 'id')
         stripeProductId = getString(price, 'product')
+        passType = passType ?? inferPassType({ stripePriceId, stripeProductId })
       } catch (error) {
         console.warn('Failed to fetch Stripe subscription for metadata fallback', {
           eventId: event.id,
@@ -192,9 +233,20 @@ webhookRoutes.post('/stripe', async (c) => {
       passType,
       subscriptionId,
       invoiceId: getString(object, 'id'),
-      source: (!getString(getMetadataFromInvoice(object), 'user_id') || !getString(getMetadataFromInvoice(object), 'subscription_nanoid') || !getString(getMetadataFromInvoice(object), 'pass_type')) && subscriptionId ? 'stripe.subscription_fallback' : 'invoice_metadata',
+      source:
+        (!getStringByKeys(getMetadataFromInvoice(object), ['user_id', 'user_index']) ||
+          !getStringByKeys(getMetadataFromInvoice(object), [
+            'subscription_nanoid',
+            'pass_id',
+            'subscription_id',
+          ]) ||
+          !getString(getMetadataFromInvoice(object), 'pass_type')) && subscriptionId
+          ? 'stripe.subscription_fallback'
+          : 'invoice_metadata',
       period_start: periodStart,
       period_end: periodEnd,
+      stripePriceId,
+      stripeProductId,
     }
 
     console.log('invoice.payment_succeeded webhook:', debugInfo)
