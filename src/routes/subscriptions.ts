@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { boolean, literal, nullable, number, object, safeParse, string, union } from 'valibot'
+import { boolean, literal, nullable, number, object, optional, safeParse, string, union } from 'valibot'
 import { requireInternalAuth } from '@/lib/auth'
 import { getDb } from '@/lib/db'
 import { json } from '@/lib/json'
@@ -43,6 +43,7 @@ const cancelCurrentSchema = object({
 const changePlanSchema = object({
   userId: string(),
   passType: union([literal('LITE'), literal('STANDARD'), literal('PREMIUM')]),
+  prorationDate: optional(number()),
 })
 
 const stripeProductIdByPassType: Record<'LITE' | 'STANDARD' | 'PREMIUM', string> = {
@@ -71,6 +72,76 @@ const getNumber = (record: Record<string, unknown>, key: string) => {
 const getRecord = (record: Record<string, unknown>, key: string) => {
   const value = record[key]
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
+const getArray = (record: Record<string, unknown>, key: string) => {
+  const value = record[key]
+  return Array.isArray(value) ? value : []
+}
+
+const getSubscriptionItemId = (stripeSubscription: Record<string, unknown>) => {
+  const items = stripeSubscription.items as { data?: Array<Record<string, unknown>> } | undefined
+  const [firstItem] = items?.data ?? []
+
+  return firstItem ? getString(firstItem, 'id') : null
+}
+
+const getPreviewProrationAmount = (invoice: Record<string, unknown>) => {
+  const linesObject = getRecord(invoice, 'lines')
+  const lines = getArray(linesObject ?? {}, 'data')
+
+  let total = 0
+  let hasProrationLine = false
+
+  for (const line of lines) {
+    if (typeof line !== 'object' || line === null) {
+      continue
+    }
+
+    const lineRecord = line as Record<string, unknown>
+    const lineParent = getRecord(lineRecord, 'parent')
+    const subscriptionItemDetails = getRecord(lineParent ?? {}, 'subscription_item_details')
+    const isProration =
+      subscriptionItemDetails?.proration === true || lineRecord.proration === true
+
+    if (!isProration) {
+      continue
+    }
+
+    total += getNumber(lineRecord, 'amount') ?? 0
+    hasProrationLine = true
+  }
+
+  if (hasProrationLine) {
+    return total
+  }
+
+  return getNumber(invoice, 'amount_due') ?? getNumber(invoice, 'total') ?? 0
+}
+
+const setPlanPriceData = (
+  form: URLSearchParams,
+  passType: 'LITE' | 'STANDARD' | 'PREMIUM',
+  amountJpy: number,
+) => {
+  form.set('items[0][price_data][currency]', 'jpy')
+  form.set('items[0][price_data][unit_amount]', String(amountJpy))
+  form.set('items[0][price_data][recurring][interval]', 'month')
+  form.set('items[0][price_data][product]', stripeProductIdByPassType[passType])
+}
+
+const setPreviewPlanPriceData = (
+  form: URLSearchParams,
+  passType: 'LITE' | 'STANDARD' | 'PREMIUM',
+  amountJpy: number,
+) => {
+  form.set('subscription_details[items][0][price_data][currency]', 'jpy')
+  form.set('subscription_details[items][0][price_data][unit_amount]', String(amountJpy))
+  form.set('subscription_details[items][0][price_data][recurring][interval]', 'month')
+  form.set(
+    'subscription_details[items][0][price_data][product]',
+    stripeProductIdByPassType[passType],
+  )
 }
 
 const postStripeForm = async (secretKey: string, path: string, params: URLSearchParams) => {
@@ -391,13 +462,17 @@ subscriptionRoutes.post('/change-plan', async (c) => {
     return json({ error: stripeFetchError.message }, 502)
   }
 
-  const items = stripeSubscription.items as { data?: Array<Record<string, unknown>> } | undefined
-  const [firstItem] = items?.data ?? []
-  const stripeSubscriptionItemId = firstItem ? getString(firstItem, 'id') : null
+  const stripeSubscriptionItemId = getSubscriptionItemId(stripeSubscription)
 
   if (!stripeSubscriptionItemId) {
     return json({ error: 'Stripe subscription item is missing' }, 409)
   }
+
+  const subscriptionNanoid = getString(current, 'nanoid')
+  const prorationDate =
+    typeof parsed.output.prorationDate === 'number' && Number.isFinite(parsed.output.prorationDate)
+      ? parsed.output.prorationDate
+      : undefined
 
   const form = new URLSearchParams()
   form.set('proration_behavior', 'always_invoice')
@@ -405,10 +480,15 @@ subscriptionRoutes.post('/change-plan', async (c) => {
   form.set('cancel_at_period_end', 'false')
   form.set('expand[]', 'latest_invoice')
   form.set('items[0][id]', stripeSubscriptionItemId)
-  form.set('items[0][price_data][currency]', 'jpy')
-  form.set('items[0][price_data][unit_amount]', String(nextAmount))
-  form.set('items[0][price_data][recurring][interval]', 'month')
-  form.set('items[0][price_data][product]', stripeProductIdByPassType[parsed.output.passType])
+  setPlanPriceData(form, parsed.output.passType, nextAmount)
+  form.set('metadata[pass_type]', parsed.output.passType)
+  form.set('metadata[user_id]', parsed.output.userId)
+  if (subscriptionNanoid) {
+    form.set('metadata[subscription_nanoid]', subscriptionNanoid)
+  }
+  if (prorationDate !== undefined) {
+    form.set('proration_date', String(prorationDate))
+  }
 
   const stripeUpdate = await postStripeForm(
     c.env.STRIPE_SECRET_KEY,
@@ -473,6 +553,89 @@ subscriptionRoutes.post('/change-plan', async (c) => {
       renewalAmountJpy: nextAmount,
       chargedNowAmountJpy,
       status: updatedStatus,
+    },
+  })
+})
+
+subscriptionRoutes.post('/change-plan-preview', async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: 'STRIPE_SECRET_KEY is not configured' }, 500)
+  }
+
+  const parsed = safeParse(changePlanSchema, await c.req.json())
+  if (!parsed.success) {
+    return json({ error: 'Invalid body' }, 400)
+  }
+
+  const db = await getDb(c.env)
+  const current = await getCurrentSubscription(db, parsed.output.userId)
+
+  if (!current) {
+    return json({ error: 'No active subscription found' }, 404)
+  }
+
+  const stripeSubscriptionId = getString(current, 'stripe_subscription_id')
+  if (!stripeSubscriptionId) {
+    return json({ error: 'Stripe subscription id is missing' }, 409)
+  }
+
+  const pricing = await getPricingSettings(db)
+  const nextAmount = pricing.subscriptionPlans[parsed.output.passType]
+  const currentType = getString(current, 'type')
+
+  if (currentType === parsed.output.passType) {
+    return json({
+      error: null,
+      data: {
+        passType: parsed.output.passType,
+        renewalAmountJpy: nextAmount,
+        chargedNowAmountJpy: 0,
+        prorationDate: Math.floor(Date.now() / 1000),
+      },
+    })
+  }
+
+  const stripeSubscription = await getStripe(
+    c.env.STRIPE_SECRET_KEY,
+    `/subscriptions/${stripeSubscriptionId}`,
+  )
+
+  const stripeFetchError = stripeSubscription.error as { message?: string } | undefined
+  if (stripeFetchError?.message) {
+    return json({ error: stripeFetchError.message }, 502)
+  }
+
+  const stripeSubscriptionItemId = getSubscriptionItemId(stripeSubscription)
+  if (!stripeSubscriptionItemId) {
+    return json({ error: 'Stripe subscription item is missing' }, 409)
+  }
+
+  const prorationDate = Math.floor(Date.now() / 1000)
+  const form = new URLSearchParams()
+  form.set('subscription', stripeSubscriptionId)
+  form.set('subscription_details[proration_behavior]', 'always_invoice')
+  form.set('subscription_details[proration_date]', String(prorationDate))
+  form.set('subscription_details[items][0][id]', stripeSubscriptionItemId)
+  setPreviewPlanPriceData(form, parsed.output.passType, nextAmount)
+
+  const previewInvoice = await postStripeForm(
+    c.env.STRIPE_SECRET_KEY,
+    '/invoices/create_preview',
+    form,
+  )
+
+  const previewError = previewInvoice.error as { message?: string } | undefined
+  if (previewError?.message) {
+    return json({ error: previewError.message }, 502)
+  }
+
+  return json({
+    error: null,
+    data: {
+      passType: parsed.output.passType,
+      renewalAmountJpy: nextAmount,
+      chargedNowAmountJpy: getPreviewProrationAmount(previewInvoice),
+      prorationDate,
     },
   })
 })
