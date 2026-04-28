@@ -1,15 +1,15 @@
 # aipictors-api
 
-Cloudflare Workers + Hono + D1 based internal API for Aipictors.
+Cloudflare Workers + Hono + PostgreSQL/Neon based internal API for Aipictors.
 
-This repo centralizes D1-backed APIs that are being migrated out of the legacy system.
+This repo centralizes internal APIs migrated out of the legacy system and now stores points/subscriptions in Neon PostgreSQL.
 Current scope:
 
 - Points ledger and balances
 - Stripe point checkout
 - Stripe subscription checkout
 - Stripe webhook processing
-- D1-backed subscription state
+- PostgreSQL-backed subscription state
 - Admin pricing settings for points and subscriptions
 
 ## Main endpoints
@@ -34,15 +34,31 @@ Current scope:
 - Admin APIs use `Authorization: Bearer <ADMIN_API_TOKEN>`
 - Stripe webhook uses Stripe signature verification
 
-## D1 setup
+## PostgreSQL / Neon setup
 
-1. Create D1 database
-2. Apply `sql/schema.sql`
-3. Set `AIPICTORS_DB` binding in `wrangler.toml`
+Neon project:
+
+- Project ID: `lucky-bonus-09897233`
+- Project name: `Aipictors`
+
+1. Create the Neon database or use the existing project above.
+2. Apply `sql/schema.sql` to PostgreSQL.
+3. Set the connection string as a Workers secret:
+
+```bash
+printf '%s' "$DATABASE_URL" | npx wrangler secret put DATABASE_URL
+```
+
+Local example:
+
+```bash
+npx neonctl@latest init
+psql "$DATABASE_URL" -f sql/schema.sql
+```
 
 ## Deployment (`backend.aipictors.com`)
 
-`wrangler.toml` does **not** declare `routes` on purpose: `wrangler deploy` then only updates the Worker script and bindings (account-scoped APIs). **Custom hostnames are maintained in the Cloudflare Dashboard**, so GitHub Actions can use a narrow token (Workers Scripts + D1) without **Zone → Workers Routes** and without hitting `Authentication error [code: 10000]` on `/zones/.../workers/routes`.
+`wrangler.toml` does **not** declare `routes` on purpose: `wrangler deploy` then only updates the Worker script and secrets/vars (account-scoped APIs). **Custom hostnames are maintained in the Cloudflare Dashboard**, so GitHub Actions can use a narrow token (Workers Scripts) without **Zone → Workers Routes** and without hitting `Authentication error [code: 10000]` on `/zones/.../workers/routes`.
 
 ### Custom routes (dashboard)
 
@@ -65,7 +81,6 @@ If these already existed from an earlier Wrangler deploy, you do not need to rec
 **Account** (include this Cloudflare account):
 
 - Workers Scripts — Edit  
-- D1 — Edit  
 - (Optional) Workers KV Storage — Edit  
 - (Optional) Workers Tail — Read  
 
@@ -78,6 +93,7 @@ printf '%s' "$STRIPE_SECRET_KEY" | CLOUDFLARE_API_TOKEN=... npx wrangler secret 
 printf '%s' "$STRIPE_WEBHOOK_SECRET" | CLOUDFLARE_API_TOKEN=... npx wrangler secret put STRIPE_WEBHOOK_SECRET
 printf '%s' "$INTERNAL_API_TOKEN" | CLOUDFLARE_API_TOKEN=... npx wrangler secret put INTERNAL_API_TOKEN
 printf '%s' "$ADMIN_API_TOKEN" | CLOUDFLARE_API_TOKEN=... npx wrangler secret put ADMIN_API_TOKEN
+printf '%s' "$DATABASE_URL" | CLOUDFLARE_API_TOKEN=... npx wrangler secret put DATABASE_URL
 ```
 
 ### Deploy

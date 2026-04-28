@@ -4,17 +4,17 @@ export type PricingSettings = {
   subscriptionPlans: Record<'LITE' | 'STANDARD' | 'PREMIUM', number>
 }
 
+import type { DbClient } from '@/lib/db'
+
 const parseNumber = (value: string | null | undefined, fallback: number) => {
   const parsed = Number.parseInt(value ?? '', 10)
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-export const getPricingSettings = async (db: D1Database): Promise<PricingSettings> => {
-  const rows = await db
-    .prepare('SELECT key, value FROM pricing_settings')
-    .all<{ key: string; value: string }>()
+export const getPricingSettings = async (db: DbClient): Promise<PricingSettings> => {
+  const rows = await db.query<{ key: string; value: string }>('SELECT key, value FROM pricing_settings')
 
-  const map = new Map((rows.results ?? []).map((row) => [row.key, row.value]))
+  const map = new Map(rows.map((row) => [row.key, row.value]))
 
   return {
     yenPerPoint: parseNumber(map.get('points.yen_per_point'), 1),
@@ -32,7 +32,7 @@ export const getPricingSettings = async (db: D1Database): Promise<PricingSetting
 }
 
 export const upsertPricingSettings = async (
-  db: D1Database,
+  db: DbClient,
   input: PricingSettings,
 ) => {
   const now = Math.floor(Date.now() / 1000)
@@ -47,11 +47,11 @@ export const upsertPricingSettings = async (
   ]
 
   for (const [key, value] of entries) {
-    await db
-      .prepare(`INSERT INTO pricing_settings(key, value, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-      .bind(key, value, now)
-      .run()
+    await db.execute(
+      `INSERT INTO pricing_settings(key, value, updated_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [key, value, now],
+    )
   }
 }

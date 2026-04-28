@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { getDb, getNow } from '@/lib/db'
 import { json } from '@/lib/json'
 import { applyPointDelta } from '@/lib/points'
 import { upsertSubscription, disableSubscriptionByStripeId } from '@/lib/subscriptions'
@@ -107,6 +108,8 @@ const fetchStripeSubscription = async (
 export const webhookRoutes = new Hono<{ Bindings: Env }>()
 
 webhookRoutes.post('/stripe', async (c) => {
+  const db = await getDb(c.env)
+
   if (!c.env.STRIPE_WEBHOOK_SECRET) {
     return json({ error: 'STRIPE_WEBHOOK_SECRET is not configured' }, 500)
   }
@@ -133,10 +136,10 @@ webhookRoutes.post('/stripe', async (c) => {
     data: { object: Record<string, unknown> }
   }
 
-  const existing = await c.env.AIPICTORS_DB
-    .prepare('SELECT event_id FROM webhook_events WHERE event_id = ?')
-    .bind(event.id)
-    .first<{ event_id: string }>()
+  const existing = await db.queryOne<{ event_id: string }>(
+    'SELECT event_id FROM webhook_events WHERE event_id = $1',
+    [event.id],
+  )
 
   if (existing) {
     return json({ error: null, data: { deduplicated: true } })
@@ -153,7 +156,7 @@ webhookRoutes.post('/stripe', async (c) => {
       const points = Number.parseInt(getString(metadata, 'points') ?? '', 10)
       if (userId && Number.isFinite(points)) {
         await applyPointDelta({
-          db: c.env.AIPICTORS_DB,
+          db,
           userId,
           delta: points,
           kind: 'PURCHASE',
@@ -253,13 +256,15 @@ webhookRoutes.post('/stripe', async (c) => {
 
     // Save debug info as best-effort so subscription upsert never stops.
     try {
-      await c.env.AIPICTORS_DB
-        .prepare(
-          `INSERT OR REPLACE INTO webhook_debug(event_id, event_type, debug_info, created_at)
-           VALUES (?, ?, ?, unixepoch())`
-        )
-        .bind(event.id, event.type, JSON.stringify(debugInfo))
-        .run()
+      await db.execute(
+        `INSERT INTO webhook_debug(event_id, event_type, debug_info, created_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (event_id) DO UPDATE SET
+           event_type = EXCLUDED.event_type,
+           debug_info = EXCLUDED.debug_info,
+           created_at = EXCLUDED.created_at`,
+        [event.id, event.type, JSON.stringify(debugInfo), getNow()],
+      )
     } catch (error) {
       console.warn('Failed to persist webhook_debug record', {
         eventId: event.id,
@@ -269,7 +274,7 @@ webhookRoutes.post('/stripe', async (c) => {
 
     if (userId && nanoid && passType) {
       console.log('Upserting subscription for user:', userId)
-      await upsertSubscription(c.env.AIPICTORS_DB, {
+      await upsertSubscription(db, {
         nanoid,
         userId,
         type: passType,
@@ -299,14 +304,15 @@ webhookRoutes.post('/stripe', async (c) => {
   if (event.type === 'customer.subscription.deleted') {
     const subscriptionId = getString(object, 'id')
     if (subscriptionId) {
-      await disableSubscriptionByStripeId(c.env.AIPICTORS_DB, subscriptionId)
+      await disableSubscriptionByStripeId(db, subscriptionId)
     }
   }
 
-  await c.env.AIPICTORS_DB
-    .prepare('INSERT INTO webhook_events(event_id, type, processed_at) VALUES (?, ?, unixepoch())')
-    .bind(event.id, event.type)
-    .run()
+  await db.execute('INSERT INTO webhook_events(event_id, type, processed_at) VALUES ($1, $2, $3)', [
+    event.id,
+    event.type,
+    getNow(),
+  ])
 
   return json({ error: null, data: true })
 })

@@ -2,7 +2,7 @@
 
 declare global {
   interface Env {
-    AIPICTORS_DB: D1Database
+    DATABASE_URL: string
     STRIPE_SECRET_KEY?: string
     STRIPE_WEBHOOK_SECRET?: string
     STRIPE_WEBHOOK_PATH?: string

@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { boolean, literal, nullable, number, object, safeParse, string, union } from 'valibot'
 import { requireInternalAuth } from '@/lib/auth'
+import { getDb } from '@/lib/db'
 import { json } from '@/lib/json'
 import { getPricingSettings } from '@/lib/pricing'
 import {
@@ -96,7 +97,8 @@ export const subscriptionRoutes = new Hono<{ Bindings: Env }>()
 subscriptionRoutes.use('*', requireInternalAuth)
 
 subscriptionRoutes.get('/current/:userId', async (c) => {
-  const current = await getCurrentSubscription(c.env.AIPICTORS_DB, c.req.param('userId'))
+  const db = await getDb(c.env)
+  const current = await getCurrentSubscription(db, c.req.param('userId'))
 
   if (!current) {
     return json({ error: null, data: null })
@@ -117,10 +119,10 @@ subscriptionRoutes.get('/current/:userId', async (c) => {
     const stripeStatus = getString(stripeSubscription, 'status')
 
     if (cancelAtPeriodEnd) {
-      await c.env.AIPICTORS_DB
-        .prepare(`UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = ?`)
-        .bind(stripeSubscriptionId)
-        .run()
+      await db.execute(
+        `UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = $1`,
+        [stripeSubscriptionId],
+      )
 
       return json({
         error: null,
@@ -132,10 +134,10 @@ subscriptionRoutes.get('/current/:userId', async (c) => {
     }
 
     if (stripeStatus === 'canceled') {
-      await c.env.AIPICTORS_DB
-        .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
-        .bind(stripeSubscriptionId)
-        .run()
+      await db.execute(
+        `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
+        [stripeSubscriptionId],
+      )
 
       return json({
         error: null,
@@ -154,13 +156,15 @@ subscriptionRoutes.get('/current/:userId', async (c) => {
 })
 
 subscriptionRoutes.get('/by-nanoid/:nanoid', async (c) => {
+  const db = await getDb(c.env)
   const nanoid = c.req.param('nanoid')
-  const data = await getSubscriptionByNanoid(c.env.AIPICTORS_DB, nanoid)
+  const data = await getSubscriptionByNanoid(db, nanoid)
   return json({ error: null, data })
 })
 
 subscriptionRoutes.get('/has-previous/:userId', async (c) => {
-  const exists = await hasPreviousSubscription(c.env.AIPICTORS_DB, c.req.param('userId'))
+  const db = await getDb(c.env)
+  const exists = await hasPreviousSubscription(db, c.req.param('userId'))
   return json({ error: null, data: { exists } })
 })
 
@@ -170,7 +174,8 @@ subscriptionRoutes.post('/upsert', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
-  await upsertSubscription(c.env.AIPICTORS_DB, parsed.output)
+  const db = await getDb(c.env)
+  await upsertSubscription(db, parsed.output)
   return json({ error: null, data: true })
 })
 
@@ -180,7 +185,8 @@ subscriptionRoutes.post('/disable', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
-  await disableSubscriptionByStripeId(c.env.AIPICTORS_DB, parsed.output.stripeSubscriptionId)
+  const db = await getDb(c.env)
+  await disableSubscriptionByStripeId(db, parsed.output.stripeSubscriptionId)
   return json({ error: null, data: true })
 })
 
@@ -194,9 +200,10 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
+  const db = await getDb(c.env)
   const current =
-    (await getCurrentSubscription(c.env.AIPICTORS_DB, parsed.output.userId)) ??
-    (await getActiveOrRecentSubscription(c.env.AIPICTORS_DB, parsed.output.userId))
+    (await getCurrentSubscription(db, parsed.output.userId)) ??
+    (await getActiveOrRecentSubscription(db, parsed.output.userId))
 
   if (!current) {
     return json({ error: 'No active subscription found' }, 404)
@@ -218,7 +225,7 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
 
   const stripeError = stripeResponse.error as { message?: string; code?: string; type?: string } | undefined
   if (stripeError?.message) {
-    // Stripe側でサブスクリプションが存在しない or 更新不可（すでにキャンセル済み）の場合はD1をキャンセル済みに更新して正常終了
+    // Stripe側でサブスクリプションが存在しない or 更新不可（すでにキャンセル済み）の場合はDBをキャンセル済みに更新して正常終了
     const isAlreadyGone =
       stripeError.code === 'resource_missing' ||
       stripeError.code === 'subscription_update_forbidden' ||
@@ -226,10 +233,10 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
       stripeError.message.includes('already been canceled') ||
       stripeError.message.includes('Updates to a canceled')
     if (isAlreadyGone) {
-      await c.env.AIPICTORS_DB
-        .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
-        .bind(stripeSubscriptionId)
-        .run()
+      await db.execute(
+        `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
+        [stripeSubscriptionId],
+      )
       return json({
         error: null,
         data: {
@@ -245,10 +252,10 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
   // Stripe が既にキャンセル済みのサブスクを返した場合も正常終了
   const stripeStatus = typeof stripeResponse.status === 'string' ? stripeResponse.status : null
   if (stripeStatus === 'canceled') {
-    await c.env.AIPICTORS_DB
-      .prepare(`UPDATE subscriptions SET status = 'canceled', is_disabled = 1 WHERE stripe_subscription_id = ?`)
-      .bind(stripeSubscriptionId)
-      .run()
+    await db.execute(
+      `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
+      [stripeSubscriptionId],
+    )
     return json({
       error: null,
       data: {
@@ -264,10 +271,10 @@ subscriptionRoutes.post('/cancel-current', async (c) => {
     return json({ error: 'Failed to schedule cancellation at period end' }, 502)
   }
 
-  await c.env.AIPICTORS_DB
-    .prepare(`UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = ?`)
-    .bind(stripeSubscriptionId)
-    .run()
+  await db.execute(
+    `UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = $1`,
+    [stripeSubscriptionId],
+  )
 
   return json({
     error: null,
@@ -289,9 +296,10 @@ subscriptionRoutes.post('/resume-current', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
+  const db = await getDb(c.env)
   const current =
-    (await getCurrentSubscription(c.env.AIPICTORS_DB, parsed.output.userId)) ??
-    (await getActiveOrRecentSubscription(c.env.AIPICTORS_DB, parsed.output.userId))
+    (await getCurrentSubscription(db, parsed.output.userId)) ??
+    (await getActiveOrRecentSubscription(db, parsed.output.userId))
 
   if (!current) {
     return json({ error: 'No active subscription found' }, 404)
@@ -316,10 +324,9 @@ subscriptionRoutes.post('/resume-current', async (c) => {
     return json({ error: stripeError.message }, 502)
   }
 
-  await c.env.AIPICTORS_DB
-    .prepare(`UPDATE subscriptions SET status = 'paid' WHERE stripe_subscription_id = ?`)
-    .bind(stripeSubscriptionId)
-    .run()
+  await db.execute(`UPDATE subscriptions SET status = 'paid' WHERE stripe_subscription_id = $1`, [
+    stripeSubscriptionId,
+  ])
 
   return json({
     error: null,
@@ -341,7 +348,8 @@ subscriptionRoutes.post('/change-plan', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
-  const current = await getCurrentSubscription(c.env.AIPICTORS_DB, parsed.output.userId)
+  const db = await getDb(c.env)
+  const current = await getCurrentSubscription(db, parsed.output.userId)
 
   if (!current) {
     return json({ error: 'No active subscription found' }, 404)
@@ -352,7 +360,7 @@ subscriptionRoutes.post('/change-plan', async (c) => {
     return json({ error: 'Stripe subscription id is missing' }, 409)
   }
 
-  const pricing = await getPricingSettings(c.env.AIPICTORS_DB)
+  const pricing = await getPricingSettings(db)
   const nextAmount = pricing.subscriptionPlans[parsed.output.passType]
 
   const currentType = getString(current, 'type')
@@ -422,18 +430,18 @@ subscriptionRoutes.post('/change-plan', async (c) => {
     getNumber(current, 'current_period_end') ??
     Math.floor(Date.now() / 1000)
 
-  await c.env.AIPICTORS_DB
-    .prepare(`UPDATE subscriptions
-      SET type = ?,
-          status = ?,
-          is_disabled = 0,
-          current_period_start = ?,
-          current_period_end = ?,
-          stripe_subscription_item_id = ?,
-          stripe_price_id = ?,
-          stripe_product_id = ?
-      WHERE stripe_subscription_id = ?`)
-    .bind(
+  await db.execute(
+    `UPDATE subscriptions
+      SET type = $1,
+          status = $2,
+          is_disabled = FALSE,
+          current_period_start = $3,
+          current_period_end = $4,
+          stripe_subscription_item_id = $5,
+          stripe_price_id = $6,
+          stripe_product_id = $7
+      WHERE stripe_subscription_id = $8`,
+    [
       parsed.output.passType,
       updatedStatus,
       updatedPeriodStart,
@@ -442,8 +450,8 @@ subscriptionRoutes.post('/change-plan', async (c) => {
       getString(updatedPrice ?? {}, 'id'),
       getString(updatedPrice ?? {}, 'product'),
       stripeSubscriptionId,
-    )
-    .run()
+    ],
+  )
 
   return json({
     error: null,

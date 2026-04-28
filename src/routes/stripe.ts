@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { object, safeParse, string, union, literal } from 'valibot'
+import { getDb } from '@/lib/db'
 import { requireInternalAuth } from '@/lib/auth'
 import { json } from '@/lib/json'
 import { createPointCheckout, createSubscriptionCheckout } from '@/lib/stripe'
@@ -30,12 +31,13 @@ stripeRoutes.post('/checkout/points', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
+  const db = await getDb(c.env)
   const response = await createPointCheckout({
     secretKey: c.env.STRIPE_SECRET_KEY,
     origin: parsed.output.origin,
     userId: parsed.output.userId,
     points: parsed.output.points,
-    db: c.env.AIPICTORS_DB,
+    db,
   }) as { url?: string; error?: { message?: string } }
 
   if (!response.url) {
@@ -57,12 +59,13 @@ stripeRoutes.post('/checkout/subscription', async (c) => {
   }
 
   try {
+    const db = await getDb(c.env)
     const response = await createSubscriptionCheckout({
       secretKey: c.env.STRIPE_SECRET_KEY,
       origin: parsed.output.origin,
       userId: parsed.output.userId,
       passType: parsed.output.passType,
-      db: c.env.AIPICTORS_DB,
+      db,
     }) as { url?: string; error?: { message?: string } }
 
     if (!response.url) {

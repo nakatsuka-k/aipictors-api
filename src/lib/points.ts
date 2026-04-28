@@ -1,25 +1,25 @@
-import { getNow } from '@/lib/d1'
+import { getNow, type DbClient } from '@/lib/db'
 
-export const getPointSummary = async (db: D1Database, userId: string) => {
-  const balance = await db
-    .prepare('SELECT balance FROM point_balances WHERE user_id = ?')
-    .bind(userId)
-    .first<{ balance: number }>()
+export const getPointSummary = async (db: DbClient, userId: string) => {
+  const balance = await db.queryOne<{ balance: number }>(
+    'SELECT balance FROM point_balances WHERE user_id = $1',
+    [userId],
+  )
 
-  const ledger = await db
-    .prepare(`SELECT id, delta, kind, reason, stripe_event_id as stripeEventId, stripe_session_id as stripeSessionId, created_at as createdAt
-      FROM point_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 100`)
-    .bind(userId)
-    .all<Record<string, unknown>>()
+  const ledger = await db.query<Record<string, unknown>>(
+    `SELECT id, delta, kind, reason, stripe_event_id AS "stripeEventId", stripe_session_id AS "stripeSessionId", created_at AS "createdAt"
+      FROM point_ledger WHERE user_id = $1 ORDER BY id DESC LIMIT 100`,
+    [userId],
+  )
 
   return {
     balance: balance?.balance ?? 0,
-    ledger: ledger.results ?? []
+    ledger,
   }
 }
 
 export const applyPointDelta = async (props: {
-  db: D1Database
+  db: DbClient
   userId: string
   delta: number
   kind: string
@@ -29,44 +29,64 @@ export const applyPointDelta = async (props: {
 }) => {
   const now = getNow()
 
-  await props.db
-    .prepare(`INSERT INTO point_balances(user_id, balance, updated_at)
-      VALUES (?, 0, ?)
-      ON CONFLICT(user_id) DO NOTHING`)
-    .bind(props.userId, now)
-    .run()
-
   if (props.delta < 0) {
-    const result = await props.db
-      .prepare(`UPDATE point_balances
-        SET balance = balance + ?, updated_at = ?
-        WHERE user_id = ? AND balance >= ?`)
-      .bind(props.delta, now, props.userId, Math.abs(props.delta))
-      .run()
+    const result = await props.db.queryOne<{ ok: boolean }>(
+      `WITH ensured AS (
+          INSERT INTO point_balances(user_id, balance, updated_at)
+          VALUES ($1, 0, $2)
+          ON CONFLICT (user_id) DO NOTHING
+        ),
+        updated AS (
+          UPDATE point_balances
+          SET balance = balance + $3, updated_at = $2
+          WHERE user_id = $1 AND balance >= $4
+          RETURNING user_id
+        ),
+        ledger_insert AS (
+          INSERT INTO point_ledger(user_id, delta, kind, reason, stripe_event_id, stripe_session_id, created_at)
+          SELECT $1, $3, $5, $6, $7, $8, $2
+          FROM updated
+        )
+        SELECT EXISTS(SELECT 1 FROM updated) AS ok`,
+      [
+        props.userId,
+        now,
+        props.delta,
+        Math.abs(props.delta),
+        props.kind,
+        props.reason ?? null,
+        props.stripeEventId ?? null,
+        props.stripeSessionId ?? null,
+      ],
+    )
 
-    if ((result.meta.changes ?? 0) === 0) {
+    if (!result?.ok) {
       return { ok: false as const, code: 'INSUFFICIENT_POINTS' as const }
     }
-  } else {
-    await props.db
-      .prepare('UPDATE point_balances SET balance = balance + ?, updated_at = ? WHERE user_id = ?')
-      .bind(props.delta, now, props.userId)
-      .run()
+
+    return { ok: true as const }
   }
 
-  await props.db
-    .prepare(`INSERT INTO point_ledger(user_id, delta, kind, reason, stripe_event_id, stripe_session_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(
+  await props.db.execute(
+    `WITH upserted AS (
+        INSERT INTO point_balances(user_id, balance, updated_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE SET
+          balance = point_balances.balance + EXCLUDED.balance,
+          updated_at = EXCLUDED.updated_at
+      )
+      INSERT INTO point_ledger(user_id, delta, kind, reason, stripe_event_id, stripe_session_id, created_at)
+      VALUES ($1, $2, $4, $5, $6, $7, $3)`,
+    [
       props.userId,
       props.delta,
+      now,
       props.kind,
       props.reason ?? null,
       props.stripeEventId ?? null,
       props.stripeSessionId ?? null,
-      now,
-    )
-    .run()
+    ],
+  )
 
   return { ok: true as const }
 }

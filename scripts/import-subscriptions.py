@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert subscriptions.csv to D1-compatible SQL INSERT statements."""
+"""Convert subscriptions.csv to PostgreSQL-compatible SQL INSERT statements."""
 
 import csv
 import sys
@@ -59,7 +59,7 @@ def main(csv_path: str, sql_path: str, batch_size: int = 100) -> None:
                 continue
 
             rows.append((
-                nanoid, user_id, type_, status, is_disabled,
+                nanoid, user_id, type_, status, is_disabled == "1",
                 created_at, current_period_start, current_period_end,
                 trial_start, trial_end,
                 stripe_subscription_id, stripe_latest_invoice_id,
@@ -83,7 +83,7 @@ def main(csv_path: str, sql_path: str, batch_size: int = 100) -> None:
 
                 v = (
                     f"({to_sql_val(nanoid)},{to_sql_val(user_id)},{to_sql_val(type_)},"
-                    f"{to_sql_val(status)},{is_disabled},"
+                    f"{to_sql_val(status)},{'TRUE' if is_disabled else 'FALSE'},"
                     f"{created_at},{current_period_start if current_period_start is not None else 'NULL'},"
                     f"{current_period_end if current_period_end is not None else 'NULL'},"
                     f"{trial_start if trial_start is not None else 'NULL'},"
@@ -98,14 +98,15 @@ def main(csv_path: str, sql_path: str, batch_size: int = 100) -> None:
                 values.append(v)
 
             stmt = (
-                "INSERT OR IGNORE INTO subscriptions("
+                "INSERT INTO subscriptions("
                 "nanoid,user_id,type,status,is_disabled,"
                 "created_at,current_period_start,current_period_end,"
                 "trial_start,trial_end,"
                 "stripe_subscription_id,stripe_latest_invoice_id,"
                 "stripe_payment_intent_id,stripe_subscription_item_id,"
                 "stripe_price_id,stripe_product_id"
-                ") VALUES\n" + ",\n".join(values) + ";\n"
+                ") VALUES\n" + ",\n".join(values) + "\n"
+                "ON CONFLICT (nanoid) DO NOTHING;\n"
             )
             out.write(stmt)
 

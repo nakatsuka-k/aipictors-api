@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { object, safeParse, string, number } from 'valibot'
+import { getDb } from '@/lib/db'
 import { requireInternalAuth } from '@/lib/auth'
 import { json } from '@/lib/json'
 import { applyPointDelta, getPointSummary } from '@/lib/points'
@@ -15,7 +16,8 @@ export const pointsRoutes = new Hono<{ Bindings: Env }>()
 pointsRoutes.use('*', requireInternalAuth)
 
 pointsRoutes.get('/:userId', async (c) => {
-  const summary = await getPointSummary(c.env.AIPICTORS_DB, c.req.param('userId'))
+  const db = await getDb(c.env)
+  const summary = await getPointSummary(db, c.req.param('userId'))
   return json({ error: null, data: summary })
 })
 
@@ -25,15 +27,16 @@ pointsRoutes.post('/grant', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
+  const db = await getDb(c.env)
   await applyPointDelta({
-    db: c.env.AIPICTORS_DB,
+    db,
     userId: parsed.output.userId,
     delta: Math.floor(parsed.output.points),
     kind: 'GRANT',
     reason: parsed.output.reason,
   })
 
-  return json({ error: null, data: await getPointSummary(c.env.AIPICTORS_DB, parsed.output.userId) })
+  return json({ error: null, data: await getPointSummary(db, parsed.output.userId) })
 })
 
 pointsRoutes.post('/consume', async (c) => {
@@ -42,8 +45,9 @@ pointsRoutes.post('/consume', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
+  const db = await getDb(c.env)
   const result = await applyPointDelta({
-    db: c.env.AIPICTORS_DB,
+    db,
     userId: parsed.output.userId,
     delta: -Math.floor(parsed.output.points),
     kind: 'CONSUME',
@@ -54,5 +58,5 @@ pointsRoutes.post('/consume', async (c) => {
     return json({ error: 'Insufficient points' }, 409)
   }
 
-  return json({ error: null, data: await getPointSummary(c.env.AIPICTORS_DB, parsed.output.userId) })
+  return json({ error: null, data: await getPointSummary(db, parsed.output.userId) })
 })

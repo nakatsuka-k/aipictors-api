@@ -1,4 +1,5 @@
 import { getPricingSettings } from '@/lib/pricing'
+import type { DbClient } from '@/lib/db'
 
 const encoder = new TextEncoder()
 
@@ -76,7 +77,7 @@ export const createPointCheckout = async (props: {
   origin: string
   userId: string
   points: 100 | 300 | 1000
-  db: D1Database
+  db: DbClient
 }) => {
   const pricing = await getPricingSettings(props.db)
   const amount = pricing.pointPackages[String(props.points) as '100' | '300' | '1000']
@@ -106,7 +107,7 @@ export const createSubscriptionCheckout = async (props: {
   origin: string
   userId: string
   passType: 'LITE' | 'STANDARD' | 'PREMIUM'
-  db: D1Database
+  db: DbClient
 }) => {
   const pricing = await getPricingSettings(props.db)
   const amount = pricing.subscriptionPlans[props.passType]

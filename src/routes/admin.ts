@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { number, object, safeParse } from 'valibot'
+import { getDb } from '@/lib/db'
 import { requireAdminAuth } from '@/lib/auth'
 import { json } from '@/lib/json'
 import { getPricingSettings, upsertPricingSettings } from '@/lib/pricing'
@@ -23,7 +24,8 @@ export const adminRoutes = new Hono<{ Bindings: Env }>()
 adminRoutes.use('*', requireAdminAuth)
 
 adminRoutes.get('/pricing', async (c) => {
-  return json({ error: null, data: await getPricingSettings(c.env.AIPICTORS_DB) })
+  const db = await getDb(c.env)
+  return json({ error: null, data: await getPricingSettings(db) })
 })
 
 adminRoutes.put('/pricing', async (c) => {
@@ -32,6 +34,7 @@ adminRoutes.put('/pricing', async (c) => {
     return json({ error: 'Invalid body' }, 400)
   }
 
-  await upsertPricingSettings(c.env.AIPICTORS_DB, parsed.output)
-  return json({ error: null, data: await getPricingSettings(c.env.AIPICTORS_DB) })
+  const db = await getDb(c.env)
+  await upsertPricingSettings(db, parsed.output)
+  return json({ error: null, data: await getPricingSettings(db) })
 })

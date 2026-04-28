@@ -1,3 +1,5 @@
+import type { DbClient } from '@/lib/db'
+
 export type SubscriptionUpsertInput = {
   nanoid: string
   userId: string
@@ -6,8 +8,6 @@ export type SubscriptionUpsertInput = {
   isDisabled: boolean
   createdAt: number
   currentPeriodStart: number
-
-  
   currentPeriodEnd: number
   trialStart: number | null
   trialEnd: number | null
@@ -19,70 +19,65 @@ export type SubscriptionUpsertInput = {
   stripeProductId: string | null
 }
 
-export const getCurrentSubscription = async (db: D1Database, userId: string) => {
-  return db
-    .prepare(`SELECT * FROM subscriptions
-      WHERE user_id = ? AND is_disabled = 0 AND current_period_end > unixepoch()
-      ORDER BY current_period_end DESC LIMIT 1`)
-    .bind(userId)
-    .first<Record<string, unknown>>()
-}
+export const getCurrentSubscription = async (db: DbClient, userId: string) =>
+  db.queryOne<Record<string, unknown>>(
+    `SELECT * FROM subscriptions
+      WHERE user_id = $1 AND is_disabled = FALSE AND current_period_end > EXTRACT(EPOCH FROM NOW())::bigint
+      ORDER BY current_period_end DESC LIMIT 1`,
+    [userId],
+  )
 
-/** キャンセル用: 期間切れでも is_disabled=0 の最新行を返す */
-export const getActiveOrRecentSubscription = async (db: D1Database, userId: string) => {
-  return db
-    .prepare(`SELECT * FROM subscriptions
-      WHERE user_id = ? AND is_disabled = 0
-      ORDER BY current_period_end DESC LIMIT 1`)
-    .bind(userId)
-    .first<Record<string, unknown>>()
-}
+export const getActiveOrRecentSubscription = async (db: DbClient, userId: string) =>
+  db.queryOne<Record<string, unknown>>(
+    `SELECT * FROM subscriptions
+      WHERE user_id = $1 AND is_disabled = FALSE
+      ORDER BY current_period_end DESC LIMIT 1`,
+    [userId],
+  )
 
-export const hasPreviousSubscription = async (db: D1Database, userId: string) => {
-  const row = await db
-    .prepare('SELECT id FROM subscriptions WHERE user_id = ? LIMIT 1')
-    .bind(userId)
-    .first<{ id: number }>()
+export const hasPreviousSubscription = async (db: DbClient, userId: string) => {
+  const row = await db.queryOne<{ id: number }>(
+    'SELECT id FROM subscriptions WHERE user_id = $1 LIMIT 1',
+    [userId],
+  )
 
   return row !== null
 }
 
-export const getSubscriptionByNanoid = async (db: D1Database, nanoid: string) => {
-  return db
-    .prepare('SELECT * FROM subscriptions WHERE nanoid = ? LIMIT 1')
-    .bind(nanoid)
-    .first<Record<string, unknown>>()
-}
+export const getSubscriptionByNanoid = async (db: DbClient, nanoid: string) =>
+  db.queryOne<Record<string, unknown>>('SELECT * FROM subscriptions WHERE nanoid = $1 LIMIT 1', [
+    nanoid,
+  ])
 
-export const upsertSubscription = async (db: D1Database, input: SubscriptionUpsertInput) => {
-  await db
-    .prepare(`INSERT INTO subscriptions(
+export const upsertSubscription = async (db: DbClient, input: SubscriptionUpsertInput) => {
+  await db.execute(
+    `INSERT INTO subscriptions(
       nanoid, user_id, type, status, is_disabled, created_at, current_period_start,
       current_period_end, trial_start, trial_end, stripe_subscription_id,
       stripe_latest_invoice_id, stripe_payment_intent_id, stripe_subscription_item_id,
       stripe_price_id, stripe_product_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(nanoid) DO UPDATE SET
-      user_id = excluded.user_id,
-      type = excluded.type,
-      status = excluded.status,
-      is_disabled = excluded.is_disabled,
-      current_period_start = excluded.current_period_start,
-      current_period_end = excluded.current_period_end,
-      trial_start = excluded.trial_start,
-      trial_end = excluded.trial_end,
-      stripe_subscription_id = excluded.stripe_subscription_id,
-      stripe_latest_invoice_id = excluded.stripe_latest_invoice_id,
-      stripe_payment_intent_id = excluded.stripe_payment_intent_id,
-      stripe_subscription_item_id = excluded.stripe_subscription_item_id,
-      stripe_price_id = excluded.stripe_price_id,
-      stripe_product_id = excluded.stripe_product_id`)
-    .bind(
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    ON CONFLICT (nanoid) DO UPDATE SET
+      user_id = EXCLUDED.user_id,
+      type = EXCLUDED.type,
+      status = EXCLUDED.status,
+      is_disabled = EXCLUDED.is_disabled,
+      current_period_start = EXCLUDED.current_period_start,
+      current_period_end = EXCLUDED.current_period_end,
+      trial_start = EXCLUDED.trial_start,
+      trial_end = EXCLUDED.trial_end,
+      stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+      stripe_latest_invoice_id = EXCLUDED.stripe_latest_invoice_id,
+      stripe_payment_intent_id = EXCLUDED.stripe_payment_intent_id,
+      stripe_subscription_item_id = EXCLUDED.stripe_subscription_item_id,
+      stripe_price_id = EXCLUDED.stripe_price_id,
+      stripe_product_id = EXCLUDED.stripe_product_id`,
+    [
       input.nanoid,
       input.userId,
       input.type,
       input.status,
-      input.isDisabled ? 1 : 0,
+      input.isDisabled,
       input.createdAt,
       input.currentPeriodStart,
       input.currentPeriodEnd,
@@ -94,16 +89,16 @@ export const upsertSubscription = async (db: D1Database, input: SubscriptionUpse
       input.stripeSubscriptionItemId,
       input.stripePriceId,
       input.stripeProductId,
-    )
-    .run()
+    ],
+  )
 }
 
 export const disableSubscriptionByStripeId = async (
-  db: D1Database,
+  db: DbClient,
   stripeSubscriptionId: string,
 ) => {
-  await db
-    .prepare(`UPDATE subscriptions SET is_disabled = 1, status = 'canceled' WHERE stripe_subscription_id = ?`)
-    .bind(stripeSubscriptionId)
-    .run()
+  await db.execute(
+    `UPDATE subscriptions SET is_disabled = TRUE, status = 'canceled' WHERE stripe_subscription_id = $1`,
+    [stripeSubscriptionId],
+  )
 }
