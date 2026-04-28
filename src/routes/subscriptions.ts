@@ -68,6 +68,11 @@ const getNumber = (record: Record<string, unknown>, key: string) => {
   return null
 }
 
+const getRecord = (record: Record<string, unknown>, key: string) => {
+  const value = record[key]
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
 const postStripeForm = async (secretKey: string, path: string, params: URLSearchParams) => {
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     method: 'POST',
@@ -369,7 +374,8 @@ subscriptionRoutes.post('/change-plan', async (c) => {
       error: null,
       data: {
         passType: parsed.output.passType,
-        amountJpy: nextAmount,
+        renewalAmountJpy: nextAmount,
+        chargedNowAmountJpy: 0,
         status: getString(current, 'status') ?? 'active',
       },
     })
@@ -394,8 +400,10 @@ subscriptionRoutes.post('/change-plan', async (c) => {
   }
 
   const form = new URLSearchParams()
-  form.set('proration_behavior', 'none')
+  form.set('proration_behavior', 'always_invoice')
+  form.set('payment_behavior', 'error_if_incomplete')
   form.set('cancel_at_period_end', 'false')
+  form.set('expand[]', 'latest_invoice')
   form.set('items[0][id]', stripeSubscriptionItemId)
   form.set('items[0][price_data][currency]', 'jpy')
   form.set('items[0][price_data][unit_amount]', String(nextAmount))
@@ -416,6 +424,11 @@ subscriptionRoutes.post('/change-plan', async (c) => {
   const updatedItems = stripeUpdate.items as { data?: Array<Record<string, unknown>> } | undefined
   const [updatedFirstItem] = updatedItems?.data ?? []
   const updatedPrice = (updatedFirstItem?.price ?? null) as Record<string, unknown> | null
+  const latestInvoice = getRecord(stripeUpdate, 'latest_invoice')
+  const chargedNowAmountJpy =
+    getNumber(latestInvoice ?? {}, 'amount_paid') ??
+    getNumber(latestInvoice ?? {}, 'amount_due') ??
+    0
 
   const updatedStatus =
     typeof stripeUpdate.status === 'string' ? stripeUpdate.status : 'active'
@@ -457,7 +470,8 @@ subscriptionRoutes.post('/change-plan', async (c) => {
     error: null,
     data: {
       passType: parsed.output.passType,
-      amountJpy: nextAmount,
+      renewalAmountJpy: nextAmount,
+      chargedNowAmountJpy,
       status: updatedStatus,
     },
   })
