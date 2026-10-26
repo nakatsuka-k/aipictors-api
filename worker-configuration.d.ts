@@ -9,6 +9,10 @@ declare global {
     INTERNAL_API_TOKEN?: string
     ADMIN_API_TOKEN?: string
     USER_MODELS: R2Bucket
+    // URL（Civitai）からのモデル取り込み（src/workflows/user-model-import.ts）
+    USER_MODEL_IMPORTS?: Workflow<{ modelId: string; downloadUrl: string }>
+    // 任意。Civitai のログインが必要なモデルのダウンロードに使う API キー
+    CIVITAI_API_TOKEN?: string
   }
 }
 

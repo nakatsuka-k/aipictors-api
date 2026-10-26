@@ -24,8 +24,16 @@ import {
   verifyUserModelFile,
   type UserModelDeps,
 } from "../lib/user-models"
+import {
+  cancelUserModelImport,
+  getUserModelImportStatus,
+  previewUserModelImport,
+  startUserModelImport,
+  type ImportSourceDeps,
+  type StartImportWorkflow,
+} from "../lib/user-model-imports"
 
-type Bindings = Env & { USER_MODELS: R2Bucket }
+type Bindings = Env
 type AppContext = Context<{ Bindings: Bindings }>
 
 export type GetUserModelDeps = (c: AppContext) => Promise<UserModelDeps>
@@ -33,6 +41,21 @@ export type GetUserModelDeps = (c: AppContext) => Promise<UserModelDeps>
 const defaultDeps: GetUserModelDeps = async (c) => {
   if (!c.env.USER_MODELS) throw new Error("USER_MODELS bucket is not configured")
   return { db: await getDb(c.env), bucket: c.env.USER_MODELS, now: getNow() }
+}
+
+export type GetUserModelImportDeps = (c: AppContext) => ImportSourceDeps & { startWorkflow: StartImportWorkflow | null }
+
+const defaultImportDeps: GetUserModelImportDeps = (c) => {
+  const workflow = c.env.USER_MODEL_IMPORTS
+  return {
+    fetch: (input, init) => fetch(input, init),
+    civitaiToken: c.env.CIVITAI_API_TOKEN ?? null,
+    startWorkflow: workflow
+      ? async (params) => {
+          await workflow.create({ id: params.modelId, params })
+        }
+      : null,
+  }
 }
 
 const param = (c: AppContext, name: string) => c.req.param(name) ?? ""
@@ -58,9 +81,42 @@ const handle = (fn: (c: AppContext) => Promise<Response | unknown>) => async (c:
   }
 }
 
-export const createUserModelsRoutes = (getDeps: GetUserModelDeps = defaultDeps) => {
+export const createUserModelsRoutes = (
+  getDeps: GetUserModelDeps = defaultDeps,
+  getImportDeps: GetUserModelImportDeps = defaultImportDeps,
+) => {
   const routes = new Hono<{ Bindings: Bindings }>()
   routes.use("*", requireInternalAuth)
+
+  // ---- URL（Civitai）からの取り込み ----
+  routes.post(
+    "/imports/preview",
+    handle(async (c) => {
+      const { db } = await getDeps(c)
+      return previewUserModelImport({ db, ...getImportDeps(c) }, await readJson(c))
+    }),
+  )
+
+  routes.post(
+    "/imports",
+    handle(async (c) => startUserModelImport({ ...(await getDeps(c)), ...getImportDeps(c) }, await readJson(c))),
+  )
+
+  routes.get(
+    "/imports/:id",
+    handle(async (c) => {
+      const { db } = await getDeps(c)
+      return getUserModelImportStatus(db, param(c, "id"), c.req.query("userId"))
+    }),
+  )
+
+  routes.post(
+    "/imports/:id/cancel",
+    handle(async (c) => {
+      const body = await readJson(c)
+      return cancelUserModelImport(await getDeps(c), param(c, "id"), body.userId ?? c.req.query("userId"))
+    }),
+  )
 
   routes.post(
     "/uploads",

@@ -488,6 +488,394 @@ await t("used / file は存在しない ID で 404", async () => {
   assert.equal((await call("GET", "/not-an-id/file")).status, 404)
 })
 
+
+// ---- URL（Civitai）からの取り込み ----
+const imp = await import(`${API}/lib/user-model-imports.ts`)
+
+await t("Civitai の URL を読める（モデルページ / slug / modelVersionId / download URL）。他サイトは UNSUPPORTED_URL", async () => {
+  assert.deepEqual(imp.parseCivitaiUrl("https://civitai.com/models/123"), { modelId: 123, versionId: null })
+  assert.deepEqual(imp.parseCivitaiUrl("https://civitai.com/models/123/cute-style?modelVersionId=456"), { modelId: 123, versionId: 456 })
+  assert.deepEqual(imp.parseCivitaiUrl(" civitai.com/models/123/x/ "), { modelId: 123, versionId: null })
+  assert.deepEqual(imp.parseCivitaiUrl("https://civitai.com/api/download/models/456?type=Model"), { modelId: null, versionId: 456 })
+  assert.throws(() => imp.parseCivitaiUrl("https://huggingface.co/x/y"), (e: any) => e.code === "UNSUPPORTED_URL")
+  assert.throws(() => imp.parseCivitaiUrl("https://civitai.com/images/1"), (e: any) => e.code === "UNSUPPORTED_URL")
+  assert.throws(() => imp.parseCivitaiUrl(""), (e: any) => e.code === "INVALID_INPUT")
+})
+
+await t("系統・ライセンス・画像 URL の変換", async () => {
+  assert.equal(imp.mapCivitaiBaseModel("SD 1.5"), "SD1.5")
+  assert.equal(imp.mapCivitaiBaseModel("SDXL 1.0"), "SDXL")
+  assert.equal(imp.mapCivitaiBaseModel("Pony"), "PONY")
+  assert.equal(imp.mapCivitaiBaseModel("Illustrious"), "ILLUSTRIOUS")
+  assert.equal(imp.mapCivitaiBaseModel("NoobAI"), "NOOBAI")
+  for (const other of ["Anima", "Flux.1 D", "SD 3.5", "", undefined]) assert.equal(imp.mapCivitaiBaseModel(other), "OTHER")
+  assert.deepEqual(imp.normalizeCivitaiLicense({ allowCommercialUse: "Rent" } as any).allowCommercialUse, ["Image", "RentCivit", "Rent"])
+  assert.deepEqual(imp.normalizeCivitaiLicense({ allowCommercialUse: "None" } as any).allowCommercialUse, [])
+  assert.equal(
+    imp.civitaiImageUrl("https://image.civitai.com/abc/uuid-1/width=832/1.jpeg", 450),
+    "https://image.civitai.com/abc/uuid-1/width=450/1.jpeg",
+  )
+  assert.equal(
+    imp.civitaiImageUrl("https://image.civitai.com/abc/uuid-1/original=true/1.jpeg", 450),
+    "https://image.civitai.com/abc/uuid-1/width=450/1.jpeg",
+  )
+  assert.equal(imp.htmlToText("<p>Hello&nbsp;<b>world</b></p><ul><li>a</li></ul>"), "Hello world\n・a")
+})
+
+// 偽の Civitai（API・ダウンロードの 307・署名付き URL の Range）
+type FakeModel = { model: any; file: Uint8Array; loginRequired?: boolean }
+const civitai = {
+  models: new Map<number, FakeModel>(),
+  fetched: [] as string[],
+  expireSig: new Set<string>(),
+  resolveCount: 0,
+  rangeStatusOverride: null as number | null,
+}
+const fakeFetch = async (input: string, init: RequestInit = {}) => {
+  civitai.fetched.push(input)
+  const url = new URL(input)
+  const headers = new Headers(init.headers)
+  let m = /^\/api\/v1\/models\/(\d+)$/.exec(url.pathname)
+  if (url.hostname === "civitai.com" && m) {
+    const entry = civitai.models.get(Number(m[1]))
+    return entry ? Response.json(entry.model) : new Response("not found", { status: 404 })
+  }
+  m = /^\/api\/v1\/model-versions\/(\d+)$/.exec(url.pathname)
+  if (url.hostname === "civitai.com" && m) {
+    for (const entry of civitai.models.values()) {
+      const v = entry.model.modelVersions.find((v: any) => v.id === Number(m![1]))
+      if (v) return Response.json({ ...v, modelId: entry.model.id })
+    }
+    return new Response("not found", { status: 404 })
+  }
+  m = /^\/api\/download\/models\/(\d+)$/.exec(url.pathname)
+  if (url.hostname === "civitai.com" && m) {
+    assert.equal(init.redirect, "manual")
+    for (const entry of civitai.models.values()) {
+      if (!entry.model.modelVersions.some((v: any) => v.id === Number(m![1]))) continue
+      if (entry.loginRequired && headers.get("authorization") !== "Bearer civ-token") return new Response("{}", { status: 401 })
+      civitai.resolveCount++
+      return new Response(null, { status: 307, headers: { location: `https://signed.example/v${m[1]}?sig=${civitai.resolveCount}` } })
+    }
+    return new Response("not found", { status: 404 })
+  }
+  m = /^\/v(\d+)$/.exec(url.pathname)
+  if (url.hostname === "signed.example" && m) {
+    if (civitai.expireSig.has(url.searchParams.get("sig")!)) return new Response("expired", { status: 403 })
+    if (civitai.rangeStatusOverride) return new Response("x", { status: civitai.rangeStatusOverride })
+    const entry = [...civitai.models.values()].find((e) => e.model.modelVersions.some((v: any) => v.id === Number(m![1])))!
+    const r = /^bytes=(\d+)-(\d+)$/.exec(headers.get("range") ?? "")!
+    const start = Number(r[1])
+    const end = Math.min(Number(r[2]), entry.file.length - 1)
+    return new Response(entry.file.slice(start, end + 1), {
+      status: 206,
+      headers: { "content-range": `bytes ${start}-${end}/${entry.file.length}`, "content-length": String(end - start + 1) },
+    })
+  }
+  throw new Error(`unexpected fetch ${input}`)
+}
+
+const addCivitaiModel = async (opts: {
+  id: number
+  versionId: number
+  type?: string
+  baseModel?: string
+  nsfw?: boolean
+  file: Uint8Array
+  loginRequired?: boolean
+  allowCommercialUse?: unknown
+  name?: string
+}) => {
+  const sha = (await sha256Hex(opts.file)).toUpperCase()
+  civitai.models.set(opts.id, {
+    file: opts.file,
+    loginRequired: opts.loginRequired,
+    model: {
+      id: opts.id,
+      name: opts.name ?? `Model ${opts.id}`,
+      description: "<p>かわいい<b>スタイル</b>の LoRA です&amp;</p>",
+      type: opts.type ?? "LORA",
+      nsfw: opts.nsfw ?? false,
+      tags: ["style", "anime"],
+      creator: { username: "alice" },
+      allowNoCredit: false,
+      allowCommercialUse: opts.allowCommercialUse ?? ["Image", "RentCivit"],
+      allowDerivatives: true,
+      allowDifferentLicense: false,
+      modelVersions: [
+        {
+          id: opts.versionId,
+          name: "v2.0",
+          baseModel: opts.baseModel ?? "Illustrious",
+          trainedWords: ["cutestyle", "pastel"],
+          images: [
+            { url: "https://image.civitai.com/k/nsfw-1/width=832/1.jpeg", nsfwLevel: 8, type: "image" },
+            { url: "https://image.civitai.com/k/safe-1/width=832/2.jpeg", nsfwLevel: 1, type: "image" },
+            { url: "https://image.civitai.com/k/vid-1/width=832/3.mp4", nsfwLevel: 1, type: "video" },
+          ],
+          files: [
+            { name: "train.zip", type: "Training Data", sizeKB: 10, downloadUrl: `https://civitai.com/api/download/models/${opts.versionId}?type=Training%20Data` },
+            {
+              name: `model-${opts.id}.safetensors`,
+              type: "Model",
+              primary: true,
+              sizeKB: opts.file.length / 1024,
+              metadata: { format: "SafeTensor" },
+              hashes: { SHA256: sha, AutoV2: "abc" },
+              downloadUrl: `https://civitai.com/api/download/models/${opts.versionId}`,
+            },
+          ],
+        },
+        { id: opts.versionId - 1, name: "v1.0", baseModel: "SD 1.5", files: [], images: [] },
+      ],
+    },
+  })
+  return sha.toLowerCase()
+}
+
+const startedImports: any[] = []
+let workflowEnabled = true
+const importApp = new Hono()
+importApp.route(
+  "/internal/user-models",
+  createUserModelsRoutes(
+    async () => ({ db, bucket, now: fakeNow }),
+    () => ({
+      fetch: fakeFetch,
+      civitaiToken: null,
+      startWorkflow: workflowEnabled
+        ? async (params: any) => {
+            startedImports.push(params)
+          }
+        : null,
+    }),
+  ),
+)
+const icall = async (method: string, path: string, body?: unknown) => {
+  const res = await importApp.request(
+    `/internal/user-models${path}`,
+    {
+      method,
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    },
+    env,
+  )
+  return { status: res.status, body: (await res.json()) as any }
+}
+// 偽の step.do: 失敗したら再試行する（ImportFatalError は再試行しない）
+const fakeStep = {
+  names: [] as string[],
+  async do(name: string, _config: unknown, cb: () => Promise<any>) {
+    this.names.push(name)
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await cb()
+      } catch (e) {
+        if (e instanceof imp.ImportFatalError || attempt >= 3) throw e
+      }
+    }
+  },
+}
+const importDeps = async () => ({ db, bucket, now: fakeNow, fetch: fakeFetch, civitaiToken: null })
+const runImport = (params: any) => imp.runUserModelImport(params, fakeStep, importDeps)
+
+const civFile = makeSafetensors(2 * PART + 777, ["lora_unet_a.lora_down.weight", "lora_unet_a.lora_up.weight"], 7)
+let civSha = ""
+
+await t("preview: 種類・系統・ライセンス・サムネイル・説明（クレジット付き）を返し、副作用がない", async () => {
+  civSha = await addCivitaiModel({ id: 100, versionId: 201, file: civFile, nsfw: true })
+  const before = await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")
+  const r = await icall("POST", "/imports/preview", { url: "https://civitai.com/models/100/cute" })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  const p = r.body.data
+  assert.equal(p.kind, "LORA")
+  assert.equal(p.name, "Model 100 v2.0")
+  assert.equal(p.baseModel, "ILLUSTRIOUS")
+  assert.equal(p.sourceBaseModel, "Illustrious")
+  assert.equal(p.baseModelSupported, true)
+  assert.equal(p.rating, "R18")
+  assert.equal(p.sha256, civSha)
+  assert.equal(p.sizeBytes, civFile.length)
+  assert.equal(p.creator, "alice")
+  assert.equal(p.triggerWords, "cutestyle, pastel")
+  assert.deepEqual(p.tags, ["style", "anime"])
+  assert.equal(p.thumbnailUrl, "https://image.civitai.com/k/safe-1/width=450/2.jpeg")
+  assert.deepEqual(p.sampleImageUrls, ["https://image.civitai.com/k/safe-1/width=1024/2.jpeg"])
+  assert.equal(p.licenseAllowsOtherServices, false)
+  assert.deepEqual(p.license.allowCommercialUse, ["Image", "RentCivit"])
+  assert.equal(p.sourceUrl, "https://civitai.com/models/100?modelVersionId=201")
+  assert.match(p.description, /^かわいいスタイルの LoRA です&\n\n元のモデル: https:\/\/civitai\.com\/models\/100\?modelVersionId=201\n作者: alice$/)
+  assert.equal(p.downloadUrl, undefined)
+  assert.equal(p.alreadyStored, false)
+  const after = await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")
+  assert.equal(after.n, before.n)
+  // バージョン指定・download URL からも引ける
+  const byVersion = await icall("POST", "/imports/preview", { url: "https://civitai.com/api/download/models/201" })
+  assert.equal(byVersion.body.data.civitaiVersionId, 201)
+  const old = await icall("POST", "/imports/preview", { url: "https://civitai.com/models/100?modelVersionId=200" })
+  assert.equal(old.body.code, "UNSUPPORTED_FORMAT")
+  assert.equal((await icall("POST", "/imports/preview", { url: "https://civitai.com/models/999" })).body.code, "SOURCE_NOT_FOUND")
+})
+
+let importedId = ""
+await t("取り込み: QUEUED → Workflow で 3 パート転送（途中で署名切れ→解決し直し）→ READY。出典が付く", async () => {
+  const r = await icall("POST", "/imports", { userId: "imp1", url: "https://civitai.com/models/100", name: "かわいい LoRA" })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  assert.equal(r.body.data.status, "QUEUED")
+  assert.equal(r.body.data.deduplicated, false)
+  importedId = r.body.data.modelId
+  assert.deepEqual(startedImports.at(-1), { modelId: importedId, downloadUrl: "https://civitai.com/api/download/models/201" })
+  const queued = await icall("GET", `/imports/${importedId}?userId=imp1`)
+  assert.equal(queued.body.data.status, "QUEUED")
+  assert.equal((await icall("GET", `/imports/${importedId}?userId=other`)).status, 404)
+  // 進行中も上限に数える
+  const mine = await callJson("GET", "/mine/imp1")
+  assert.equal(mine.body.data.used, 1)
+
+  // 2 つ目のパートの取得前に署名付き URL を切らす
+  const origPart = imp.importStepPart
+  let resolvesBefore = 0
+  civitai.expireSig.clear()
+  fakeStep.names = []
+  const result = await imp.runUserModelImport(startedImports.at(-1), {
+    async do(name: string, config: unknown, cb: () => Promise<any>) {
+      if (name === "part-2") {
+        resolvesBefore = civitai.resolveCount
+        for (let i = 1; i <= resolvesBefore; i++) civitai.expireSig.add(String(i))
+      }
+      return fakeStep.do(name, config, cb)
+    },
+  }, importDeps)
+  assert.equal(origPart, imp.importStepPart)
+  assert.equal(result.status, "READY", JSON.stringify(result))
+  assert.deepEqual(fakeStep.names, ["start", "part-1", "part-2", "part-3", "complete"])
+  assert.equal(civitai.resolveCount, resolvesBefore + 1)
+  assert.deepEqual(bucket.objects.get(`models/${civSha}.safetensors`), civFile)
+  const done = await icall("GET", `/imports/${importedId}?userId=imp1`)
+  assert.equal(done.body.data.status, "READY")
+  assert.equal(done.body.data.partsDone, 3)
+  assert.equal(done.body.data.partsTotal, 3)
+  const model = done.body.data.model
+  assert.equal(model.name, "かわいい LoRA")
+  assert.equal(model.rating, "R18")
+  assert.equal(model.sizeBytes, civFile.length)
+  assert.equal(model.sourceUrl, "https://civitai.com/models/100?modelVersionId=201")
+  assert.equal(model.sourceCreator, "alice")
+  assert.equal(model.sourceBaseModel, "Illustrious")
+  assert.equal(model.sourceLicenseAllowsOtherServices, false)
+  assert.equal(model.sourceLicense.allowDerivatives, true)
+  assert.equal(model.thumbnailUrl, "https://image.civitai.com/k/safe-1/width=450/2.jpeg")
+  civitai.expireSig.clear()
+})
+
+await t("取り込み: 同じファイルが保存済みなら転送せずに即 READY（重複排除）。rating を指定できる", async () => {
+  const before = startedImports.length
+  const preview = await icall("POST", "/imports/preview", { url: "https://civitai.com/models/100" })
+  assert.equal(preview.body.data.alreadyStored, true)
+  const r = await icall("POST", "/imports", { userId: "imp2", url: "https://civitai.com/models/100", rating: "R15" })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  assert.equal(r.body.data.deduplicated, true)
+  assert.equal(r.body.data.status, "READY")
+  assert.equal(r.body.data.model.rating, "R15")
+  assert.equal(r.body.data.model.sourceCreator, "alice")
+  assert.equal(startedImports.length, before)
+  // 同じユーザーがもう一度 → ALREADY_REGISTERED
+  assert.equal((await icall("POST", "/imports", { userId: "imp2", url: "https://civitai.com/models/100" })).body.code, "ALREADY_REGISTERED")
+})
+
+await t("取り込み: 上限（進行中も数える）・ログインが必要・未対応の種類・Workflow なし", async () => {
+  const f2 = makeSafetensors(5000, undefined, 11)
+  await addCivitaiModel({ id: 110, versionId: 211, file: f2 })
+  const first = await icall("POST", "/imports", { userId: "imp3", url: "https://civitai.com/models/110" })
+  assert.equal(first.body.data.status, "QUEUED")
+  const f3 = makeSafetensors(6000, undefined, 12)
+  await addCivitaiModel({ id: 120, versionId: 221, file: f3 })
+  const second = await icall("POST", "/imports", { userId: "imp3", url: "https://civitai.com/models/120" })
+  assert.equal(second.status, 409)
+  assert.equal(second.body.code, "LIMIT_EXCEEDED")
+
+  await addCivitaiModel({ id: 130, versionId: 231, file: makeSafetensors(7000, undefined, 13), loginRequired: true })
+  const rowsBefore = (await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")).n
+  const login = await icall("POST", "/imports", { userId: "imp4", url: "https://civitai.com/models/130" })
+  assert.equal(login.status, 400)
+  assert.equal(login.body.code, "LOGIN_REQUIRED")
+  assert.equal(login.body.error, "このモデルは Civitai のログインが必要なため、今は取り込めません")
+  assert.equal((await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")).n, rowsBefore)
+  // API キーがあれば解決できる
+  const url = await imp.resolveCivitaiDownload({ fetch: fakeFetch, civitaiToken: "civ-token" }, "https://civitai.com/api/download/models/231")
+  assert.match(url, /^https:\/\/signed\.example\/v231\?sig=\d+$/)
+
+  await addCivitaiModel({ id: 140, versionId: 241, file: makeSafetensors(8000, undefined, 14), type: "TextualInversion" })
+  assert.equal((await icall("POST", "/imports/preview", { url: "https://civitai.com/models/140" })).body.code, "UNSUPPORTED_TYPE")
+
+  workflowEnabled = false
+  assert.equal((await icall("POST", "/imports", { userId: "imp5", url: "https://civitai.com/models/120" })).status, 503)
+  workflowEnabled = true
+})
+
+await t("未対応の系統（Flux）は OTHER で取り込み、種類違いのキーでも止めない。SDXL で種類違いは失敗→枠を空ける", async () => {
+  // チェックポイントとして登録されているが中身は LoRA のキー
+  const flux = makeSafetensors(9000, ["lora_unet_x.lora_down.weight"], 15)
+  await addCivitaiModel({ id: 150, versionId: 251, file: flux, type: "Checkpoint", baseModel: "Flux.1 D", allowCommercialUse: ["Image", "Rent", "Sell"] })
+  const preview = await icall("POST", "/imports/preview", { url: "https://civitai.com/models/150" })
+  assert.equal(preview.body.data.kind, "CHECKPOINT")
+  assert.equal(preview.body.data.baseModel, "OTHER")
+  assert.equal(preview.body.data.sourceBaseModel, "Flux.1 D")
+  assert.equal(preview.body.data.baseModelSupported, false)
+  assert.equal(preview.body.data.licenseAllowsOtherServices, true)
+  const r = await icall("POST", "/imports", { userId: "imp6", url: "https://civitai.com/models/150" })
+  assert.equal(r.body.data.model.baseModel, "OTHER")
+  const result = await runImport(startedImports.at(-1))
+  assert.equal(result.status, "READY", JSON.stringify(result))
+
+  const sdxl = makeSafetensors(9500, ["lora_unet_y.lora_down.weight"], 16)
+  await addCivitaiModel({ id: 160, versionId: 261, file: sdxl, type: "Checkpoint", baseModel: "SDXL 1.0" })
+  const r2 = await icall("POST", "/imports", { userId: "imp7", url: "https://civitai.com/models/160" })
+  const failed = await runImport(startedImports.at(-1))
+  assert.equal(failed.status, "FAILED")
+  const status = await icall("GET", `/imports/${r2.body.data.modelId}?userId=imp7`)
+  assert.equal(status.body.data.status, "FAILED")
+  assert.equal(status.body.data.error, "チェックポイントではなく LoRA のファイルのようです")
+  const row = await db.queryOne("SELECT status, disabled_reason, upload_id FROM user_models WHERE id = $1", [r2.body.data.modelId])
+  assert.equal(row.status, "DELETED")
+  assert.match(row.disabled_reason, /^import_failed: /)
+  assert.equal((await callJson("GET", "/mine/imp7")).body.data.used, 0)
+})
+
+await t("取り込み: 壊れたファイル・Civitai の失敗が続く場合は FAILED（一般的なメッセージ）", async () => {
+  const broken = new Uint8Array(4000)
+  await addCivitaiModel({ id: 170, versionId: 271, file: broken })
+  const r = await icall("POST", "/imports", { userId: "imp8", url: "https://civitai.com/models/170" })
+  assert.equal((await runImport(startedImports.at(-1))).status, "FAILED")
+  assert.equal((await icall("GET", `/imports/${r.body.data.modelId}?userId=imp8`)).body.data.error, "safetensors 形式のファイルではありません")
+
+  await addCivitaiModel({ id: 180, versionId: 281, file: makeSafetensors(4100, undefined, 18) })
+  const r2 = await icall("POST", "/imports", { userId: "imp9", url: "https://civitai.com/models/180" })
+  civitai.rangeStatusOverride = 503
+  assert.equal((await runImport(startedImports.at(-1))).status, "FAILED")
+  civitai.rangeStatusOverride = null
+  const s2 = await icall("GET", `/imports/${r2.body.data.modelId}?userId=imp9`)
+  assert.equal(s2.body.data.status, "FAILED")
+  assert.equal(s2.body.data.error, "Civitai からの取得に失敗しました（503）")
+})
+
+await t("取り込みの中止: 行は DELETED、Workflow はスキップ、multipart は破棄", async () => {
+  const r = await icall("POST", "/imports", { userId: "imp10", url: "https://civitai.com/models/120" })
+  const params = startedImports.at(-1)
+  // 1 パート目まで進めてから中止
+  const started = await imp.importStepStart(await importDeps(), params)
+  assert.equal(started.skip, false)
+  assert.equal((await icall("POST", `/imports/${r.body.data.modelId}/cancel`, { userId: "someone" })).status, 403)
+  const c = await icall("POST", `/imports/${r.body.data.modelId}/cancel`, { userId: "imp10" })
+  assert.equal(c.status, 200)
+  assert.ok(bucket.aborted.includes(started.uploadId))
+  const s = await icall("GET", `/imports/${r.body.data.modelId}?userId=imp10`)
+  assert.equal(s.body.data.status, "FAILED")
+  assert.equal(s.body.data.error, "取り込みを中止しました")
+  assert.equal((await runImport(params)).status, "SKIPPED")
+})
+
 console.log(`\n${passed} passed`)
 await pool.end()
 await epg.stop()

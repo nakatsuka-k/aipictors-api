@@ -25,6 +25,13 @@ STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
 binding = "USER_MODELS"
 bucket_name = "aipictors-user-models"
 
+# URL（Civitai）からのモデル取り込み。50MB ずつ Range で取得して USER_MODELS に multipart で保存する
+# 任意 secret: CIVITAI_API_TOKEN（ログインが必要な LoRA の取り込みに使う。無ければそのモデルは取り込めないと表示する）
+[[workflows]]
+name = "aipictors-user-model-import"
+binding = "USER_MODEL_IMPORTS"
+class_name = "UserModelImportWorkflow"
+
 # 日次コインの失効・付与（00:00 JST と、取りこぼし用に 00:30 JST）
 [triggers]
 crons = ["0 15 * * *", "30 15 * * *"]

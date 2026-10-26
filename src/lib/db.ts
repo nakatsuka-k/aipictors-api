@@ -274,6 +274,15 @@ export var schemaStatements = [
     ON user_models(user_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_user_models_sha256
     ON user_models(sha256)`,
+  // URL（Civitai）から取り込んだモデルの出典と、取り込み（Cloudflare Workflows）の進み具合
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS source_url TEXT`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS source_creator TEXT`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS source_license TEXT`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS source_base_model TEXT`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_status TEXT`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_parts_done INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_parts_total INTEGER`,
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_error TEXT`,
   // ユーザーモデルへの通報。同じユーザーからの同じモデルへの通報は 1 件にまとめる
   `CREATE TABLE IF NOT EXISTS user_model_reports (
     model_id TEXT NOT NULL,
@@ -347,7 +356,7 @@ export var coinLockKey = (userId) => `coins:${userId}`;
 // schemaStatements を変えたら上げる。適用済みのバージョンなら DDL を流さない。
 // （Worker は isolate が頑繁に入れ替わる。毎回 70 文近い DDL を流すと初回リクエストが 10 秒近くかかり、
 //   ALTER TABLE ... IF NOT EXISTS もテーブルロックを取るので混雑時にコインの読み書きが詰まっていた）
-export var SCHEMA_VERSION = "2026-10-27.3";
+export var SCHEMA_VERSION = "2026-10-27.4";
 export var ensureSchema = async (cacheKey, db) => {
   let ready = schemaReady.get(cacheKey);
   if (!ready) {

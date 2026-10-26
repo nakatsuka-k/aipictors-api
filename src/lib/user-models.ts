@@ -41,7 +41,7 @@ export const defaultUserModelMaxBytes: Record<UserModelKind, number> = {
 
 export class UserModelError extends Error {
   constructor(
-    readonly status: 400 | 403 | 404 | 409 | 411 | 416 | 500,
+    readonly status: 400 | 403 | 404 | 409 | 411 | 416 | 500 | 502 | 503,
     readonly code: string,
     message: string,
   ) {
@@ -120,6 +120,15 @@ type UserModelRow = {
   last_used_at: number | string | null
   created_at: number | string
   updated_at: number | string
+  // URL から取り込んだモデル（user-model-imports.ts）。アップロードでは NULL
+  source_url?: string | null
+  source_creator?: string | null
+  source_license?: string | null
+  source_base_model?: string | null
+  import_status?: string | null
+  import_parts_done?: number | string | null
+  import_parts_total?: number | string | null
+  import_error?: string | null
 }
 
 const parseJsonArray = (value: string | null | undefined): string[] => {
@@ -131,7 +140,37 @@ const parseJsonArray = (value: string | null | undefined): string[] => {
   }
 }
 
-const toNumberOrNull = (value: number | string | null) => (value === null || value === undefined ? null : Number(value))
+const toNumberOrNull = (value: number | string | null | undefined) => (value === null || value === undefined ? null : Number(value))
+
+export type UserModelSourceLicense = {
+  allowCommercialUse: string[]
+  allowDerivatives: boolean | null
+  allowNoCredit: boolean | null
+  allowDifferentLicense: boolean | null
+}
+
+// 他サービス（画像生成サービス）での利用が作者のライセンスで許可されているか。Civitai の allowCommercialUse の "Rent" / "Sell"
+export const sourceLicenseAllowsOtherServices = (license: UserModelSourceLicense | null) =>
+  license ? license.allowCommercialUse.some((v) => v === "Rent" || v === "Sell") : null
+
+const parseSourceLicense = (value: string | null | undefined): UserModelSourceLicense | null => {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== "object") return null
+    const bool = (v: unknown) => (typeof v === "boolean" ? v : null)
+    return {
+      allowCommercialUse: Array.isArray(parsed.allowCommercialUse)
+        ? parsed.allowCommercialUse.filter((v: unknown) => typeof v === "string")
+        : [],
+      allowDerivatives: bool(parsed.allowDerivatives),
+      allowNoCredit: bool(parsed.allowNoCredit),
+      allowDifferentLicense: bool(parsed.allowDifferentLicense),
+    }
+  } catch {
+    return null
+  }
+}
 
 export const toUserModel = (row: UserModelRow) => {
   const recommendedWeight = Number(row.recommended_weight)
@@ -158,6 +197,13 @@ export const toUserModel = (row: UserModelRow) => {
     lastUsedAt: toNumberOrNull(row.last_used_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+    // URL から取り込んだときの出典（アップロードしたモデルは null）
+    sourceUrl: row.source_url ?? null,
+    sourceCreator: row.source_creator ?? null,
+    sourceLicense: parseSourceLicense(row.source_license),
+    sourceLicenseAllowsOtherServices: sourceLicenseAllowsOtherServices(parseSourceLicense(row.source_license)),
+    sourceBaseModel: row.source_base_model ?? null,
+    importStatus: row.import_status ?? null,
     // 生成リクエストでの書き方（CONTRACT.md）
     fileName: `user_${row.id}.safetensors`,
     generationModel: row.kind === "CHECKPOINT" ? `user/${row.id}.safetensors` : null,
@@ -178,16 +224,16 @@ const isHttpsUrl = (value: string) => {
   }
 }
 
-const bad = (code: string, message: string) => new UserModelError(400, code, message)
+export const bad = (code: string, message: string) => new UserModelError(400, code, message)
 
-const optionalString = (value: unknown, field: string, max: number) => {
+export const optionalString = (value: unknown, field: string, max: number) => {
   if (value === undefined) return undefined
   if (typeof value !== "string") throw bad("INVALID_INPUT", `${field} は文字列で指定してください`)
   if (value.length > max) throw bad("INVALID_INPUT", `${field} は ${max} 文字以内にしてください`)
   return value
 }
 
-const oneOf = <T extends string>(value: unknown, values: readonly T[], field: string): T | undefined => {
+export const oneOf = <T extends string>(value: unknown, values: readonly T[], field: string): T | undefined => {
   if (value === undefined) return undefined
   if (typeof value !== "string" || !values.includes(value as T)) {
     throw bad("INVALID_INPUT", `${field} は ${values.join(" / ")} のいずれかです`)
@@ -227,7 +273,7 @@ const parseWeight = (value: unknown) => {
   return Math.round(value * 100) / 100
 }
 
-const parseEditable = (input: Record<string, unknown>) => {
+export const parseEditable = (input: Record<string, unknown>) => {
   const name = optionalString(input.name, "name", 100)?.trim()
   if (name !== undefined && name.length === 0) throw bad("INVALID_INPUT", "name を入力してください")
   return {
@@ -243,7 +289,7 @@ const parseEditable = (input: Record<string, unknown>) => {
   }
 }
 
-const requireUserId = (value: unknown) => {
+export const requireUserId = (value: unknown) => {
   if (typeof value !== "string" || value.length === 0 || value.length > 200) {
     throw bad("INVALID_INPUT", "userId が必要です")
   }
@@ -263,7 +309,17 @@ const isFullModelKey = (key: string) =>
   key.startsWith("model.diffusion_model.") || key.startsWith("first_stage_model.") || key.startsWith("conditioner.")
 
 // 先頭 8 バイト（ヘッダー長, u64 LE）＋ヘッダー JSON を検証する。ヘッダーの data_offsets から求めたサイズが totalSize と一致すること。
-export const validateSafetensorsHeader = (header: Uint8Array, totalSize: number, kind: UserModelKind) => {
+// strictKind=false のときは種類違いを KIND_MISMATCH にせず warnings に入れるだけ（Civitai から取り込む SDXL 以外の系統など、
+// キーの名前から種類を判定できないことがあるため）
+export type SafetensorsCheckOptions = { strictKind?: boolean; onWarning?: (message: string) => void }
+
+export const validateSafetensorsHeader = (
+  header: Uint8Array,
+  totalSize: number,
+  kind: UserModelKind,
+  options: SafetensorsCheckOptions = {},
+) => {
+  const strictKind = options.strictKind ?? true
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(header))
@@ -305,18 +361,27 @@ export const validateSafetensorsHeader = (header: Uint8Array, totalSize: number,
   }
   const loraKeys = keys.filter(isLoraKey).length
   const fullKeys = keys.filter(isFullModelKey).length
-  if (kind === "LORA" && loraKeys === 0 && fullKeys > 0) {
-    throw new UserModelError(400, "KIND_MISMATCH", "LoRA ではなくチェックポイントのファイルのようです")
-  }
-  if (kind === "CHECKPOINT" && fullKeys === 0 && loraKeys > 0) {
-    throw new UserModelError(400, "KIND_MISMATCH", "チェックポイントではなく LoRA のファイルのようです")
+  const mismatch =
+    kind === "LORA" && loraKeys === 0 && fullKeys > 0
+      ? "LoRA ではなくチェックポイントのファイルのようです"
+      : kind === "CHECKPOINT" && fullKeys === 0 && loraKeys > 0
+        ? "チェックポイントではなく LoRA のファイルのようです"
+        : null
+  if (mismatch) {
+    if (strictKind) throw new UserModelError(400, "KIND_MISMATCH", mismatch)
+    options.onWarning?.(mismatch)
   }
   return { tensorCount: keys.length }
 }
 
 // 流れてくるバイト列をそのまま通しながら safetensors のヘッダーを検証する TransformStream。
 // 不正なら stream を error にする（R2 の uploadPart も失敗する）。onError で原因を受け取る。
-export const createSafetensorsValidator = (totalSize: number, kind: UserModelKind, onError: (e: UserModelError) => void) => {
+export const createSafetensorsValidator = (
+  totalSize: number,
+  kind: UserModelKind,
+  onError: (e: UserModelError) => void,
+  options: SafetensorsCheckOptions = {},
+) => {
   let buffer = new Uint8Array(0)
   let headerLength: number | null = null
   let done = false
@@ -337,7 +402,7 @@ export const createSafetensorsValidator = (totalSize: number, kind: UserModelKin
       throw new SafetensorsError("safetensors 形式のファイルではありません")
     }
     if (headerLength !== null && buffer.length >= 8 + headerLength) {
-      validateSafetensorsHeader(buffer.subarray(8, 8 + headerLength), totalSize, kind)
+      validateSafetensorsHeader(buffer.subarray(8, 8 + headerLength), totalSize, kind, options)
       done = true
       buffer = new Uint8Array(0)
     }
@@ -373,10 +438,10 @@ export const createSafetensorsValidator = (totalSize: number, kind: UserModelKin
 
 // ---- 取得 ----
 
-const getRow = (db: Db, id: string) =>
+export const getRow = (db: Db, id: string) =>
   db.queryOne<UserModelRow>("SELECT * FROM user_models WHERE id = $1", [id])
 
-const requireRow = async (db: Db, id: string, opts: { userId?: string | null; statuses?: UserModelStatus[] } = {}) => {
+export const requireRow = async (db: Db, id: string, opts: { userId?: string | null; statuses?: UserModelStatus[] } = {}) => {
   const row = isUserModelId(id) ? await getRow(db, id) : null
   if (!row || row.status === "DELETED") {
     throw new UserModelError(404, "NOT_FOUND", "モデルが見つかりません")
@@ -455,10 +520,10 @@ export const listMyUserModels = async (db: Db, userId: string, callerPlan: unkno
 
 // ---- アップロード ----
 
-const userLockKey = (userId: string) => `user-models:user:${userId}`
-const shaLockKey = (sha256: string) => `user-models:sha:${sha256}`
+export const userLockKey = (userId: string) => `user-models:user:${userId}`
+export const shaLockKey = (sha256: string) => `user-models:sha:${sha256}`
 
-const abortQuietly = async (bucket: ModelBucket, key: string, uploadId: string | null) => {
+export const abortQuietly = async (bucket: ModelBucket, key: string, uploadId: string | null) => {
   if (!uploadId) return
   try {
     await bucket.resumeMultipartUpload(key, uploadId).abort()
@@ -467,11 +532,15 @@ const abortQuietly = async (bucket: ModelBucket, key: string, uploadId: string |
   }
 }
 
-const cleanupStaleUploads = async (deps: UserModelDeps, userId: string) => {
+// URL からの取り込み（import_status あり）は Workflow が順番待ちになることもあるので長めに待つ
+export const STALE_IMPORT_SECONDS = 3 * 24 * 60 * 60
+
+export const cleanupStaleUploads = async (deps: UserModelDeps, userId: string) => {
   const stale = await deps.db.query<{ id: string; r2_key: string; upload_id: string | null }>(
     `WITH stale AS (
         SELECT id, r2_key, upload_id FROM user_models
-         WHERE user_id = $1 AND status = 'UPLOADING' AND created_at < $2
+         WHERE user_id = $1 AND status = 'UPLOADING'
+           AND created_at < CASE WHEN import_status IS NULL THEN $2::bigint ELSE $4::bigint END
          FOR UPDATE
       ),
       upd AS (
@@ -479,9 +548,121 @@ const cleanupStaleUploads = async (deps: UserModelDeps, userId: string) => {
          WHERE id IN (SELECT id FROM stale)
       )
       SELECT id, r2_key, upload_id FROM stale`,
-    [userId, deps.now - STALE_UPLOAD_SECONDS, deps.now],
+    [userId, deps.now - STALE_UPLOAD_SECONDS, deps.now, deps.now - STALE_IMPORT_SECONDS],
   )
   for (const row of stale) await abortQuietly(deps.bucket, row.r2_key, row.upload_id)
+}
+
+// 上限・重複を確認して行を入れる（アップロードと URL からの取り込みで共通）。同じ sha256 の READY があれば即 READY。
+// existingSizeMustMatch=false（取り込み）のときは既存ファイルのサイズを使う（Civitai の申告サイズは KB 単位の概算のため）
+export type ReserveUserModelInput = {
+  id: string
+  userId: string
+  kind: UserModelKind
+  sha256: string
+  sizeBytes: number
+  filename: string
+  limit: number
+  planType: string
+  fields: Omit<ReturnType<typeof parseEditable>, "name"> & { name: string }
+  source?: {
+    url: string
+    creator: string | null
+    license: UserModelSourceLicense | null
+    baseModel: string | null
+  }
+  existingSizeMustMatch?: boolean
+}
+
+export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUserModelInput): Promise<"READY" | "UPLOADING"> => {
+  const { id, userId, sha256, sizeBytes, limit, planType, fields } = input
+  const sizeMustMatch = input.existingSizeMustMatch ?? true
+  const result = await deps.db.lockedQueryOne<{
+    used: number | string
+    mine_id: string | null
+    uploading_id: string | null
+    existing_id: string | null
+    existing_size: number | string | null
+    inserted_status: UserModelStatus | null
+  }>(
+    [userLockKey(userId), shaLockKey(sha256)],
+    `WITH existing AS (
+        SELECT id, size_bytes FROM user_models WHERE sha256 = $3 AND status = 'READY' ORDER BY created_at, id LIMIT 1
+      ),
+      mine AS (
+        SELECT id FROM user_models WHERE user_id = $2 AND sha256 = $3 AND status <> 'DELETED' LIMIT 1
+      ),
+      uploading AS (
+        SELECT id FROM user_models WHERE sha256 = $3 AND status = 'UPLOADING' LIMIT 1
+      ),
+      used AS (
+        SELECT COUNT(*)::int AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED'
+      ),
+      ins AS (
+        INSERT INTO user_models(
+          id, user_id, kind, name, description, base_model, trigger_words, recommended_weight, rating, tags,
+          thumbnail_url, sample_image_urls, original_filename, sha256, size_bytes, r2_key, status, created_at, updated_at,
+          source_url, source_creator, source_license, source_base_model, import_status
+        )
+        SELECT $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3,
+               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END, $16,
+               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17,
+               $20, $21, $22, $23,
+               CASE WHEN $20::text IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END
+         WHERE (SELECT n FROM used) < $18
+           AND NOT EXISTS (SELECT 1 FROM mine)
+           AND (EXISTS (SELECT 1 FROM existing) OR NOT EXISTS (SELECT 1 FROM uploading))
+           AND (NOT $19 OR NOT EXISTS (SELECT 1 FROM existing) OR (SELECT size_bytes FROM existing) = $15)
+        RETURNING status
+      )
+      SELECT (SELECT n FROM used) AS used,
+             (SELECT id FROM mine) AS mine_id,
+             (SELECT id FROM uploading) AS uploading_id,
+             (SELECT id FROM existing) AS existing_id,
+             (SELECT size_bytes FROM existing) AS existing_size,
+             (SELECT status FROM ins) AS inserted_status`,
+    [
+      id,
+      userId,
+      sha256,
+      input.kind,
+      fields.name,
+      fields.description ?? "",
+      fields.baseModel ?? "OTHER",
+      fields.triggerWords ?? "",
+      fields.recommendedWeight ?? 0.8,
+      fields.rating ?? "G",
+      JSON.stringify(fields.tags ?? []),
+      fields.thumbnailUrl ?? null,
+      JSON.stringify(fields.sampleImageUrls ?? []),
+      input.filename,
+      sizeBytes,
+      userModelR2Key(sha256),
+      deps.now,
+      limit,
+      sizeMustMatch,
+      input.source?.url ?? null,
+      input.source?.creator ?? null,
+      input.source?.license ? JSON.stringify(input.source.license) : null,
+      input.source?.baseModel ?? null,
+    ],
+  )
+  if (!result?.inserted_status) {
+    if (result?.mine_id) {
+      throw new UserModelError(409, "ALREADY_REGISTERED", `同じファイルはすでに登録済みです（${result.mine_id}）`)
+    }
+    if (Number(result?.used ?? 0) >= limit) {
+      throw new UserModelError(409, "LIMIT_EXCEEDED", `登録できるモデルは ${limit} 個までです（${planType}）`)
+    }
+    if (sizeMustMatch && result?.existing_id && Number(result.existing_size) !== sizeBytes) {
+      throw bad("SIZE_MISMATCH", "sha256 とファイルサイズが一致しません")
+    }
+    if (result?.uploading_id) {
+      throw new UserModelError(409, "ALREADY_UPLOADING", "同じファイルが他でアップロード中です。しばらくしてからやり直してください")
+    }
+    throw new UserModelError(500, "INSERT_FAILED", "モデルを登録できませんでした")
+  }
+  return result.inserted_status === "READY" ? "READY" : "UPLOADING"
 }
 
 export const createUserModelUpload = async (deps: UserModelDeps, input: Record<string, unknown>) => {
@@ -514,83 +695,18 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
 
   const id = newUserModelId()
   const r2Key = userModelR2Key(sha256)
-  const result = await deps.db.lockedQueryOne<{
-    used: number | string
-    mine_id: string | null
-    uploading_id: string | null
-    existing_id: string | null
-    existing_size: number | string | null
-    inserted_status: UserModelStatus | null
-  }>(
-    [userLockKey(userId), shaLockKey(sha256)],
-    `WITH existing AS (
-        SELECT id, size_bytes FROM user_models WHERE sha256 = $3 AND status = 'READY' ORDER BY created_at, id LIMIT 1
-      ),
-      mine AS (
-        SELECT id FROM user_models WHERE user_id = $2 AND sha256 = $3 AND status <> 'DELETED' LIMIT 1
-      ),
-      uploading AS (
-        SELECT id FROM user_models WHERE sha256 = $3 AND status = 'UPLOADING' LIMIT 1
-      ),
-      used AS (
-        SELECT COUNT(*)::int AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED'
-      ),
-      ins AS (
-        INSERT INTO user_models(
-          id, user_id, kind, name, description, base_model, trigger_words, recommended_weight, rating, tags,
-          thumbnail_url, sample_image_urls, original_filename, sha256, size_bytes, r2_key, status, created_at, updated_at
-        )
-        SELECT $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3, $15, $16,
-               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17
-         WHERE (SELECT n FROM used) < $18
-           AND NOT EXISTS (SELECT 1 FROM mine)
-           AND (EXISTS (SELECT 1 FROM existing) OR NOT EXISTS (SELECT 1 FROM uploading))
-           AND (NOT EXISTS (SELECT 1 FROM existing) OR (SELECT size_bytes FROM existing) = $15)
-        RETURNING status
-      )
-      SELECT (SELECT n FROM used) AS used,
-             (SELECT id FROM mine) AS mine_id,
-             (SELECT id FROM uploading) AS uploading_id,
-             (SELECT id FROM existing) AS existing_id,
-             (SELECT size_bytes FROM existing) AS existing_size,
-             (SELECT status FROM ins) AS inserted_status`,
-    [
-      id,
-      userId,
-      sha256,
-      kind,
-      editable.name,
-      editable.description ?? "",
-      editable.baseModel ?? "OTHER",
-      editable.triggerWords ?? "",
-      editable.recommendedWeight ?? 0.8,
-      editable.rating ?? "G",
-      JSON.stringify(editable.tags ?? []),
-      editable.thumbnailUrl ?? null,
-      JSON.stringify(editable.sampleImageUrls ?? []),
-      filename,
-      sizeBytes,
-      r2Key,
-      deps.now,
-      limit,
-    ],
-  )
-  if (!result?.inserted_status) {
-    if (result?.mine_id) {
-      throw new UserModelError(409, "ALREADY_REGISTERED", `同じファイルはすでに登録済みです（${result.mine_id}）`)
-    }
-    if (Number(result?.used ?? 0) >= limit) {
-      throw new UserModelError(409, "LIMIT_EXCEEDED", `登録できるモデルは ${limit} 個までです（${planType}）`)
-    }
-    if (result?.existing_id && Number(result.existing_size) !== sizeBytes) {
-      throw bad("SIZE_MISMATCH", "sha256 とファイルサイズが一致しません")
-    }
-    if (result?.uploading_id) {
-      throw new UserModelError(409, "ALREADY_UPLOADING", "同じファイルが他でアップロード中です。しばらくしてからやり直してください")
-    }
-    throw new UserModelError(500, "INSERT_FAILED", "モデルを登録できませんでした")
-  }
-  if (result.inserted_status === "READY") {
+  const inserted = await reserveUserModelRow(deps, {
+    id,
+    userId,
+    kind,
+    sha256,
+    sizeBytes,
+    filename,
+    limit,
+    planType,
+    fields: { ...editable, name: editable.name },
+  })
+  if (inserted === "READY") {
     return {
       modelId: id,
       status: "READY" as const,
@@ -624,7 +740,7 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
   }
 }
 
-const markDeleted = (db: Db, id: string, now: number) =>
+export const markDeleted = (db: Db, id: string, now: number) =>
   db.execute("UPDATE user_models SET status = 'DELETED', upload_id = NULL, updated_at = $2 WHERE id = $1", [id, now])
 
 const uploadingRow = async (deps: UserModelDeps, modelId: string, userId?: string | null) => {

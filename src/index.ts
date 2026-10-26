@@ -39,3 +39,6 @@ const scheduled = async (_controller, env, ctx) => {
 };
 
 export default { fetch: app.fetch, scheduled }
+
+// URL からのモデル取り込み（wrangler.toml の [[workflows]]）
+export { UserModelImportWorkflow } from "./workflows/user-model-import"
