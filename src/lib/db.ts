@@ -296,15 +296,38 @@ export var createClient = (connectionString) => {
 };
 // コイン操作用のロックキー
 export var coinLockKey = (userId) => `coins:${userId}`;
+// schemaStatements を変えたら上げる。適用済みのバージョンなら DDL を流さない。
+// （Worker は isolate が頑繁に入れ替わる。毎回 70 文近い DDL を流すと初回リクエストが 10 秒近くかかり、
+//   ALTER TABLE ... IF NOT EXISTS もテーブルロックを取るので混雑時にコインの読み書きが詰まっていた）
+export var SCHEMA_VERSION = "2026-10-27.1";
 export var ensureSchema = async (cacheKey, db) => {
   let ready = schemaReady.get(cacheKey);
   if (!ready) {
     ready = (async () => {
+      try {
+        const applied = await db.queryOne(
+          "SELECT 1 AS ok FROM api_schema_versions WHERE version = $1",
+          [SCHEMA_VERSION]
+        );
+        if (applied) {
+          return;
+        }
+      } catch {
+      }
       for (const statement of schemaStatements) {
         await db.execute(statement);
       }
+      await db.execute(
+        "CREATE TABLE IF NOT EXISTS api_schema_versions (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL)"
+      );
+      await db.execute(
+        "INSERT INTO api_schema_versions(version, applied_at) VALUES ($1, EXTRACT(EPOCH FROM NOW())::bigint) ON CONFLICT (version) DO NOTHING",
+        [SCHEMA_VERSION]
+      );
     })();
     schemaReady.set(cacheKey, ready);
+    // 失敗したら次のリクエストでやり直す（失敗した Promise を持ち続けるとその isolate がずっとエラーになる）
+    ready.catch(() => schemaReady.delete(cacheKey));
   }
   await ready;
 };
