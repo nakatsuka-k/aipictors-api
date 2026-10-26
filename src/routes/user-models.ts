@@ -10,6 +10,10 @@ import {
   completeUserModelUpload,
   createUserModelUpload,
   deleteUserModel,
+  disableUserModel,
+  enableUserModel,
+  listUserModelReports,
+  reportUserModel,
   getUserModel,
   getUserModelFileResponse,
   listMyUserModels,
@@ -115,6 +119,38 @@ export const createUserModelsRoutes = (getDeps: GetUserModelDeps = defaultDeps) 
         offset: c.req.query("offset"),
         limit: c.req.query("limit"),
       })
+    }),
+  )
+
+  routes.get(
+    "/reports",
+    handle(async (c) => {
+      const { db } = await getDeps(c)
+      return listUserModelReports(db, { offset: c.req.query("offset"), limit: c.req.query("limit") })
+    }),
+  )
+
+  routes.post(
+    "/:id/report",
+    handle(async (c) => {
+      const { db, now } = await getDeps(c)
+      return reportUserModel(db, param(c, "id"), await readJson(c), now)
+    }),
+  )
+
+  routes.post(
+    "/:id/disable",
+    handle(async (c) => {
+      const { db, now } = await getDeps(c)
+      return disableUserModel(db, param(c, "id"), await readJson(c), now)
+    }),
+  )
+
+  routes.post(
+    "/:id/enable",
+    handle(async (c) => {
+      const { db, now } = await getDeps(c)
+      return enableUserModel(db, param(c, "id"), now)
     }),
   )
 

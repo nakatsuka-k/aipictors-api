@@ -449,6 +449,40 @@ await t("削除: 他人は 403。参照が残る間は R2 に残し、0 にな�
   assert.equal((await callJson("GET", "/mine/a1")).body.data.used, 0)
 })
 
+await t("通報: 5 人で自動非表示、管理者が戻すと解決済み。無効化 API は単体だけ止める", async () => {
+  const file = makeSafetensors(2600, undefined, 11)
+  await addSub("r0", "STANDARD")
+  const m = await uploadAll("r0", file, { name: "report-target" })
+  assert.equal((await callJson("POST", `/${m.modelId}/report`, { userId: "r0", reason: "SPAM" })).status, 400)
+  assert.equal((await callJson("POST", `/${m.modelId}/report`, { userId: "r1" })).status, 400)
+  for (const u of ["r1", "r1", "r2", "r3", "r4"]) {
+    const res = await callJson("POST", `/${m.modelId}/report`, { userId: u, reason: "COPYRIGHT" })
+    assert.equal(res.body.data.autoHidden, false)
+  }
+  const fifth = await callJson("POST", `/${m.modelId}/report`, { userId: "r5", reason: "REAL_PERSON", detail: "x" })
+  assert.equal(fifth.body.data.openReports, 5)
+  assert.equal(fifth.body.data.autoHidden, true)
+  const reports = await callJson("GET", "/reports")
+  const entry = reports.body.data.reports.find((r: any) => r.model.id === m.modelId)
+  assert.equal(entry.reportCount, 5)
+  assert.deepEqual(entry.reasons.sort(), ["COPYRIGHT", "REAL_PERSON"])
+  const enabled = await callJson("POST", `/${m.modelId}/enable`, {})
+  assert.equal(enabled.body.data.status, "READY")
+  assert.ok(!(await callJson("GET", "/reports")).body.data.reports.some((r: any) => r.model.id === m.modelId))
+  const dup = await uploadAll("r1", file, { name: "same-file" })
+  const dis = await callJson("POST", `/${m.modelId}/disable`, { reason: "admin: copyright" })
+  assert.equal(dis.body.data.disabledCount, 1)
+  assert.equal((await callJson("GET", `/${dup.modelId}`)).body.data.status, "READY")
+  const sha = await callJson("POST", `/${dup.modelId}/disable`, { reason: "sha256_mismatch" })
+  assert.equal(sha.body.data.disabledCount, 1)
+  assert.equal((await callJson("GET", `/${dup.modelId}`)).body.data.status, "DISABLED")
+})
+
+await t("一覧は hasMore を返す", async () => {
+  const page = await callJson("GET", "?limit=1")
+  assert.equal(typeof page.body.data.hasMore, "boolean")
+})
+
 await t("used / file は存在しない ID で 404", async () => {
   assert.equal((await callJson("POST", "/zzzzzzzzzzzz/used", {})).status, 404)
   assert.equal((await call("GET", "/not-an-id/file")).status, 404)
