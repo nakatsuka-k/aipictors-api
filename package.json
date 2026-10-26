@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test:coins": "tsx test/coins.pg-test.mts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
@@ -14,6 +15,9 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "wrangler": "^4.12.0"
   }

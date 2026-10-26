@@ -188,6 +188,26 @@ export var schemaStatements = [
     ON coin_lots(user_id, coin_type, source_kind, expires_at ASC, id ASC)`,
   `CREATE INDEX IF NOT EXISTS idx_coin_grants_user_created_at
     ON coin_grants(user_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_lots_expiring
+    ON coin_lots(expires_at) WHERE remaining > 0 AND expires_at IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS coin_pending_events (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    free_coins INTEGER NOT NULL DEFAULT 0,
+    premium_coins INTEGER NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    delivered_at BIGINT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_pending_events_user_undelivered
+    ON coin_pending_events(user_id, id) WHERE delivered_at IS NULL`,
+  `CREATE TABLE IF NOT EXISTS coin_job_runs (
+    job_key TEXT PRIMARY KEY,
+    started_at BIGINT NOT NULL,
+    finished_at BIGINT,
+    result TEXT
+  )`,
   `ALTER TABLE coin_support_transfers ADD COLUMN IF NOT EXISTS source TEXT`,
   `ALTER TABLE coin_support_transfers ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL DEFAULT FALSE`,
   `CREATE INDEX IF NOT EXISTS idx_coin_support_transfers_sender_week
@@ -249,9 +269,33 @@ export var createClient = (connectionString) => {
       return {
         rowCount: typeof result.rowCount === "number" ? result.rowCount : 0
       };
+    },
+    // ユーザごとのロックを取ってから 1 文を実行する（同じユーザの付与・失効・消費を直列化する）。
+    // READ COMMITTED では文ごとにスナップショットが取られるので、ロック取得後の文は
+    // 直前に同じロックを持っていた処理の結果を必ず見る。複数キーはハッシュ順に取るのでデッドロックしない。
+    async lockedQuery(lockKeys, text, params = []) {
+      const keys = [...new Set(lockKeys.map(String))];
+      const [, rows] = await sql.transaction(
+        [
+          sql.query(
+            `SELECT pg_advisory_xact_lock(h)
+               FROM (SELECT DISTINCT hashtextextended(k, 0) AS h FROM unnest($1::text[]) AS k ORDER BY h) AS ordered`,
+            [keys]
+          ),
+          sql.query(text, params)
+        ],
+        { isolationLevel: "ReadCommitted" }
+      );
+      return rows;
+    },
+    async lockedQueryOne(lockKeys, text, params = []) {
+      const rows = await this.lockedQuery(lockKeys, text, params);
+      return rows[0] ?? null;
     }
   };
 };
+// コイン操作用のロックキー
+export var coinLockKey = (userId) => `coins:${userId}`;
 export var ensureSchema = async (cacheKey, db) => {
   let ready = schemaReady.get(cacheKey);
   if (!ready) {

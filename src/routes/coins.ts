@@ -5,7 +5,8 @@ import { approveAmazonExchangeRequest, createAmazonExchangeRequest, listAmazonEx
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { adminAdjustCoins, applyCoinDelta, consumeCoins, ensureInitialCoinGrant, getAdminCoinHistory, getCoinSummary, getConsumedCoinBreakdownBySource } from "../lib/coins"
-import { getDb } from "../lib/db"
+import { runDailyCoinJob } from "../lib/daily-coins"
+import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 export var planTypeSchema = union([
   literal("FREE"),
@@ -73,6 +74,20 @@ export var amazonExchangeApproveSchema = object({
 });
 export var coinsRoutes = new Hono2();
 coinsRoutes.use("*", requireInternalAuth);
+// 日次コインの定期ジョブ（通常は 00:00 JST の cron で実行。失敗時の再実行・確認用）
+coinsRoutes.post("/daily-job/run", async (c) => {
+  const db = await getDb(c.env);
+  const result = await runDailyCoinJob(db, getNow());
+  return json({ error: null, data: result });
+});
+coinsRoutes.get("/daily-job/runs", async (c) => {
+  const db = await getDb(c.env);
+  const rows = await db.query(
+    `SELECT job_key AS "jobKey", started_at AS "startedAt", finished_at AS "finishedAt", result
+       FROM coin_job_runs ORDER BY job_key DESC LIMIT 14`
+  );
+  return json({ error: null, data: rows });
+});
 coinsRoutes.get("/admin-history", async (c) => {
   const db = await getDb(c.env);
   const userId = c.req.query("userId")?.trim() || null;

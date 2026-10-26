@@ -19,3 +19,7 @@ STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
 # STRIPE_WEBHOOK_SECRET
 # INTERNAL_API_TOKEN
 # ADMIN_API_TOKEN
+
+# 日次コインの失効・付与（00:00 JST と、取りこぼし用に 00:30 JST）
+[triggers]
+crons = ["0 15 * * *", "30 15 * * *"]

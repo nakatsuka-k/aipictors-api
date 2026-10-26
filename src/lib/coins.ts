@@ -1,5 +1,6 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
-import { getNow } from "./db"
+import { coinLockKey, getNow } from "./db"
+import { grantDailyCoinsBatch, resolveCoinPlanType, takePendingCoinEvents } from "./daily-coins"
 export var initialFreeCoinsByPlan = {
   FREE: 100,
   LITE: 500,
@@ -76,7 +77,8 @@ export var grantCoins = async (props) => {
     return { freeGranted: 0, premiumGranted: 0 };
   }
   const expiresAt = props.expiresAt === void 0 ? getJstExpirationAt(props.now) : props.expiresAt;
-  await props.db.execute(
+  await props.db.lockedQuery(
+    [coinLockKey(props.userId)],
     `WITH ensured AS (
         INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $4)
@@ -132,7 +134,8 @@ export var reduceCoinTypeBalance = async (props) => {
     return 0;
   }
   const balanceColumn = props.coinType === "FREE" ? "free_balance" : "premium_balance";
-  const result = await props.db.queryOne(
+  const result = await props.db.lockedQueryOne(
+    [coinLockKey(props.userId)],
     `WITH ensured AS (
         INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $4)
@@ -195,7 +198,8 @@ export var reduceCoinTypeBalance = async (props) => {
   return result?.spent ?? 0;
 };
 export var expireAvailableCoins = async (db, userId, now) => {
-  const result = await db.queryOne(
+  const result = await db.lockedQueryOne(
+    [coinLockKey(userId)],
     `WITH expired AS (
         SELECT id, coin_type, remaining
           FROM coin_lots
@@ -497,108 +501,29 @@ export var getAdminCoinHistory = async (props) => {
   };
 };
 export var ensureInitialCoinGrant = async (props) => {
+  // 今日の日次コインを（まだなら）付与する。プランはサーバ側の契約情報と呼び出し元の値の高い方を使い、
+  // 1 日 1 ユーザ 1 回・ユーザごとのロック付きで付与する（同時アクセスやプラン判定の揺れで二重に付かない）。
+  // 有料プランは 00:00 JST の定期ジョブで付与済みのことが多く、そのお知らせはここで 1 回だけ返す。
   const now = getNow();
-  const expiryAt = getJstExpirationAt(now);
-  const dateKey = getJstDateKey(now);
-  const planType = toCoinPlanType(props.planType);
-  const legacyGrantKey = `${dailyGrantKeyPrefix}${dateKey}`;
-  const grantKey = `${legacyGrantKey}:${planType}`;
   const expired = await expireAvailableCoins(props.db, props.userId, now);
-  const targetFreeCoins = initialFreeCoinsByPlan[planType];
-  const targetPremiumCoins = 0;
-  const result = await props.db.queryOne(
-    `WITH current_grant AS (
-        SELECT free_coins, premium_coins
-          FROM coin_grants
-         WHERE user_id = $1
-           AND (
-             grant_key = $2
-             OR (grant_key = $3 AND plan_type = $4)
-           )
-         ORDER BY CASE WHEN grant_key = $2 THEN 0 ELSE 1 END, created_at DESC
-         LIMIT 1
-      ),
-      upsert_grant AS (
-        INSERT INTO coin_grants(user_id, grant_key, plan_type, free_coins, premium_coins, created_at)
-        VALUES ($1, $2, $4, $5, $6, $7)
-        ON CONFLICT (user_id, grant_key)
-        DO UPDATE SET
-          plan_type = EXCLUDED.plan_type,
-          free_coins = GREATEST(coin_grants.free_coins, EXCLUDED.free_coins),
-          premium_coins = GREATEST(coin_grants.premium_coins, EXCLUDED.premium_coins)
-        RETURNING free_coins, premium_coins
-      ),
-      delta AS (
-        SELECT GREATEST(
-                 (SELECT free_coins FROM upsert_grant) - COALESCE((SELECT free_coins FROM current_grant), 0),
-                 0
-               )::INTEGER AS free_delta,
-               GREATEST(
-                 (SELECT premium_coins FROM upsert_grant) - COALESCE((SELECT premium_coins FROM current_grant), 0),
-                 0
-               )::INTEGER AS premium_delta
-      ),
-      ensured AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
-        VALUES ($1, 0, 0, $7)
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      upserted AS (
-        UPDATE coin_balances
-           SET free_balance = coin_balances.free_balance + (SELECT free_delta FROM delta),
-               premium_balance = coin_balances.premium_balance + (SELECT premium_delta FROM delta),
-               updated_at = $7
-         WHERE user_id = $1
-           AND ((SELECT free_delta FROM delta) > 0 OR (SELECT premium_delta FROM delta) > 0)
-        RETURNING user_id
-      ),
-      free_lot AS (
-        INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
-        SELECT $1, 'FREE', free_delta, $8, $7, $7
-          FROM delta
-         WHERE free_delta > 0
-      ),
-      premium_lot AS (
-        INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
-        SELECT $1, 'PREMIUM', premium_delta, $8, $7, $7
-          FROM delta
-         WHERE premium_delta > 0
-      ),
-      free_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, 'FREE', free_delta, 'INITIAL_GRANT', $9, 'generation_page_access', $7, $8
-          FROM delta
-         WHERE free_delta > 0
-      ),
-      premium_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, 'PREMIUM', premium_delta, 'INITIAL_GRANT', $9, 'generation_page_access', $7, $8
-          FROM delta
-         WHERE premium_delta > 0
-      )
-      SELECT free_delta, premium_delta
-        FROM delta`,
-    [
-      props.userId,
-      grantKey,
-      legacyGrantKey,
-      planType,
-      targetFreeCoins,
-      targetPremiumCoins,
-      now,
-      expiryAt,
-      `${planType} daily generation coin grant`
-    ]
-  );
+  const planType = await resolveCoinPlanType(props.db, props.userId, props.planType, now);
+  const [granted] = await grantDailyCoinsBatch({
+    db: props.db,
+    entries: [{ userId: props.userId, planType }],
+    now,
+    source: "generation_page_access",
+    recordPendingEvents: false
+  });
+  const pendingEvents = await takePendingCoinEvents(props.db, props.userId, now);
   const summary = await fetchCoinSummary(props.db, props.userId, {
     includeLedger: props.includeLedger,
     includeExpiringLots: props.includeExpiringLots,
     includeLedgerLimit: props.includeLedgerLimit,
     includeLedgerOffset: props.includeLedgerOffset
   });
-  const grantedFreeCoins = result?.free_delta ?? 0;
-  const grantedPremiumCoins = result?.premium_delta ?? 0;
-  const grantEvents = grantedFreeCoins > 0 || grantedPremiumCoins > 0 ? [createGrantEvent(grantedFreeCoins, grantedPremiumCoins)] : [];
+  const grantedFreeCoins = granted?.free_delta ?? 0;
+  const grantedPremiumCoins = 0;
+  const grantEvents = grantedFreeCoins > 0 ? [createGrantEvent(grantedFreeCoins, grantedPremiumCoins)] : [];
   return {
     granted: grantEvents.length > 0,
     grantedPlanType: planType,
@@ -607,7 +532,7 @@ export var ensureInitialCoinGrant = async (props) => {
     ...summary,
     expiredFreeCoins: expired.expiredFreeCoins,
     expiredPremiumCoins: expired.expiredPremiumCoins,
-    events: [...expired.events, ...grantEvents]
+    events: [...pendingEvents, ...expired.events, ...grantEvents]
   };
 };
 export var applyCoinDelta = async (props) => {
@@ -702,7 +627,8 @@ export var consumeCoins = async (props) => {
     return { ok: false, code: "INVALID_AMOUNT" };
   }
   const expired = await expireAvailableCoins(props.db, props.userId, now);
-  const result = await props.db.queryOne(
+  const result = await props.db.lockedQueryOne(
+    [coinLockKey(props.userId)],
     `WITH ensured AS (
         INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $3)
