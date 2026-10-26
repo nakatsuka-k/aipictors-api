@@ -627,6 +627,16 @@ export var consumeCoins = async (props) => {
     return { ok: false, code: "INVALID_AMOUNT" };
   }
   const expired = await expireAvailableCoins(props.db, props.userId, now);
+  // 日付をまたいで完了した生成など、今日の日次コインを受け取る前に消費が来ることがある。
+  // その場合にプレミアムコインが先に使われないよう、今日の日次コインを先に（まだなら）付与しておく。
+  const planType = await resolveCoinPlanType(props.db, props.userId, null, now);
+  await grantDailyCoinsBatch({
+    db: props.db,
+    entries: [{ userId: props.userId, planType }],
+    now,
+    source: "consume",
+    recordPendingEvents: true
+  });
   const result = await props.db.lockedQueryOne(
     [coinLockKey(props.userId)],
     `WITH ensured AS (

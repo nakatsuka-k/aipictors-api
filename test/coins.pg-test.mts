@@ -172,6 +172,20 @@ await t("無料ユーザは翌日の初回アクセスで 100 枚", async () => 
   assert.equal(r.grantedFreeCoins, 100)
 })
 
+await t("前日の生成が日付をまたいで完了しても、プレミアムコインより先に今日の日次コインが使われる", async () => {
+  await db.execute(
+    `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at) VALUES ('u9', 'PREMIUM', 50, NULL, $1, $1)`,
+    [sec()],
+  )
+  await db.execute(`INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at) VALUES ('u9', 0, 50, $1)`, [sec()])
+  await addSub("u9", "LITE", "paid", 10 * 86400)
+  const r = await coins.consumeCoins({ db, userId: "u9", amount: 10 })
+  assert.equal(r.ok, true)
+  assert.equal(r.freeSpent, 10)
+  assert.equal(r.premiumSpent, 0)
+  assert.equal(await balance("u9"), 540)
+})
+
 console.log(`\n${passed} passed`)
 await pool.end()
 await epg.stop()
