@@ -238,6 +238,42 @@ export var schemaStatements = [
     ON subscriptions(user_id, is_disabled, current_period_end DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_subscriptions_subscription_id
     ON subscriptions(stripe_subscription_id)`,
+  // ユーザーがアップロードしたモデル（LoRA / チェックポイント）。ファイル本体は R2（USER_MODELS）の r2_key。
+  // 同じ sha256 のファイルは 1 回だけ保存し、複数の行が同じ r2_key を参照する（重複排除）。
+  `CREATE TABLE IF NOT EXISTS user_models (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    base_model TEXT NOT NULL DEFAULT 'OTHER',
+    trigger_words TEXT NOT NULL DEFAULT '',
+    recommended_weight REAL NOT NULL DEFAULT 0.8,
+    rating TEXT NOT NULL DEFAULT 'G',
+    tags TEXT NOT NULL DEFAULT '[]',
+    thumbnail_url TEXT,
+    sample_image_urls TEXT NOT NULL DEFAULT '[]',
+    original_filename TEXT,
+    sha256 TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    r2_key TEXT NOT NULL,
+    upload_id TEXT,
+    status TEXT NOT NULL,
+    disabled_reason TEXT,
+    verified_at BIGINT,
+    use_count BIGINT NOT NULL DEFAULT 0,
+    last_used_at BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_models_status_kind_use_count
+    ON user_models(status, kind, use_count DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_user_models_status_created_at
+    ON user_models(status, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_user_models_user_status
+    ON user_models(user_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_user_models_sha256
+    ON user_models(sha256)`,
   `INSERT INTO pricing_settings(key, value, updated_at) VALUES
     ('points.yen_per_point', '1', EXTRACT(EPOCH FROM NOW())::bigint),
     ('points.package.100.amount_jpy', '100', EXTRACT(EPOCH FROM NOW())::bigint),
@@ -299,7 +335,7 @@ export var coinLockKey = (userId) => `coins:${userId}`;
 // schemaStatements を変えたら上げる。適用済みのバージョンなら DDL を流さない。
 // （Worker は isolate が頑繁に入れ替わる。毎回 70 文近い DDL を流すと初回リクエストが 10 秒近くかかり、
 //   ALTER TABLE ... IF NOT EXISTS もテーブルロックを取るので混雑時にコインの読み書きが詰まっていた）
-export var SCHEMA_VERSION = "2026-10-27.1";
+export var SCHEMA_VERSION = "2026-10-27.2";
 export var ensureSchema = async (cacheKey, db) => {
   let ready = schemaReady.get(cacheKey);
   if (!ready) {

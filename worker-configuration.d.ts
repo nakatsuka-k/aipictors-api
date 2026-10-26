@@ -8,6 +8,7 @@ declare global {
     STRIPE_WEBHOOK_PATH?: string
     INTERNAL_API_TOKEN?: string
     ADMIN_API_TOKEN?: string
+    USER_MODELS: R2Bucket
   }
 }
 

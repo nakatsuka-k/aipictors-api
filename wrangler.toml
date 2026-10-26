@@ -20,6 +20,11 @@ STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
 # INTERNAL_API_TOKEN
 # ADMIN_API_TOKEN
 
+# ユーザーがアップロードしたモデル（LoRA / チェックポイント）。非公開バケット、Worker 経由でのみ読み書きする
+[[r2_buckets]]
+binding = "USER_MODELS"
+bucket_name = "aipictors-user-models"
+
 # 日次コインの失効・付与（00:00 JST と、取りこぼし用に 00:30 JST）
 [triggers]
 crons = ["0 15 * * *", "30 15 * * *"]
