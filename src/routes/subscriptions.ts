@@ -217,6 +217,56 @@ subscriptionRoutes.get("/current/:userId", async (c) => {
   }
   return json({ error: null, data: current });
 });
+// 更新の支払いに失敗して未払いのままになっている契約（Stripe 上で past_due / unpaid / incomplete）の請求書を返す。
+// プリペイドカードの残高不足などで更新できなかったユーザが、別のカードで支払い直せるようにする
+// （新しく申し込み直すと、古い契約の自動再試行が後で成功して二重請求になるおそれがある）。
+subscriptionRoutes.get("/unpaid/:userId", async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: null, data: null });
+  }
+  const db = await getDb(c.env);
+  const rows = await db.query(
+    `SELECT type, stripe_subscription_id FROM subscriptions
+      WHERE user_id = $1 AND is_disabled = FALSE AND stripe_subscription_id <> ''
+        AND current_period_end > EXTRACT(EPOCH FROM NOW())::bigint - 60 * 86400
+      ORDER BY current_period_end DESC LIMIT 3`,
+    [c.req.param("userId")]
+  );
+  for (const row of rows) {
+    try {
+      const sub = await getStripe(
+        c.env.STRIPE_SECRET_KEY,
+        `/subscriptions/${row.stripe_subscription_id}?expand[]=latest_invoice`
+      );
+      const status = getString2(sub, "status");
+      if (!["past_due", "unpaid", "incomplete"].includes(status ?? "")) {
+        continue;
+      }
+      const invoice = getRecord(sub, "latest_invoice");
+      if (!invoice || getString2(invoice, "status") !== "open") {
+        continue;
+      }
+      const url = getString2(invoice, "hosted_invoice_url");
+      if (!url) {
+        continue;
+      }
+      return json({
+        error: null,
+        data: {
+          passType: row.type,
+          amount: getNumber(invoice, "amount_due") ?? 0,
+          hostedInvoiceUrl: url,
+          subscriptionStatus: status
+        }
+      });
+    } catch (error) {
+      console.warn("[subscriptions.unpaid] failed to fetch stripe subscription", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return json({ error: null, data: null });
+});
 subscriptionRoutes.get("/by-nanoid/:nanoid", async (c) => {
   const db = await getDb(c.env);
   const nanoid = c.req.param("nanoid");
