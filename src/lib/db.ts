@@ -1,15 +1,46 @@
-import { neon } from '@neondatabase/serverless'
-
-type SqlRow = Record<string, unknown>
-
-export type DbClient = {
-  query<T extends SqlRow = SqlRow>(text: string, params?: unknown[]): Promise<T[]>
-  queryOne<T extends SqlRow = SqlRow>(text: string, params?: unknown[]): Promise<T | null>
-  execute(text: string, params?: unknown[]): Promise<void>
-  executeResult(text: string, params?: unknown[]): Promise<{ rowCount: number }>
-}
-
-const schemaStatements = [
+// @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
+import { neon as cs } from "@neondatabase/serverless"
+export var schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS coin_ledger (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    coin_type TEXT NOT NULL,
+    delta INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT,
+    source TEXT,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_balances (
+    user_id TEXT PRIMARY KEY,
+    free_balance INTEGER NOT NULL DEFAULT 0,
+    premium_balance INTEGER NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_lots (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    coin_type TEXT NOT NULL,
+    remaining INTEGER NOT NULL,
+    locked_amount INTEGER NOT NULL DEFAULT 0,
+    source_kind TEXT NOT NULL DEFAULT 'SYSTEM',
+    source_ref_id TEXT,
+    granted_by_user_id TEXT,
+    expires_at BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_grants (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    grant_key TEXT NOT NULL,
+    plan_type TEXT NOT NULL,
+    free_coins INTEGER NOT NULL DEFAULT 0,
+    premium_coins INTEGER NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    UNIQUE(user_id, grant_key)
+  )`,
   `CREATE TABLE IF NOT EXISTS point_ledger (
     id BIGSERIAL PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -61,8 +92,128 @@ const schemaStatements = [
     debug_info TEXT NOT NULL,
     created_at BIGINT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS coin_support_transfers (
+    id BIGSERIAL PRIMARY KEY,
+    sender_user_id TEXT NOT NULL,
+    recipient_user_id TEXT NOT NULL,
+    coin_type TEXT NOT NULL,
+    coin_amount INTEGER NOT NULL,
+    pt_amount INTEGER NOT NULL,
+    is_anonymous BOOLEAN NOT NULL DEFAULT FALSE,
+    source TEXT,
+    week_start_date DATE NOT NULL,
+    created_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_support_request_claims (
+    source TEXT PRIMARY KEY,
+    sender_user_id TEXT NOT NULL,
+    recipient_user_id TEXT NOT NULL,
+    coin_type TEXT NOT NULL,
+    coin_amount INTEGER NOT NULL,
+    pt_amount INTEGER NOT NULL,
+    week_start_date DATE NOT NULL,
+    created_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_support_weekly_received_points (
+    week_start_date DATE NOT NULL,
+    user_id TEXT NOT NULL,
+    coin_amount INTEGER NOT NULL DEFAULT 0,
+    pt_amount BIGINT NOT NULL DEFAULT 0,
+    transfer_count INTEGER NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (week_start_date, user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_support_weekly_sent_points (
+    week_start_date DATE NOT NULL,
+    user_id TEXT NOT NULL,
+    coin_amount INTEGER NOT NULL DEFAULT 0,
+    pt_amount BIGINT NOT NULL DEFAULT 0,
+    transfer_count INTEGER NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (week_start_date, user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS coin_support_totals (
+    user_id TEXT PRIMARY KEY,
+    sent_pt_total BIGINT NOT NULL DEFAULT 0,
+    received_pt_total BIGINT NOT NULL DEFAULT 0,
+    sent_coin_total BIGINT NOT NULL DEFAULT 0,
+    received_coin_total BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS premium_coin_purchases (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    stripe_event_id TEXT UNIQUE,
+    stripe_session_id TEXT UNIQUE,
+    stripe_payment_intent_id TEXT,
+    stripe_charge_id TEXT,
+    coins INTEGER NOT NULL,
+    bonus_coins INTEGER NOT NULL DEFAULT 0,
+    total_coins INTEGER NOT NULL,
+    price_yen INTEGER NOT NULL,
+    lot_id BIGINT,
+    expires_at BIGINT NOT NULL,
+    refunded_at BIGINT,
+    refund_event_id TEXT UNIQUE,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS amazon_exchange_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    coin_amount INTEGER NOT NULL,
+    amazon_point_yen INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    amazon_gift_code TEXT,
+    locked_lot_allocations_json TEXT NOT NULL DEFAULT '[]',
+    applied_at BIGINT NOT NULL,
+    approved_at BIGINT,
+    approved_by_user_id TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_point_ledger_user_created_at
     ON point_ledger(user_id, created_at DESC)`,
+  `ALTER TABLE coin_ledger ADD COLUMN IF NOT EXISTS expires_at BIGINT`,
+  `ALTER TABLE coin_lots ADD COLUMN IF NOT EXISTS locked_amount INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE coin_lots ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'SYSTEM'`,
+  `ALTER TABLE coin_lots ADD COLUMN IF NOT EXISTS source_ref_id TEXT`,
+  `ALTER TABLE coin_lots ADD COLUMN IF NOT EXISTS granted_by_user_id TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_ledger_user_created_at
+    ON coin_ledger(user_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_lots_user_expires_at
+    ON coin_lots(user_id, expires_at ASC, id ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_lots_user_source_kind
+    ON coin_lots(user_id, coin_type, source_kind, expires_at ASC, id ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_grants_user_created_at
+    ON coin_grants(user_id, created_at DESC)`,
+  `ALTER TABLE coin_support_transfers ADD COLUMN IF NOT EXISTS source TEXT`,
+  `ALTER TABLE coin_support_transfers ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL DEFAULT FALSE`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_transfers_sender_week
+    ON coin_support_transfers(sender_user_id, week_start_date DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_transfers_recipient_week
+    ON coin_support_transfers(recipient_user_id, week_start_date DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_transfers_source
+    ON coin_support_transfers(source, sender_user_id, recipient_user_id, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_request_claims_sender_recipient
+    ON coin_support_request_claims(sender_user_id, recipient_user_id, coin_type, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_weekly_received_week_pt
+    ON coin_support_weekly_received_points(week_start_date, pt_amount DESC, transfer_count DESC, user_id ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_weekly_sent_week_pt
+    ON coin_support_weekly_sent_points(week_start_date, pt_amount DESC, transfer_count DESC, user_id ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_totals_sent_pt
+    ON coin_support_totals(sent_pt_total DESC, user_id ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_coin_support_totals_received_pt
+    ON coin_support_totals(received_pt_total DESC, user_id ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_premium_coin_purchases_user_created_at
+    ON premium_coin_purchases(user_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_premium_coin_purchases_payment_intent
+    ON premium_coin_purchases(stripe_payment_intent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_amazon_exchange_requests_user_status
+    ON amazon_exchange_requests(user_id, status, applied_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_amazon_exchange_requests_status_applied_at
+    ON amazon_exchange_requests(status, applied_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_subscriptions_user_active
     ON subscriptions(user_id, is_disabled, current_period_end DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_subscriptions_subscription_id
@@ -75,63 +226,54 @@ const schemaStatements = [
     ('subscription.plan.LITE.amount_jpy', '480', EXTRACT(EPOCH FROM NOW())::bigint),
     ('subscription.plan.STANDARD.amount_jpy', '1980', EXTRACT(EPOCH FROM NOW())::bigint),
     ('subscription.plan.PREMIUM.amount_jpy', '3980', EXTRACT(EPOCH FROM NOW())::bigint)
-    ON CONFLICT (key) DO NOTHING`,
-] as const
-
-const clients = new Map<string, DbClient>()
-const schemaReady = new Map<string, Promise<void>>()
-
-const createClient = (connectionString: string): DbClient => {
-  const sql = neon(connectionString)
-
+    ON CONFLICT (key) DO NOTHING`
+];
+export var clients = /* @__PURE__ */ new Map();
+export var schemaReady = /* @__PURE__ */ new Map();
+export var createClient = (connectionString) => {
+  const sql = cs(connectionString);
   return {
-    async query<T extends SqlRow = SqlRow>(text: string, params: unknown[] = []) {
-      const rows = await sql.query(text, params)
-      return rows as T[]
+    async query(text, params = []) {
+      const rows = await sql.query(text, params);
+      return rows;
     },
-    async queryOne<T extends SqlRow = SqlRow>(text: string, params: unknown[] = []) {
-      const rows = await sql.query(text, params)
-      return (rows[0] as T | undefined) ?? null
+    async queryOne(text, params = []) {
+      const rows = await sql.query(text, params);
+      return rows[0] ?? null;
     },
-    async execute(text: string, params: unknown[] = []) {
-      await sql.query(text, params)
+    async execute(text, params = []) {
+      await sql.query(text, params);
     },
-    async executeResult(text: string, params: unknown[] = []) {
-      const result = await sql.query(text, params, { fullResults: true })
+    async executeResult(text, params = []) {
+      const result = await sql.query(text, params, { fullResults: true });
       return {
-        rowCount: typeof result.rowCount === 'number' ? result.rowCount : 0,
-      }
-    },
-  }
-}
-
-const ensureSchema = async (cacheKey: string, db: DbClient) => {
-  let ready = schemaReady.get(cacheKey)
+        rowCount: typeof result.rowCount === "number" ? result.rowCount : 0
+      };
+    }
+  };
+};
+export var ensureSchema = async (cacheKey, db) => {
+  let ready = schemaReady.get(cacheKey);
   if (!ready) {
     ready = (async () => {
       for (const statement of schemaStatements) {
-        await db.execute(statement)
+        await db.execute(statement);
       }
-    })()
-    schemaReady.set(cacheKey, ready)
+    })();
+    schemaReady.set(cacheKey, ready);
   }
-
-  await ready
-}
-
-export const getDb = async (env: Env) => {
+  await ready;
+};
+export var getDb = async (env) => {
   if (!env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not configured')
+    throw new Error("DATABASE_URL is not configured");
   }
-
-  let client = clients.get(env.DATABASE_URL)
+  let client = clients.get(env.DATABASE_URL);
   if (!client) {
-    client = createClient(env.DATABASE_URL)
-    clients.set(env.DATABASE_URL, client)
+    client = createClient(env.DATABASE_URL);
+    clients.set(env.DATABASE_URL, client);
   }
-
-  await ensureSchema(env.DATABASE_URL, client)
-  return client
-}
-
-export const getNow = () => Math.floor(Date.now() / 1000)
+  await ensureSchema(env.DATABASE_URL, client);
+  return client;
+};
+export var getNow = () => Math.floor(Date.now() / 1e3);

@@ -1,55 +1,27 @@
-import type { DbClient } from '@/lib/db'
-
-export type SubscriptionUpsertInput = {
-  nanoid: string
-  userId: string
-  type: string
-  status: string
-  isDisabled: boolean
-  createdAt: number
-  currentPeriodStart: number
-  currentPeriodEnd: number
-  trialStart: number | null
-  trialEnd: number | null
-  stripeSubscriptionId: string
-  stripeLatestInvoiceId: string | null
-  stripePaymentIntentId: string | null
-  stripeSubscriptionItemId: string | null
-  stripePriceId: string | null
-  stripeProductId: string | null
-}
-
-export const getCurrentSubscription = async (db: DbClient, userId: string) =>
-  db.queryOne<Record<string, unknown>>(
-    `SELECT * FROM subscriptions
+// @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
+export var getCurrentSubscription = async (db, userId) => db.queryOne(
+  `SELECT * FROM subscriptions
       WHERE user_id = $1 AND is_disabled = FALSE AND current_period_end > EXTRACT(EPOCH FROM NOW())::bigint
       ORDER BY current_period_end DESC LIMIT 1`,
-    [userId],
-  )
-
-export const getActiveOrRecentSubscription = async (db: DbClient, userId: string) =>
-  db.queryOne<Record<string, unknown>>(
-    `SELECT * FROM subscriptions
+  [userId]
+);
+export var getActiveOrRecentSubscription = async (db, userId) => db.queryOne(
+  `SELECT * FROM subscriptions
       WHERE user_id = $1 AND is_disabled = FALSE
       ORDER BY current_period_end DESC LIMIT 1`,
-    [userId],
-  )
-
-export const hasPreviousSubscription = async (db: DbClient, userId: string) => {
-  const row = await db.queryOne<{ id: number }>(
-    'SELECT id FROM subscriptions WHERE user_id = $1 LIMIT 1',
-    [userId],
-  )
-
-  return row !== null
-}
-
-export const getSubscriptionByNanoid = async (db: DbClient, nanoid: string) =>
-  db.queryOne<Record<string, unknown>>('SELECT * FROM subscriptions WHERE nanoid = $1 LIMIT 1', [
-    nanoid,
-  ])
-
-export const upsertSubscription = async (db: DbClient, input: SubscriptionUpsertInput) => {
+  [userId]
+);
+export var hasPreviousSubscription = async (db, userId) => {
+  const row = await db.queryOne(
+    "SELECT id FROM subscriptions WHERE user_id = $1 LIMIT 1",
+    [userId]
+  );
+  return row !== null;
+};
+export var getSubscriptionByNanoid = async (db, nanoid) => db.queryOne("SELECT * FROM subscriptions WHERE nanoid = $1 LIMIT 1", [
+  nanoid
+]);
+export var upsertSubscription = async (db, input) => {
   await db.execute(
     `INSERT INTO subscriptions(
       nanoid, user_id, type, status, is_disabled, created_at, current_period_start,
@@ -88,17 +60,13 @@ export const upsertSubscription = async (db: DbClient, input: SubscriptionUpsert
       input.stripePaymentIntentId,
       input.stripeSubscriptionItemId,
       input.stripePriceId,
-      input.stripeProductId,
-    ],
-  )
-}
-
-export const disableSubscriptionByStripeId = async (
-  db: DbClient,
-  stripeSubscriptionId: string,
-) => {
+      input.stripeProductId
+    ]
+  );
+};
+export var disableSubscriptionByStripeId = async (db, stripeSubscriptionId) => {
   await db.execute(
     `UPDATE subscriptions SET is_disabled = TRUE, status = 'canceled' WHERE stripe_subscription_id = $1`,
-    [stripeSubscriptionId],
-  )
-}
+    [stripeSubscriptionId]
+  );
+};

@@ -1,36 +1,24 @@
-import { getNow, type DbClient } from '@/lib/db'
-
-export const getPointSummary = async (db: DbClient, userId: string) => {
-  const balance = await db.queryOne<{ balance: number }>(
-    'SELECT balance FROM point_balances WHERE user_id = $1',
-    [userId],
-  )
-
-  const ledger = await db.query<Record<string, unknown>>(
+// @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
+import { getNow } from "./db"
+export var getPointSummary = async (db, userId) => {
+  const balance = await db.queryOne(
+    "SELECT balance FROM point_balances WHERE user_id = $1",
+    [userId]
+  );
+  const ledger = await db.query(
     `SELECT id, delta, kind, reason, stripe_event_id AS "stripeEventId", stripe_session_id AS "stripeSessionId", created_at AS "createdAt"
       FROM point_ledger WHERE user_id = $1 ORDER BY id DESC LIMIT 100`,
-    [userId],
-  )
-
+    [userId]
+  );
   return {
     balance: balance?.balance ?? 0,
-    ledger,
-  }
-}
-
-export const applyPointDelta = async (props: {
-  db: DbClient
-  userId: string
-  delta: number
-  kind: string
-  reason?: string | null
-  stripeEventId?: string | null
-  stripeSessionId?: string | null
-}) => {
-  const now = getNow()
-
+    ledger
+  };
+};
+export var applyPointDelta = async (props) => {
+  const now = getNow();
   if (props.delta < 0) {
-    const result = await props.db.queryOne<{ ok: boolean }>(
+    const result = await props.db.queryOne(
       `WITH ensured AS (
           INSERT INTO point_balances(user_id, balance, updated_at)
           VALUES ($1, 0, $2)
@@ -56,17 +44,14 @@ export const applyPointDelta = async (props: {
         props.kind,
         props.reason ?? null,
         props.stripeEventId ?? null,
-        props.stripeSessionId ?? null,
-      ],
-    )
-
+        props.stripeSessionId ?? null
+      ]
+    );
     if (!result?.ok) {
-      return { ok: false as const, code: 'INSUFFICIENT_POINTS' as const }
+      return { ok: false, code: "INSUFFICIENT_POINTS" };
     }
-
-    return { ok: true as const }
+    return { ok: true };
   }
-
   await props.db.execute(
     `WITH upserted AS (
         INSERT INTO point_balances(user_id, balance, updated_at)
@@ -84,9 +69,8 @@ export const applyPointDelta = async (props: {
       props.kind,
       props.reason ?? null,
       props.stripeEventId ?? null,
-      props.stripeSessionId ?? null,
-    ],
-  )
-
-  return { ok: true as const }
-}
+      props.stripeSessionId ?? null
+    ]
+  );
+  return { ok: true };
+};
