@@ -121,6 +121,32 @@ export var setPreviewPlanPriceData = (form, passType, amountJpy) => {
     stripeProductIdByPassType[passType]
   );
 };
+export var toDeliverableEmail = (value) => {
+  const email = typeof value === "string" ? value.trim() : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return null;
+  }
+  // X ログインのユーザに振られるダミーアドレス (aipictors-system create-user-info)
+  if (email.toLowerCase().endsWith("@pseudo.twitter.com")) {
+    return null;
+  }
+  return email;
+};
+export var getStripeCustomerEmail = async (secretKey, customerId, stripeSubscriptionId) => {
+  if (!secretKey) {
+    return null;
+  }
+  let resolvedCustomerId = customerId;
+  if (!resolvedCustomerId && stripeSubscriptionId) {
+    const subscription = await getStripe(secretKey, `/subscriptions/${stripeSubscriptionId}`);
+    resolvedCustomerId = typeof subscription?.customer === "string" ? subscription.customer : null;
+  }
+  if (!resolvedCustomerId) {
+    return null;
+  }
+  const customer = await getStripe(secretKey, `/customers/${resolvedCustomerId}`);
+  return toDeliverableEmail(customer?.email);
+};
 export var postStripeForm2 = async (secretKey, path, params) => {
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     method: "POST",
@@ -230,15 +256,32 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
   }
   const db = await getDb(c.env);
   const current = await getCurrentSubscription(db, parsed.output.userId) ?? await getActiveOrRecentSubscription(db, parsed.output.userId);
-  const sendCancellationEmail = (status) => {
+  const sendCancellationEmail = (status, stripeCustomerId = null) => {
     c.executionCtx.waitUntil(
-      sendSubscriptionCancellationEmail({
-        apiKey: c.env.RESEND_API_KEY,
-        fromEmail: c.env.RESEND_FROM_EMAIL,
-        toEmail: parsed.output.userEmail,
-        status,
-        currentPeriodEnd: getNumber(current ?? {}, "current_period_end")
-      }).catch((error) => {
+      (async () => {
+        if (!c.env.RESEND_API_KEY) {
+          console.error("[subscriptions.cancel-current] RESEND_API_KEY is not configured; cancellation email skipped");
+          return;
+        }
+        // プロフィールのメール (user_profiles.mail) は Google / X ログインのユーザでは空のことが多いので、
+        // 無い場合は Stripe の顧客メール (決済時に入力したもの) に送る
+        const toEmail = toDeliverableEmail(parsed.output.userEmail) ?? await getStripeCustomerEmail(
+          c.env.STRIPE_SECRET_KEY,
+          stripeCustomerId,
+          getString2(current ?? {}, "stripe_subscription_id")
+        );
+        if (!toEmail) {
+          console.warn("[subscriptions.cancel-current] no recipient email; cancellation email skipped", { userId: parsed.output.userId });
+          return;
+        }
+        await sendSubscriptionCancellationEmail({
+          apiKey: c.env.RESEND_API_KEY,
+          fromEmail: c.env.RESEND_FROM_EMAIL,
+          toEmail,
+          status,
+          currentPeriodEnd: getNumber(current ?? {}, "current_period_end")
+        });
+      })().catch((error) => {
         console.error("[subscriptions.cancel-current] failed to send cancellation email", error);
       })
     );
@@ -283,7 +326,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
       `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
       [stripeSubscriptionId]
     );
-    sendCancellationEmail("canceled");
+    sendCancellationEmail("canceled", getString2(stripeResponse, "customer"));
     return json({
       error: null,
       data: {
@@ -301,7 +344,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
     `UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = $1`,
     [stripeSubscriptionId]
   );
-  sendCancellationEmail("cancellation_requested");
+  sendCancellationEmail("cancellation_requested", getString2(stripeResponse, "customer"));
   return json({
     error: null,
     data: {
