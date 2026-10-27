@@ -320,7 +320,7 @@ export var createImageGenerationTask = async (db, input) => {
        cost,
        uuid
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12
+       $1, $2, $3, $4, $5, $6, $7, $8, $13, $9, $10, $11, $12
      )
      RETURNING ${generatedQueueColumns}`,
     [
@@ -335,7 +335,8 @@ export var createImageGenerationTask = async (db, input) => {
       input.platform,
       input.sd,
       input.cost,
-      input.uuid
+      input.uuid,
+      Math.max(1, Math.min(4, Math.trunc(input.count ?? 1)))
     ]
   );
 };

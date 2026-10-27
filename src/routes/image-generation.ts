@@ -17,7 +17,9 @@ export var createTaskSchema = object({
   platform: string(),
   sd: number(),
   cost: number(),
-  uuid: string()
+  uuid: string(),
+  // 1 回の依頼で作る枚数（省略時は 1）
+  count: optional(number())
 });
 export var updateTaskSchema = object({
   id: number(),
