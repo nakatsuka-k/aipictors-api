@@ -296,6 +296,46 @@ subscriptionRoutes.post("/disable", async (c) => {
   await disableSubscriptionByStripeId(db, parsed.output.stripeSubscriptionId);
   return json({ error: null, data: true });
 });
+/**
+ * 同じユーザーの「解約対象以外」の契約も期間終了時に解約する。
+ * 別の決済（別の Stripe 顧客）で二重に申し込んでいると、画面から解約しても 1 件しか止まらず
+ * 残りの契約で翌月も引き落とされていたため。失敗しても解約の本体は成功として返す（ログに残す）。
+ */
+var cancelOtherActiveSubscriptions = async (secretKey, db, userId, exceptStripeSubscriptionId) => {
+  try {
+    const rows = await db.query(
+      `SELECT stripe_subscription_id FROM subscriptions
+        WHERE user_id = $1 AND is_disabled = FALSE
+          AND status NOT IN ('canceled', 'cancellation_requested')
+          AND stripe_subscription_id IS NOT NULL AND stripe_subscription_id <> $2`,
+      [userId, exceptStripeSubscriptionId]
+    );
+    for (const row of rows ?? []) {
+      const id = row.stripe_subscription_id;
+      const form = new URLSearchParams();
+      form.set("cancel_at_period_end", "true");
+      const response = await postStripeForm2(secretKey, `/subscriptions/${id}`, form);
+      const message = response?.error?.message ?? "";
+      if (message) {
+        const isGone = response.error.code === "resource_missing" || message.includes("No such subscription") || message.includes("already been canceled") || message.includes("Updates to a canceled");
+        if (isGone) {
+          await db.execute(`UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`, [id]);
+        } else {
+          console.error("[subscriptions.cancel-current] failed to cancel another subscription", { userId, id, message });
+        }
+        continue;
+      }
+      const status = response?.status === "canceled" ? "canceled" : "cancellation_requested";
+      await db.execute(
+        `UPDATE subscriptions SET status = $2${status === "canceled" ? ", is_disabled = TRUE" : ""} WHERE stripe_subscription_id = $1`,
+        [id, status]
+      );
+      console.log("[subscriptions.cancel-current] also scheduled cancellation of another subscription", { userId, id, status });
+    }
+  } catch (error) {
+    console.error("[subscriptions.cancel-current] cancelOtherActiveSubscriptions failed", error);
+  }
+};
 subscriptionRoutes.post("/cancel-current", async (c) => {
   if (!c.env.STRIPE_SECRET_KEY) {
     return json({ error: "STRIPE_SECRET_KEY is not configured" }, 500);
@@ -358,6 +398,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
         `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
         [stripeSubscriptionId]
       );
+      await cancelOtherActiveSubscriptions(c.env.STRIPE_SECRET_KEY, db, parsed.output.userId, stripeSubscriptionId);
       sendCancellationEmail("canceled");
       return json({
         error: null,
@@ -376,6 +417,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
       `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
       [stripeSubscriptionId]
     );
+    await cancelOtherActiveSubscriptions(c.env.STRIPE_SECRET_KEY, db, parsed.output.userId, stripeSubscriptionId);
     sendCancellationEmail("canceled", getString2(stripeResponse, "customer"));
     return json({
       error: null,
@@ -394,6 +436,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
     `UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = $1`,
     [stripeSubscriptionId]
   );
+  await cancelOtherActiveSubscriptions(c.env.STRIPE_SECRET_KEY, db, parsed.output.userId, stripeSubscriptionId);
   sendCancellationEmail("cancellation_requested", getString2(stripeResponse, "customer"));
   return json({
     error: null,
