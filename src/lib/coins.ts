@@ -77,6 +77,8 @@ export var grantCoins = async (props) => {
     return { freeGranted: 0, premiumGranted: 0 };
   }
   const expiresAt = props.expiresAt === void 0 ? getJstExpirationAt(props.now) : props.expiresAt;
+  // プレミアムコインは日次失効させない（返却・管理付与で当日24:00期限になっていた）。期限を明示したときだけ使う
+  const premiumExpiresAt = props.expiresAt === void 0 ? null : props.expiresAt;
   await props.db.lockedQuery(
     [coinLockKey(props.userId)],
     `WITH ensured AS (
@@ -98,7 +100,7 @@ export var grantCoins = async (props) => {
       ),
       premium_lot AS (
         INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
-        SELECT $1, 'PREMIUM', $3, $8, $4, $4
+        SELECT $1, 'PREMIUM', $3, $9, $4, $4
          WHERE $3 > 0
       ),
       free_ledger AS (
@@ -108,7 +110,7 @@ export var grantCoins = async (props) => {
       ),
       premium_ledger AS (
         INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, 'PREMIUM', $3, $5, $6, $7, $4, CASE WHEN $3 > 0 THEN $8 ELSE NULL END
+        SELECT $1, 'PREMIUM', $3, $5, $6, $7, $4, CASE WHEN $3 > 0 THEN $9 ELSE NULL END
          WHERE $3 <> 0
       )
       SELECT 1`,
@@ -120,7 +122,8 @@ export var grantCoins = async (props) => {
       props.kind,
       props.reason ?? null,
       props.source ?? null,
-      expiresAt
+      expiresAt,
+      premiumExpiresAt
     ]
   );
   return {

@@ -186,6 +186,21 @@ await t("前日の生成が日付をまたいで完了しても、プレミア�
   assert.equal(await balance("u9"), 540)
 })
 
+await t("返却・管理付与のプレミアムコインは当日24:00で失効しない（フリーは当日まで）", async () => {
+  await coins.applyCoinDelta({ db, userId: "u10", freeDelta: 5, premiumDelta: 10, kind: "GRANT", reason: "refund" })
+  await coins.adminAdjustCoins({ db, userId: "u10", premiumDelta: 3, reason: "admin" })
+  const lots = await db.query(`SELECT coin_type, remaining, expires_at FROM coin_lots WHERE user_id = 'u10' ORDER BY coin_type, remaining DESC`)
+  assert.deepEqual(
+    lots.map((l) => [l.coin_type, l.remaining, l.expires_at === null]),
+    [["FREE", 5, false], ["PREMIUM", 10, true], ["PREMIUM", 3, true]],
+  )
+  fakeNow += 86400 * 1000
+  await coins.expireAvailableCoins(db, "u10", sec())
+  const s = await coins.getCoinSummary(db, "u10", {})
+  assert.equal(s.premiumBalance, 13)
+  assert.equal(s.freeBalance, 0)
+})
+
 console.log(`\n${passed} passed`)
 await pool.end()
 await epg.stop()
