@@ -121,6 +121,15 @@ export var createSubscriptionCheckout = async (props) => {
   params.set("subscription_data[metadata][user_id]", props.userId);
   params.set("subscription_data[metadata][pass_type]", props.passType);
   params.set("subscription_data[metadata][subscription_nanoid]", nanoid);
+  // はじめてプランに入る人は初月半額（Stripe のクーポン）。クーポンが使えないときは通常の決済にする
+  if (props.couponId) {
+    const withCoupon = new URLSearchParams(params);
+    withCoupon.set("discounts[0][coupon]", props.couponId);
+    withCoupon.set("metadata[first_month_coupon]", props.couponId);
+    const response = await postStripeForm(props.secretKey, withCoupon);
+    if (response.url) return response;
+    console.error("Checkout with coupon failed, retry without coupon:", response.error?.message);
+  }
   return postStripeForm(props.secretKey, params);
 };
 export var createPremiumCoinCheckout = async (props) => {

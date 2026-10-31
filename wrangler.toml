@@ -13,6 +13,8 @@ workers_dev = false
 
 [vars]
 STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
+# はじめてプランに入る人の初月半額（Stripe のクーポン ID。空にすると止まる）
+FIRST_MONTH_COUPON_ID = "AIPICTORS_FIRST_MONTH_HALF"
 
 # Required secrets / vars (set via `wrangler secret put` or dashboard)
 # STRIPE_SECRET_KEY
