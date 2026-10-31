@@ -4,6 +4,7 @@ import { runDailyCoinJob } from "./lib/daily-coins"
 import { getDb, getNow } from "./lib/db"
 import { json } from "./lib/json"
 import { adminRoutes } from "./routes/admin"
+import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
 import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
 import { imageGenerationRoutes } from "./routes/image-generation"
 import { pointsRoutes } from "./routes/points"
@@ -22,6 +23,8 @@ app.route("/internal/points", pointsRoutes);
 app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);
 app.route("/admin", adminRoutes);
+app.route("/internal/campaigns", campaignRoutes);
+app.route("/email", emailPublicRoutes);
 app.route("/stripe", stripeRoutes);
 app.route("/webhooks", webhookRoutes);
 app.notFound(() => json({ error: "Not found" }, 404));

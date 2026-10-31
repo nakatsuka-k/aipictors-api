@@ -3,6 +3,7 @@ import { Hono as Hono2 } from "hono"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 import { applyPointDelta } from "../lib/points"
+import { grantRenewalBonus } from "../lib/loyalty"
 import { createPremiumCoinPurchase, refundPremiumCoinPurchase } from "../lib/premium-coins"
 import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
@@ -301,6 +302,17 @@ webhookRoutes.post("/stripe", async (c) => {
         stripePriceId,
         stripeProductId
       });
+      // 更新（2か月目以降）のたびに継続ボーナスのプレミアムコインを付ける
+      if (getString3(object2, "billing_reason") === "subscription_cycle") {
+        try {
+          await grantRenewalBonus({ db, userId, passType, invoiceId: getString3(object2, "id") });
+        } catch (error) {
+          console.warn("Failed to grant renewal bonus", {
+            eventId: event.id,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
     } else {
       console.warn("Missing required metadata for subscription upsert:", {
         userId: !!userId,

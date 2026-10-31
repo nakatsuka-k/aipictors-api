@@ -1,5 +1,5 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
-import { hasPreviousSubscription } from "../lib/subscriptions";
+import { getCurrentSubscription } from "../lib/subscriptions";
 import { Hono as Hono2 } from "hono"
 import { literal, number, object, optional, safeParse, string, union } from "valibot"
 import { requireInternalAuth } from "../lib/auth"
@@ -68,8 +68,8 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
   }
   try {
     const db = await getDb(c.env);
-    // 一度もプランに入ったことがない人だけ、初月半額のクーポンを付ける
-    const isFirstSubscription = c.env.FIRST_MONTH_COUPON_ID ? !await hasPreviousSubscription(db, parsed.output.userId) : false;
+    // 今プランに入っていない人（はじめての人・以前入っていた人）は初月半額のクーポンを付ける
+    const isFirstSubscription = c.env.FIRST_MONTH_COUPON_ID ? !await getCurrentSubscription(db, parsed.output.userId) : false;
     const response = await createSubscriptionCheckout({
       secretKey: c.env.STRIPE_SECRET_KEY,
       origin: parsed.output.origin,
