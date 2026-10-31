@@ -267,6 +267,46 @@ subscriptionRoutes.get("/unpaid/:userId", async (c) => {
   }
   return json({ error: null, data: null });
 });
+// 契約中のカードを変更するための Stripe カスタマーポータル（カード変更・請求履歴だけ出す設定）の URL を返す。
+// 解約・プラン変更はポータルではなく /plus から行う（DB の状態と合わせるため）。
+subscriptionRoutes.post("/billing-portal/:userId", async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: "Stripe is not configured", data: null }, 500);
+  }
+  const db = await getDb(c.env);
+  const rows = await db.query(
+    `SELECT stripe_subscription_id FROM subscriptions
+      WHERE user_id = $1 AND stripe_subscription_id <> ''
+      ORDER BY is_disabled ASC, current_period_end DESC LIMIT 3`,
+    [c.req.param("userId")]
+  );
+  let customerId = null;
+  for (const row of rows) {
+    const sub = await getStripe(c.env.STRIPE_SECRET_KEY, `/subscriptions/${row.stripe_subscription_id}`);
+    customerId = typeof sub?.customer === "string" ? sub.customer : null;
+    if (customerId) {
+      break;
+    }
+  }
+  if (!customerId) {
+    return json({ error: "お支払い情報が見つかりませんでした", data: null }, 404);
+  }
+  const form = new URLSearchParams();
+  form.set("customer", customerId);
+  form.set("return_url", "https://www.aipictors.com/plus");
+  form.set("locale", "ja");
+  if (c.env.BILLING_PORTAL_CONFIGURATION_ID) {
+    form.set("configuration", c.env.BILLING_PORTAL_CONFIGURATION_ID);
+  }
+  form.set("flow_data[type]", "payment_method_update");
+  const session = await postStripeForm2(c.env.STRIPE_SECRET_KEY, "/billing_portal/sessions", form);
+  const url = getString2(session ?? {}, "url");
+  if (!url) {
+    console.warn("[subscriptions.billing-portal] failed", session?.error?.message);
+    return json({ error: "お支払い方法の変更画面を開けませんでした", data: null }, 502);
+  }
+  return json({ error: null, data: { url } });
+});
 subscriptionRoutes.get("/by-nanoid/:nanoid", async (c) => {
   const db = await getDb(c.env);
   const nanoid = c.req.param("nanoid");

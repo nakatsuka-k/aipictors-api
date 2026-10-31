@@ -15,6 +15,8 @@ workers_dev = false
 STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
 # 今プランに入っていない人（はじめて・おかえり）の初月半額（Stripe のクーポン ID。空にすると止まる）
 FIRST_MONTH_COUPON_ID = "AIPICTORS_FIRST_MONTH_HALF"
+# カード変更用の Stripe カスタマーポータル設定（カード変更・請求履歴のみ。解約は /plus から）
+BILLING_PORTAL_CONFIGURATION_ID = "bpc_1UWay5GjkGNUZhU2HQNasKRy"
 
 # Required secrets / vars (set via `wrangler secret put` or dashboard)
 # STRIPE_SECRET_KEY

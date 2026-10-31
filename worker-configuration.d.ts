@@ -7,6 +7,7 @@ declare global {
     STRIPE_WEBHOOK_SECRET?: string
     STRIPE_WEBHOOK_PATH?: string
     FIRST_MONTH_COUPON_ID?: string
+    BILLING_PORTAL_CONFIGURATION_ID?: string
     INTERNAL_API_TOKEN?: string
     ADMIN_API_TOKEN?: string
     USER_MODELS: R2Bucket
