@@ -4,10 +4,12 @@ import { Hono as Hono2 } from "hono"
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
 import { getDb, getNow } from "./lib/db"
+import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
 import { json } from "./lib/json"
 import { adminRoutes } from "./routes/admin"
 import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
 import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
+import { discordBotRoutes, discordRoutes } from "./routes/discord"
 import { imageGenerationRoutes } from "./routes/image-generation"
 import { pointsRoutes } from "./routes/points"
 import { stripeRoutes } from "./routes/stripe"
@@ -28,6 +30,8 @@ app.route("/internal/user-models", userModelsRoutes);
 app.route("/admin", adminRoutes);
 app.route("/internal/campaigns", campaignRoutes);
 app.route("/internal/support", supportRoutes);
+app.route("/internal/discord", discordRoutes);
+app.route("/discord-bot", discordBotRoutes);
 app.route("/email", emailPublicRoutes);
 app.route("/stripe", stripeRoutes);
 app.route("/webhooks", webhookRoutes);
@@ -41,6 +45,16 @@ const scheduled = async (controller, env, ctx) => {
       const db = await getDb(env);
       // 5 分ごと: おすすめ設定のないチェックポイントに自動で入れる
       if (controller?.cron === "*/5 * * * *") {
+        // Discord 連携の反映（準備が済むまでは何もしない）
+        if (env.DISCORD_BOT_TOKEN) {
+          const discordResult = await runDiscordSyncBatch(env, db, 25).catch((error) => {
+            console.log(JSON.stringify({ event: "discord.sync.batch_failed", message: String(error?.message ?? error) }));
+            return null;
+          });
+          if (discordResult && discordResult.synced + discordResult.failed > 0) {
+            console.log(JSON.stringify({ event: "discord.sync.done", ...discordResult }));
+          }
+        }
         const result = await fillRecommendedSettings({
           db,
           fetch: (input, init) => fetch(input, init),
@@ -56,6 +70,13 @@ const scheduled = async (controller, env, ctx) => {
       if (controller?.cron === "0 1 * * *") {
         const result = await sendCancelReminders(env, db, getStripeCustomerEmail);
         console.log(JSON.stringify({ event: "retention.cancel_reminders.done", ...result }));
+        if (env.DISCORD_BOT_TOKEN) {
+          const expiryResult = await sendCoinExpiryDms(env, db).catch((error) => {
+            console.log(JSON.stringify({ event: "discord.expiry_dm.batch_failed", message: String(error?.message ?? error) }));
+            return null;
+          });
+          if (expiryResult) console.log(JSON.stringify({ event: "discord.expiry_dm.done", ...expiryResult }));
+        }
         return;
       }
       const result = await runDailyCoinJob(db, getNow());

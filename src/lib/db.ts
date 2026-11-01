@@ -299,6 +299,55 @@ export var schemaStatements = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_user_model_reports_open
     ON user_model_reports(resolved_at, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS discord_links (
+    user_id TEXT PRIMARY KEY,
+    discord_user_id TEXT NOT NULL UNIQUE,
+    discord_username TEXT,
+    discord_global_name TEXT,
+    discord_avatar TEXT,
+    access_token_enc TEXT,
+    refresh_token_enc TEXT,
+    token_expires_at BIGINT,
+    show_nickname BOOLEAN NOT NULL DEFAULT TRUE,
+    highlight_key TEXT,
+    celebrate BOOLEAN NOT NULL DEFAULT FALSE,
+    expiry_dm BOOLEAN NOT NULL DEFAULT FALSE,
+    in_guild BOOLEAN,
+    level INTEGER,
+    unlocked_count INTEGER,
+    is_achievement_visible BOOLEAN,
+    nick_status TEXT,
+    last_global_name TEXT,
+    aipictors_name TEXT,
+    aipictors_login TEXT,
+    celebrated_until BIGINT,
+    sync_requested_at BIGINT,
+    sync_error TEXT,
+    synced_at BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_discord_links_sync
+    ON discord_links(sync_requested_at, synced_at)`,
+  `CREATE TABLE IF NOT EXISTS discord_roles (
+    role_key TEXT PRIMARY KEY,
+    role_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    last_used_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS discord_link_bonuses (
+    user_id TEXT PRIMARY KEY,
+    discord_user_id TEXT NOT NULL UNIQUE,
+    free_coins INTEGER NOT NULL,
+    created_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS discord_expiry_notices (
+    user_id TEXT NOT NULL,
+    date_key TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    PRIMARY KEY (user_id, date_key)
+  )`,
   `INSERT INTO pricing_settings(key, value, updated_at) VALUES
     ('points.yen_per_point', '1', EXTRACT(EPOCH FROM NOW())::bigint),
     ('points.package.100.amount_jpy', '100', EXTRACT(EPOCH FROM NOW())::bigint),
