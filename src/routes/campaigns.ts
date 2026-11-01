@@ -4,6 +4,7 @@ import { getInternalApiToken, requireInternalAuth, toHex } from "../lib/auth"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 import { grantThanksCoins } from "../lib/loyalty"
+import { CANCEL_REASONS, ensureRetentionTables } from "../lib/retention"
 
 /**
  * お知らせメール・感謝コインなどのキャンペーン（運営が内部トークンで呼ぶ）
@@ -181,3 +182,25 @@ var handleUnsubscribe = async (c) => {
 
 emailPublicRoutes.get("/unsubscribe", handleUnsubscribe);
 emailPublicRoutes.post("/unsubscribe", handleUnsubscribe);
+
+/**
+ * 解約の理由の集計（直近 days 日）
+ */
+campaignRoutes.post("/cancel-reasons", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const days = Math.min(365, Math.max(1, Number(body.days) || 90));
+  const db = await getDb(c.env);
+  await ensureRetentionTables(db);
+  const since = getNow() - days * 86400;
+  const summary = await db.query(
+    `SELECT reason, count(*)::INTEGER AS n, round(avg(months), 1) AS avg_months
+       FROM subscription_cancel_reasons WHERE created_at > $1 GROUP BY reason ORDER BY n DESC`,
+    [since]
+  );
+  const notes = await db.query(
+    `SELECT reason, pass_type, months, note, created_at FROM subscription_cancel_reasons
+      WHERE created_at > $1 AND note IS NOT NULL ORDER BY id DESC LIMIT 50`,
+    [since]
+  );
+  return json({ error: null, data: { summary, notes, labels: CANCEL_REASONS } });
+});

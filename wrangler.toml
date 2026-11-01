@@ -36,6 +36,6 @@ name = "aipictors-user-model-import"
 binding = "USER_MODEL_IMPORTS"
 class_name = "UserModelImportWorkflow"
 
-# 日次コインの失効・付与（00:00 JST と、取りこぼし用に 00:30 JST）
+# 日次コインの失効・付与（00:00 JST と、取りこぼし用に 00:30 JST）、解約予約中の人へのお知らせ（10:00 JST）
 [triggers]
-crons = ["0 15 * * *", "30 15 * * *"]
+crons = ["0 15 * * *", "30 15 * * *", "0 1 * * *"]

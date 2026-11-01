@@ -5,6 +5,7 @@ import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
 import { getPricingSettings } from "../lib/pricing"
+import { saveCancelReason } from "../lib/retention"
 import { sendSubscriptionCancellationEmail } from "../lib/subscription-cancellation-email"
 import { disableSubscriptionByStripeId, getActiveOrRecentSubscription, getCurrentSubscription, getSubscriptionByNanoid, hasPreviousSubscription, upsertSubscription } from "../lib/subscriptions"
 export var upsertSchema = object({
@@ -30,7 +31,10 @@ export var disableSchema = object({
 });
 export var cancelCurrentSchema = object({
   userId: string(),
-  userEmail: optional(nullable(string()))
+  userEmail: optional(nullable(string())),
+  // 解約の理由（lib/retention.ts の CANCEL_REASONS）。任意
+  reason: optional(nullable(string())),
+  reasonNote: optional(nullable(string()))
 });
 export var changePlanSchema = object({
   userId: string(),
@@ -418,6 +422,14 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
   };
   if (!current) {
     return json({ error: "No active subscription found" }, 404);
+  }
+  if (parsed.output.reason) {
+    await saveCancelReason(db, {
+      userId: parsed.output.userId,
+      current,
+      reason: parsed.output.reason,
+      note: parsed.output.reasonNote
+    }).catch((error) => console.error("[subscriptions.cancel-current] failed to save reason", error));
   }
   const stripeSubscriptionId = getString2(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {

@@ -1,6 +1,7 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { Hono as Hono2 } from "hono"
 import { runDailyCoinJob } from "./lib/daily-coins"
+import { sendCancelReminders } from "./lib/retention"
 import { getDb, getNow } from "./lib/db"
 import { json } from "./lib/json"
 import { adminRoutes } from "./routes/admin"
@@ -9,7 +10,7 @@ import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
 import { imageGenerationRoutes } from "./routes/image-generation"
 import { pointsRoutes } from "./routes/points"
 import { stripeRoutes } from "./routes/stripe"
-import { subscriptionRoutes } from "./routes/subscriptions"
+import { getStripeCustomerEmail, subscriptionRoutes } from "./routes/subscriptions"
 import { supportRoutes } from "./routes/support"
 import { userModelsRoutes } from "./routes/user-models"
 import { webhookRoutes } from "./routes/webhooks"
@@ -33,10 +34,16 @@ app.notFound(() => json({ error: "Not found" }, 404));
 app.onError((error) => json({ error: error.message }, 500));
 
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
-const scheduled = async (_controller, env, ctx) => {
+const scheduled = async (controller, env, ctx) => {
   ctx.waitUntil(
     (async () => {
       const db = await getDb(env);
+      // 10:00 JST: 解約予約中であと 2〜3 日で終わる人へのお知らせ
+      if (controller?.cron === "0 1 * * *") {
+        const result = await sendCancelReminders(env, db, getStripeCustomerEmail);
+        console.log(JSON.stringify({ event: "retention.cancel_reminders.done", ...result }));
+        return;
+      }
       const result = await runDailyCoinJob(db, getNow());
       console.log(JSON.stringify({ event: "coins.daily_job.done", ...result }));
     })()
