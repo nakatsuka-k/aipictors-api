@@ -23,13 +23,7 @@ export var THANKS_COINS = {
 export var grantRenewalBonus = async (props) => {
   const amount = RENEWAL_BONUS_COINS[props.passType] ?? 0;
   if (!props.userId || amount <= 0 || !props.invoiceId) return null;
-  // 最近使っていない会員には何もしない（コインの付与で使っていないことに気づいて解約するきっかけにならないように）
-  const recent = await props.db.queryOne(
-    `SELECT 1 FROM generated_queues
-      WHERE user_id = $1::bigint AND request_time > NOW() - INTERVAL '30 days' LIMIT 1`,
-    [props.userId]
-  );
-  if (!recent) return null;
+  // 生成しているかに関係なく、更新した会員全員に付ける
   const source = `renewal_bonus:${props.invoiceId}`;
   const existing = await props.db.queryOne(
     "SELECT id FROM coin_ledger WHERE user_id = $1 AND source = $2 LIMIT 1",

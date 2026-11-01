@@ -362,9 +362,18 @@ export var fetchCoinSummary = async (db, userId, options) => {
       WHERE user_id = $1`,
     [userId]
   );
+  // 受け取った感謝コインのキャンペーン（サイトのお礼の表示は、実際に受け取った人にだけ出す）
+  const thanksRows = await db.query(
+    `SELECT DISTINCT substring(source FROM 8) AS campaign
+       FROM coin_ledger
+      WHERE user_id = $1
+        AND source LIKE 'thanks:%'`,
+    [userId]
+  );
   const freeBalance = balance?.free_balance ?? 0;
   const premiumBalance = balance?.premium_balance ?? 0;
   return {
+    thanksCampaigns: thanksRows.map((row) => row.campaign),
     freeBalance,
     premiumBalance,
     totalBalance: freeBalance + premiumBalance,
