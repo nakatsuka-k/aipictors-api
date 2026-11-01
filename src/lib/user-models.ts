@@ -129,6 +129,7 @@ type UserModelRow = {
   import_parts_done?: number | string | null
   import_parts_total?: number | string | null
   import_error?: string | null
+  recommended_settings?: string | null
 }
 
 const parseJsonArray = (value: string | null | undefined): string[] => {
@@ -172,6 +173,67 @@ const parseSourceLicense = (value: string | null | undefined): UserModelSourceLi
   }
 }
 
+// ---- おすすめの生成設定 ----
+// 生成サーバーが扱える値だけ受け付ける（aipictors-system lib/generation-sampler.ts と同じ一覧）
+export const USER_MODEL_RECOMMENDED_SAMPLERS = [
+  "Euler a",
+  "Euler",
+  "Heun",
+  "LMS",
+  "DPM2",
+  "DPM2 a",
+  "DPM++ 2S a",
+  "DPM++ SDE",
+  "DPM++ 2M",
+  "DPM++ 2M SDE",
+  "ER SDE",
+  "DDIM",
+] as const
+export const USER_MODEL_RECOMMENDED_SCHEDULERS = ["Karras", "Exponential", "SGM Uniform", "Simple", "Normal", "Beta"] as const
+
+export type UserModelRecommendedSettings = {
+  sampler: string | null
+  scheduler: string | null
+  cfgScale: number | null
+  steps: number | null
+  clipSkip: number | null
+}
+
+const intInRange = (value: unknown, min: number, max: number, field: string) => {
+  if (value === undefined || value === null) return null
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw bad("INVALID_INPUT", `${field} は ${min}〜${max} の整数です`)
+  }
+  return value
+}
+
+// null で消す。undefined は変更なし。全部空なら null（未設定）
+export const parseRecommendedSettings = (value: unknown): UserModelRecommendedSettings | null | undefined => {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== "object" || Array.isArray(value)) throw bad("INVALID_INPUT", "recommendedSettings はオブジェクトです")
+  const v = value as Record<string, unknown>
+  const pick = <T extends string>(x: unknown, values: readonly T[], field: string) =>
+    x === undefined || x === null || x === "" ? null : (oneOf(x, values, field) ?? null)
+  const settings: UserModelRecommendedSettings = {
+    sampler: pick(v.sampler, USER_MODEL_RECOMMENDED_SAMPLERS, "recommendedSettings.sampler"),
+    scheduler: pick(v.scheduler, USER_MODEL_RECOMMENDED_SCHEDULERS, "recommendedSettings.scheduler"),
+    cfgScale: intInRange(v.cfgScale, 1, 30, "recommendedSettings.cfgScale"),
+    steps: intInRange(v.steps, 1, 50, "recommendedSettings.steps"),
+    clipSkip: intInRange(v.clipSkip, 1, 12, "recommendedSettings.clipSkip"),
+  }
+  return Object.values(settings).every((x) => x === null) ? null : settings
+}
+
+const readRecommendedSettings = (value: string | null | undefined): UserModelRecommendedSettings | null => {
+  if (!value) return null
+  try {
+    return parseRecommendedSettings(JSON.parse(value)) ?? null
+  } catch {
+    return null
+  }
+}
+
 export const toUserModel = (row: UserModelRow) => {
   const recommendedWeight = Number(row.recommended_weight)
   return {
@@ -204,6 +266,8 @@ export const toUserModel = (row: UserModelRow) => {
     sourceLicenseAllowsOtherServices: sourceLicenseAllowsOtherServices(parseSourceLicense(row.source_license)),
     sourceBaseModel: row.source_base_model ?? null,
     importStatus: row.import_status ?? null,
+    // 登録者が勧める生成設定（未設定は null）
+    recommendedSettings: readRecommendedSettings(row.recommended_settings),
     // 生成リクエストでの書き方（CONTRACT.md）
     fileName: `user_${row.id}.safetensors`,
     generationModel: row.kind === "CHECKPOINT" ? `user/${row.id}.safetensors` : null,
@@ -286,6 +350,7 @@ export const parseEditable = (input: Record<string, unknown>) => {
     tags: parseTags(input.tags),
     thumbnailUrl: parseThumbnail(input.thumbnailUrl),
     sampleImageUrls: parseUrls(input.sampleImageUrls),
+    recommendedSettings: parseRecommendedSettings(input.recommendedSettings),
   }
 }
 
@@ -602,13 +667,14 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
         INSERT INTO user_models(
           id, user_id, kind, name, description, base_model, trigger_words, recommended_weight, rating, tags,
           thumbnail_url, sample_image_urls, original_filename, sha256, size_bytes, r2_key, status, created_at, updated_at,
-          source_url, source_creator, source_license, source_base_model, import_status
+          source_url, source_creator, source_license, source_base_model, import_status, recommended_settings
         )
         SELECT $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3,
                CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END, $16,
                CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17,
                $20, $21, $22, $23,
-               CASE WHEN $20::text IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END
+               CASE WHEN $20::text IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
+               $24
          WHERE (SELECT n FROM used) < $18
            AND NOT EXISTS (SELECT 1 FROM mine)
            AND (EXISTS (SELECT 1 FROM existing) OR NOT EXISTS (SELECT 1 FROM uploading))
@@ -645,6 +711,7 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       input.source?.creator ?? null,
       input.source?.license ? JSON.stringify(input.source.license) : null,
       input.source?.baseModel ?? null,
+      fields.recommendedSettings ? JSON.stringify(fields.recommendedSettings) : null,
     ],
   )
   if (!result?.inserted_status) {
@@ -847,7 +914,8 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
         tags = COALESCE($8, tags),
         thumbnail_url = CASE WHEN $9 THEN $10 ELSE thumbnail_url END,
         sample_image_urls = COALESCE($11, sample_image_urls),
-        updated_at = $12
+        updated_at = $12,
+        recommended_settings = CASE WHEN $13 THEN $14 ELSE recommended_settings END
       WHERE id = $1 AND status <> 'DELETED'
       RETURNING *`,
     [
@@ -863,6 +931,8 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
       e.thumbnailUrl ?? null,
       e.sampleImageUrls ? JSON.stringify(e.sampleImageUrls) : null,
       now,
+      e.recommendedSettings !== undefined,
+      e.recommendedSettings ? JSON.stringify(e.recommendedSettings) : null,
     ],
   )
   if (!updated) throw new UserModelError(404, "NOT_FOUND", "モデルが見つかりません")

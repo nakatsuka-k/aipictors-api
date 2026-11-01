@@ -283,6 +283,8 @@ export var schemaStatements = [
   `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_parts_done INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_parts_total INTEGER`,
   `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS import_error TEXT`,
+  // 登録者が勧める生成設定（サンプラー・Schedule type・CFG・Steps・Clip skip）。JSON。未設定は NULL
+  `ALTER TABLE user_models ADD COLUMN IF NOT EXISTS recommended_settings TEXT`,
   // ユーザーモデルへの通報。同じユーザーからの同じモデルへの通報は 1 件にまとめる
   `CREATE TABLE IF NOT EXISTS user_model_reports (
     model_id TEXT NOT NULL,

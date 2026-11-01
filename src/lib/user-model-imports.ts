@@ -449,6 +449,8 @@ export const startUserModelImport = async (
       baseModel: plan.baseModel,
       triggerWords: plan.triggerWords,
       recommendedWeight: undefined,
+      // Civitai にはおすすめ設定の決まった項目がないので、登録後に編集で入れてもらう
+      recommendedSettings: undefined,
       rating: rating ?? plan.rating,
       tags: plan.tags,
       thumbnailUrl: plan.thumbnailUrl,

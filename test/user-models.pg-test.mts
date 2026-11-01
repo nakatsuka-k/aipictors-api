@@ -422,6 +422,26 @@ await t("PATCH は作者のみ。サムネイルを消せる", async () => {
   assert.equal((await callJson("PATCH", `/${bigId}`, { userId: "a1", thumbnailUrl: "http://x" })).status, 400)
 })
 
+await t("おすすめの生成設定: 決まった値だけ保存・消せる・他の項目の編集では変わらない", async () => {
+  assert.equal((await callJson("GET", `/${bigId}`)).body.data.recommendedSettings ?? null, null)
+  const set = await callJson("PATCH", `/${bigId}`, {
+    userId: "a1", recommendedSettings: { sampler: "ER SDE", scheduler: "Simple", cfgScale: 1, steps: 8, clipSkip: 2 },
+  })
+  assert.equal(set.status, 200)
+  assert.deepEqual(set.body.data.recommendedSettings, { sampler: "ER SDE", scheduler: "Simple", cfgScale: 1, steps: 8, clipSkip: 2 })
+  const kept = await callJson("PATCH", `/${bigId}`, { userId: "a1", name: "名前だけ変更" })
+  assert.equal(kept.body.data.recommendedSettings.sampler, "ER SDE")
+  const partial = await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: { cfgScale: 5, sampler: "" } })
+  assert.deepEqual(partial.body.data.recommendedSettings, { sampler: null, scheduler: null, cfgScale: 5, steps: null, clipSkip: null })
+  for (const bad of [{ sampler: "DPM adaptive" }, { scheduler: "hoge" }, { cfgScale: 0 }, { cfgScale: 1.5 }, { steps: 99 }, [1]]) {
+    assert.equal((await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: bad })).status, 400, JSON.stringify(bad))
+  }
+  const cleared = await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: null })
+  assert.equal(cleared.body.data.recommendedSettings, null)
+  const empty = await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: {} })
+  assert.equal(empty.body.data.recommendedSettings, null)
+})
+
 await t("GPU 側の sha256 が不一致なら同じファイルの READY をすべて DISABLED に", async () => {
   const file = makeSafetensors(2500, undefined, 7)
   await addSub("a9", "STANDARD")
