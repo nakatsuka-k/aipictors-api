@@ -798,7 +798,18 @@ export var getSupportAvailableWeekStartDates = async (db, limit = 8) => {
 };
 export var getSupportSummary = async (props) => {
   const weekStartDate = props.weekStartDate ?? getSupportWeekStartDate();
-  const totals = await props.db.queryOne(
+  // Neon は 1 文ごとに HTTP の往復になるので、読むだけの文は同時に投げる
+  const [
+    totals,
+    weeklySent,
+    weeklyReceived,
+    sentRank,
+    receivedRank,
+    availableWeekStartDates,
+    receivedBreakdownRows,
+    recentReceivedTransfers,
+  ] = await Promise.all([
+    props.db.queryOne(
     `SELECT sent_pt_total,
             received_pt_total,
             sent_coin_total,
@@ -806,22 +817,22 @@ export var getSupportSummary = async (props) => {
        FROM coin_support_totals
       WHERE user_id = $1`,
     [props.userId]
-  );
-  const weeklySent = await props.db.queryOne(
+    ),
+    props.db.queryOne(
     `SELECT pt_amount, coin_amount, transfer_count
        FROM coin_support_weekly_sent_points
       WHERE week_start_date = $1
         AND user_id = $2`,
     [weekStartDate, props.userId]
-  );
-  const weeklyReceived = await props.db.queryOne(
+    ),
+    props.db.queryOne(
     `SELECT pt_amount, coin_amount, transfer_count
        FROM coin_support_weekly_received_points
       WHERE week_start_date = $1
         AND user_id = $2`,
     [weekStartDate, props.userId]
-  );
-  const sentRank = await props.db.queryOne(
+    ),
+    props.db.queryOne(
     `WITH ranked AS (
        SELECT user_id,
               ROW_NUMBER() OVER (
@@ -835,8 +846,8 @@ export var getSupportSummary = async (props) => {
        FROM ranked
       WHERE user_id = $2`,
     [weekStartDate, props.userId, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
-  );
-  const receivedRank = await props.db.queryOne(
+    ),
+    props.db.queryOne(
     `WITH ranked AS (
        SELECT user_id,
               ROW_NUMBER() OVER (
@@ -849,31 +860,9 @@ export var getSupportSummary = async (props) => {
        FROM ranked
       WHERE user_id = $2`,
     [weekStartDate, props.userId]
-  );
-  // 累計の順位（自分より多い人の数 + 1）。まだ貢献・受取がなければ順位なし
-  const sentPtTotal = Number(totals?.sent_pt_total ?? 0);
-  const receivedPtTotal = Number(totals?.received_pt_total ?? 0);
-  const cumulativeSentRank =
-    sentPtTotal > 0 && props.userId !== CONTRIBUTION_RANKING_EXCLUDED_USER_ID
-      ? await props.db.queryOne(
-          `SELECT COUNT(*)::INTEGER + 1 AS rank
-             FROM coin_support_totals
-            WHERE sent_pt_total > $1
-              AND user_id <> $2`,
-          [sentPtTotal, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
-        )
-      : null;
-  const cumulativeReceivedRank =
-    receivedPtTotal > 0
-      ? await props.db.queryOne(
-          `SELECT COUNT(*)::INTEGER + 1 AS rank
-             FROM coin_support_totals
-            WHERE received_pt_total > $1`,
-          [receivedPtTotal]
-        )
-      : null;
-  const availableWeekStartDates = await getSupportAvailableWeekStartDates(props.db);
-  const receivedBreakdownRows = await props.db.query(
+    ),
+    getSupportAvailableWeekStartDates(props.db),
+    props.db.query(
     `SELECT coin_type,
             COALESCE(SUM(coin_amount), 0)::INTEGER AS coin_amount,
             COALESCE(SUM(pt_amount), 0)::INTEGER AS pt_amount
@@ -881,8 +870,8 @@ export var getSupportSummary = async (props) => {
       WHERE recipient_user_id = $1
       GROUP BY coin_type`,
     [props.userId]
-  );
-  const recentReceivedTransfers = await props.db.query(
+    ),
+    props.db.query(
     `SELECT CASE
               WHEN is_anonymous THEN '${ANONYMOUS_SUPPORT_USER_ID}'
               ELSE sender_user_id
@@ -897,7 +886,30 @@ export var getSupportSummary = async (props) => {
       ORDER BY created_at DESC, id DESC
       LIMIT 20`,
     [props.userId]
-  );
+    )
+  ]);
+  // 累計の順位（自分より多い人の数 + 1）。まだ貢献・受取がなければ順位なし
+  const sentPtTotal = Number(totals?.sent_pt_total ?? 0);
+  const receivedPtTotal = Number(totals?.received_pt_total ?? 0);
+  const [cumulativeSentRank, cumulativeReceivedRank] = await Promise.all([
+    sentPtTotal > 0 && props.userId !== CONTRIBUTION_RANKING_EXCLUDED_USER_ID
+      ? props.db.queryOne(
+          `SELECT COUNT(*)::INTEGER + 1 AS rank
+             FROM coin_support_totals
+            WHERE sent_pt_total > $1
+              AND user_id <> $2`,
+          [sentPtTotal, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
+        )
+      : null,
+    receivedPtTotal > 0
+      ? props.db.queryOne(
+          `SELECT COUNT(*)::INTEGER + 1 AS rank
+             FROM coin_support_totals
+            WHERE received_pt_total > $1`,
+          [receivedPtTotal]
+        )
+      : null
+  ]);
   const receivedFree = receivedBreakdownRows.find(
     (row) => row.coin_type === "FREE"
   );

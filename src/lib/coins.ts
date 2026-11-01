@@ -298,7 +298,6 @@ export var syncCoinBalancesWithLots = async (db, userId, now) => {
   );
 };
 export var fetchCoinSummary = async (db, userId, options) => {
-  const balance = await syncCoinBalancesWithLots(db, userId, getNow());
   const ledgerLimit = Math.min(
     200,
     Math.max(1, Math.floor(options?.includeLedgerLimit ?? 100))
@@ -307,7 +306,10 @@ export var fetchCoinSummary = async (db, userId, options) => {
     0,
     Math.floor(options?.includeLedgerOffset ?? 0)
   );
-  const ledger = options?.includeLedger ? await db.query(
+  // Neon は 1 文ごとに HTTP の往復になる。互いの結果に依存しないので同時に投げる（順に待つと 5 往復分かかる）
+  const [balance, ledger, expiringLots, exchangeableBalance, thanksRows] = await Promise.all([
+    syncCoinBalancesWithLots(db, userId, getNow()),
+    options?.includeLedger ? db.query(
     `SELECT id,
                 coin_type AS "coinType",
                 delta,
@@ -322,8 +324,8 @@ export var fetchCoinSummary = async (db, userId, options) => {
           LIMIT $2
          OFFSET $3`,
     [userId, ledgerLimit, ledgerOffset]
-  ) : [];
-  const expiringLots = options?.includeExpiringLots ? await db.query(
+  ) : [],
+    options?.includeExpiringLots ? db.query(
     `SELECT coin_type AS "coinType",
                 SUM(remaining)::INTEGER AS amount,
                 expires_at AS "expiresAt"
@@ -336,8 +338,8 @@ export var fetchCoinSummary = async (db, userId, options) => {
           ORDER BY expires_at ASC, coin_type ASC
           LIMIT 50`,
     [userId, getNow()]
-  ) : [];
-  const exchangeableBalance = await db.queryOne(
+  ) : [],
+    db.queryOne(
     `SELECT COALESCE(
               SUM(
                 CASE
@@ -361,15 +363,16 @@ export var fetchCoinSummary = async (db, userId, options) => {
        FROM coin_lots
       WHERE user_id = $1`,
     [userId]
-  );
-  // 受け取った感謝コインのキャンペーン（サイトのお礼の表示は、実際に受け取った人にだけ出す）
-  const thanksRows = await db.query(
+  ),
+    // 受け取った感謝コインのキャンペーン（サイトのお礼の表示は、実際に受け取った人にだけ出す）
+    db.query(
     `SELECT DISTINCT substring(source FROM 8) AS campaign
        FROM coin_ledger
       WHERE user_id = $1
         AND source LIKE 'thanks:%'`,
     [userId]
-  );
+  )
+  ]);
   const freeBalance = balance?.free_balance ?? 0;
   const premiumBalance = balance?.premium_balance ?? 0;
   return {
@@ -517,8 +520,10 @@ export var ensureInitialCoinGrant = async (props) => {
   // 1 日 1 ユーザ 1 回・ユーザごとのロック付きで付与する（同時アクセスやプラン判定の揺れで二重に付かない）。
   // 有料プランは 00:00 JST の定期ジョブで付与済みのことが多く、そのお知らせはここで 1 回だけ返す。
   const now = getNow();
-  const expired = await expireAvailableCoins(props.db, props.userId, now);
-  const planType = await resolveCoinPlanType(props.db, props.userId, props.planType, now);
+  const [expired, planType] = await Promise.all([
+    expireAvailableCoins(props.db, props.userId, now),
+    resolveCoinPlanType(props.db, props.userId, props.planType, now)
+  ]);
   const [granted] = await grantDailyCoinsBatch({
     db: props.db,
     entries: [{ userId: props.userId, planType }],
@@ -526,13 +531,15 @@ export var ensureInitialCoinGrant = async (props) => {
     source: "generation_page_access",
     recordPendingEvents: false
   });
-  const pendingEvents = await takePendingCoinEvents(props.db, props.userId, now);
-  const summary = await fetchCoinSummary(props.db, props.userId, {
-    includeLedger: props.includeLedger,
-    includeExpiringLots: props.includeExpiringLots,
-    includeLedgerLimit: props.includeLedgerLimit,
-    includeLedgerOffset: props.includeLedgerOffset
-  });
+  const [pendingEvents, summary] = await Promise.all([
+    takePendingCoinEvents(props.db, props.userId, now),
+    fetchCoinSummary(props.db, props.userId, {
+      includeLedger: props.includeLedger,
+      includeExpiringLots: props.includeExpiringLots,
+      includeLedgerLimit: props.includeLedgerLimit,
+      includeLedgerOffset: props.includeLedgerOffset
+    })
+  ]);
   const grantedFreeCoins = granted?.free_delta ?? 0;
   const grantedPremiumCoins = 0;
   const grantEvents = grantedFreeCoins > 0 ? [createGrantEvent(grantedFreeCoins, grantedPremiumCoins)] : [];
