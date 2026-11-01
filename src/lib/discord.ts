@@ -5,7 +5,7 @@ import { getNow } from "./db"
 /**
  * Discord 連携
  *
- * - 連携は OAuth2（identify / role_connections.write）。トークンは暗号化して持つ
+ * - 連携は OAuth2（identify）。本人確認にだけ使い、トークンは持たない（role_connections.write を許可したときだけ暗号化して持つ）
  * - 名前の横の表示は、サーバーのロールアイコンとニックネームの「✦Lv.42」で出す（Discord に個人ごとのバナーの仕組みはない）
  * - 同期は 5 分ごとの cron と、連携・設定変更・実績の達成のときに行う
  */
@@ -16,7 +16,8 @@ export const DISCORD_GUILD_ID = "1069968879272595476"
 export const DISCORD_APPLICATION_ID = "1566508809940115497"
 /** ロールやニックネームを変えるボット（ぴくたーちゃん）。サーバーには前からこちらがいる */
 export const DISCORD_BOT_USER_ID = "1306188881418391573"
-export const DISCORD_OAUTH_SCOPES = "identify role_connections.write"
+// role_connections.write は公開クライアントでは invalid_scope になる。プロフィールへの表示には client secret が要る
+export const DISCORD_OAUTH_SCOPES = "identify"
 
 /** 連携ボーナス（1 人 1 回、1 つの Discord アカウントにつき 1 回） */
 export const LINK_BONUS_FREE_COINS = 100
@@ -603,6 +604,19 @@ const grantLinkBonus = async (db, userId, discordUserId) => {
   return LINK_BONUS_FREE_COINS
 }
 
+const revokeToken = async (env, token) => {
+  const fetcher = env.__fetch ?? fetch
+  await fetcher(`${DISCORD_API}/oauth2/token/revoke`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: DISCORD_APPLICATION_ID,
+      token,
+      token_type_hint: "refresh_token",
+    }),
+  }).catch(() => undefined)
+}
+
 export const linkDiscordAccount = async (env, db, props) => {
   const tokens = await postOAuthToken(env, {
     grant_type: "authorization_code",
@@ -630,6 +644,12 @@ export const linkDiscordAccount = async (env, db, props) => {
     return { ok: false, code: "USER_ALREADY_LINKED" }
   }
 
+  // 本人確認にしか使わないトークンは持たずに取り消す
+  const keepsTokens = String(tokens.scope ?? "").split(" ").includes("role_connections.write")
+  if (!keepsTokens) {
+    await revokeToken(env, tokens.refresh_token)
+  }
+
   await db.execute(
     `INSERT INTO discord_links(
        user_id, discord_user_id, discord_username, discord_global_name, discord_avatar,
@@ -651,9 +671,9 @@ export const linkDiscordAccount = async (env, db, props) => {
       me.username,
       me.global_name ?? null,
       me.avatar ?? null,
-      await encryptToken(env, tokens.access_token),
-      await encryptToken(env, tokens.refresh_token),
-      now + Number(tokens.expires_in),
+      keepsTokens ? await encryptToken(env, tokens.access_token) : null,
+      keepsTokens ? await encryptToken(env, tokens.refresh_token) : null,
+      keepsTokens ? now + Number(tokens.expires_in) : null,
       now,
     ],
   )
@@ -699,16 +719,7 @@ export const unlinkDiscordAccount = async (env, db, userId) => {
   }
 
   if (link.refresh_token_enc) {
-    const fetcher = env.__fetch ?? fetch
-    await fetcher(`${DISCORD_API}/oauth2/token/revoke`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: DISCORD_APPLICATION_ID,
-        token: await decryptToken(env, link.refresh_token_enc),
-        token_type_hint: "refresh_token",
-      }),
-    }).catch(() => undefined)
+    await revokeToken(env, await decryptToken(env, link.refresh_token_enc))
   }
 
   await db.execute("DELETE FROM discord_links WHERE user_id = $1", [userId])

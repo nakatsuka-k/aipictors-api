@@ -43,6 +43,7 @@ const world: any = {
   revoked: 0,
   tokenCalls: [] as string[],
   tokenInvalid: false,
+  tokenScope: "identify role_connections.write",
 }
 const ok = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 const fakeFetch = async (input: string, init: any = {}) => {
@@ -59,7 +60,7 @@ const fakeFetch = async (input: string, init: any = {}) => {
     assert.equal(body.get("client_secret"), null, "公開クライアントなので secret は送らない")
     if (body.get("grant_type") === "authorization_code") assert.equal(body.get("code_verifier"), "v")
     if (world.tokenInvalid) return ok({ error: "invalid_grant" }, 400)
-    return ok({ access_token: `at-${world.tokenCalls.length}`, refresh_token: `rt-${world.tokenCalls.length}`, expires_in: 604800 })
+    return ok({ access_token: `at-${world.tokenCalls.length}`, refresh_token: `rt-${world.tokenCalls.length}`, expires_in: 604800, scope: world.tokenScope })
   }
   if (path === "/oauth2/token/revoke") { world.revoked++; return ok({}) }
   if (path === "/users/@me") return ok(world.me)
@@ -283,6 +284,22 @@ await test("失効前の DM: 希望者だけ、当日失効の毎日のコイン
   assert.equal(first.sent, 1)
   assert.ok(world.dms[0].content.includes("フリーコイン 50 枚"))
   assert.equal((await d.sendCoinExpiryDms(env, db, now)).sent, 0)
+})
+
+await test("identify だけの連携: トークンを持たずに取り消し、プロフィールの更新もしない", async () => {
+  await d.unlinkDiscordAccount(env, db, "3")
+  const revoked = world.revoked
+  const connections = world.roleConnections.length
+  world.tokenScope = "identify"
+  world.summary = { ...world.summary, level: 60 }
+  const result = await d.linkDiscordAccount(env, db, { userId: "3", code: "c", redirectUri: "u", codeVerifier: "v" })
+  assert.deepEqual(result, { ok: true, bonusCoins: 0 })
+  const row = await db.queryOne("SELECT access_token_enc, refresh_token_enc FROM discord_links WHERE user_id = '3'")
+  assert.equal(row.access_token_enc, null)
+  assert.equal(row.refresh_token_enc, null)
+  assert.equal(world.revoked, revoked + 1)
+  assert.equal(world.roleConnections.length, connections)
+  assert.ok(world.member.nick.endsWith("✦Lv.60"))
 })
 
 console.log(`\n${passed} passed`)
