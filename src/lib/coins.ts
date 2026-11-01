@@ -560,10 +560,12 @@ export var applyCoinDelta = async (props) => {
     kind: props.kind,
     reason: props.reason ?? null,
     source: props.source ?? null,
-    now
+    now,
+    // 期限を指定したときだけ使う（指定が無ければ無料コインは当日 24:00、プレミアムは期限なし）
+    ...(props.expiresAt !== void 0 && props.expiresAt !== null && { expiresAt: props.expiresAt })
   });
   const summary = await fetchCoinSummary(props.db, props.userId);
-  const grantEvents = freeDelta > 0 || premiumDelta > 0 ? [createGrantEvent(Math.max(freeDelta, 0), Math.max(premiumDelta, 0))] : [];
+  const grantEvents = freeDelta > 0 || premiumDelta > 0 ? [createGrantEvent(Math.max(freeDelta, 0), Math.max(premiumDelta, 0), props.expiresAt ?? void 0)] : [];
   return {
     ...summary,
     expiredFreeCoins: expired.expiredFreeCoins,

@@ -37,7 +37,9 @@ export var grantSchema = object({
   freeCoins: optional(number()),
   premiumCoins: optional(number()),
   reason: optional(nullable(string())),
-  source: optional(nullable(string()))
+  source: optional(nullable(string())),
+  // 有効期限（UNIX 秒）。実績のコインなど、当日 24:00 より長く使えるようにするとき
+  expiresAt: optional(nullable(number()))
 });
 export var bulkAdjustSchema = object({
   userIds: array(string()),
@@ -209,7 +211,8 @@ coinsRoutes.post("/grant", async (c) => {
     premiumDelta: premiumCoins,
     kind: "GRANT",
     reason: parsed.output.reason ?? null,
-    source: parsed.output.source ?? null
+    source: parsed.output.source ?? null,
+    expiresAt: parsed.output.expiresAt ?? void 0
   });
   return json({ error: null, data: summary });
 });
