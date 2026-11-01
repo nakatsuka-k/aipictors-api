@@ -355,10 +355,18 @@ export var createClient = (connectionString) => {
 };
 // コイン操作用のロックキー
 export var coinLockKey = (userId) => `coins:${userId}`;
-// schemaStatements を変えたら上げる。適用済みのバージョンなら DDL を流さない。
+// schemaStatements の中身から作る（変えると自動で変わり、次のリクエストで DDL が流れる）。適用済みのバージョンなら DDL を流さない。
 // （Worker は isolate が頑繁に入れ替わる。毎回 70 文近い DDL を流すと初回リクエストが 10 秒近くかかり、
 //   ALTER TABLE ... IF NOT EXISTS もテーブルロックを取るので混雑時にコインの読み書きが詰まっていた）
-export var SCHEMA_VERSION = "2026-10-27.4";
+const hashStatements = (statements) => {
+  let hash = 2166136261;
+  for (const char of statements.join("\n")) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+};
+export var SCHEMA_VERSION = hashStatements(schemaStatements);
 export var ensureSchema = async (cacheKey, db) => {
   let ready = schemaReady.get(cacheKey);
   if (!ready) {
