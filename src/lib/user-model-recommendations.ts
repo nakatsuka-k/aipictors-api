@@ -374,7 +374,7 @@ export const fetchCivitaiMetasBySha256 = async (
 }
 
 /** 自動で作る方法を変えたら今の時刻（UNIX 秒）に上げる。これより前に自動で入れたものを作り直す */
-const AUTO_RECOMMENDATION_UPDATED_AT = 1793533200
+const AUTO_RECOMMENDATION_UPDATED_AT = 1793530091
 
 /**
  * おすすめ設定のないチェックポイントに、少しずつ自動で入れる（cron）

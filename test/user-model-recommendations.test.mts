@@ -40,7 +40,9 @@ const meta = (extra: Record<string, unknown>) => ({
   assert.equal(settings.source, "civitai")
   assert.equal(settings.sampleCount, 4)
   assert.equal(settings.qualityPrompt, "masterpiece, best quality")
-  assert.equal(settings.negativePrompt, "lowres, bad anatomy")
+  // 作例のタグが少ないので定番で補う。性的・年齢の語は入らない
+  assert.match(settings.negativePrompt, /^lowres, bad anatomy/)
+  assert.doesNotMatch(settings.negativePrompt, /loli|sex/)
 }
 
 // lightning 向けの作例が混ざっても、Steps は多数派の CFG の作例で見る
