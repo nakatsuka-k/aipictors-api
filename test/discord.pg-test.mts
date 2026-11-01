@@ -111,13 +111,9 @@ const test = async (name: string, fn: () => Promise<void>) => {
 // 残高は coin_lots が正（coin_balances は読むときに合わせ直す）
 const balance = async (u: string) => (await db.queryOne("SELECT COALESCE(SUM(remaining), 0)::INTEGER AS total FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE'", [u])).total
 
-await test("名前の整形: 32 文字に収める・絵文字を切らない・付け外しできる", async () => {
-  assert.equal(d.toNickWithLevel("きりと", 42), "きりと ✦Lv.42")
+await test("レベルのロールを決める・古い ✦Lv を外せる", async () => {
   assert.equal(d.stripNickSuffix("きりと ✦Lv.42"), "きりと")
   assert.equal(d.stripNickSuffix("Lv.42の人"), "Lv.42の人")
-  const long = d.toNickWithLevel("😀".repeat(30), 100)
-  assert.ok(long.length <= 32)
-  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(long), "サロゲートペアを切らない")
   assert.equal(d.toLevelRole(1).level, 1)
   assert.equal(d.toLevelRole(42).level, 40)
   assert.equal(d.toLevelRole(250).level, 100)
@@ -129,7 +125,7 @@ await test("連携: トークンは暗号化、ボーナス、ロールとニッ
   const row = await db.queryOne("SELECT * FROM discord_links WHERE user_id = '1'")
   assert.ok(!row.access_token_enc.includes("at-1"), "平文で保存しない")
   assert.equal(await d.decryptToken(env, row.access_token_enc), "at-1")
-  assert.equal(world.member.nick, "きりと ✦Lv.42")
+  assert.equal(world.member.nick, null, "ニックネームは変えない")
   assert.equal(world.member.roles.length, 2, "jp + レベル")
   assert.ok(world.member.roles.includes("jp"))
   assert.equal(row.in_guild, true)
@@ -152,40 +148,32 @@ await test("強調する実績: 達成済みならアイコンのロールが増
   assert.equal(world.member.roles.length, 2, "やめたら外れる")
 })
 
-await test("レベルが上がるとロールが入れ替わり、関係ないロールは残る", async () => {
+await test("レベルが上がるとロールが入れ替わり、関係ないロールとニックネームは残る", async () => {
   world.summary = { ...world.summary, level: 50 }
   world.member.roles.push("booster")
+  world.member.nick = "自分の呼び名"
   await d.syncDiscordLinkByUserId(env, db, "1")
-  assert.equal(world.member.nick, "きりと ✦Lv.50")
+  assert.equal(world.member.nick, "自分の呼び名")
   assert.ok(world.member.roles.includes("booster"))
   assert.ok(world.member.roles.includes("jp"))
   assert.equal(world.member.roles.length, 3)
 })
 
-await test("自分で付けたニックネームを残す・Discord の表示名の変更についていく", async () => {
-  world.member.user.global_name = "新しい名前"
+await test("以前付けた ✦Lv は外す。ニックネームを変えられなくても、ほかは止めない", async () => {
+  world.member.nick = "自分の呼び名 ✦Lv.50"
   await d.syncDiscordLinkByUserId(env, db, "1")
-  assert.equal(world.member.nick, "新しい名前 ✦Lv.50")
-  world.member.nick = "自分の呼び名"
+  assert.equal(world.member.nick, "自分の呼び名")
+  await db.execute("UPDATE discord_links SET last_global_name = 'きりと' WHERE user_id = '1'")
+  world.member.nick = "きりと ✦Lv.50"
   await d.syncDiscordLinkByUserId(env, db, "1")
-  assert.equal(world.member.nick, "自分の呼び名 ✦Lv.50")
-  await d.updateDiscordSettings(db, { userId: "1", showNickname: false })
-  await d.syncDiscordLinkByUserId(env, db, "1")
-  assert.equal(world.member.nick, "自分の呼び名", "オフで元に戻る")
-  await d.updateDiscordSettings(db, { userId: "1", showNickname: true })
-  await d.syncDiscordLinkByUserId(env, db, "1")
-})
-
-await test("管理者などニックネームを変えられない人でも、ほかは止めない", async () => {
+  assert.equal(world.member.nick, null, "自分で付けていなければニックネームなしに戻す")
+  world.member.nick = "自分の呼び名 ✦Lv.50"
   world.nickForbidden = true
   world.summary = { ...world.summary, level: 51 }
   await d.syncDiscordLinkByUserId(env, db, "1")
-  const status = await d.toDiscordStatus(db, "1")
-  assert.equal(status.link.nickStatus, "no_permission")
-  assert.equal(status.link.level, 51)
+  assert.equal((await d.toDiscordStatus(db, "1")).link.level, 51)
   world.nickForbidden = false
-  await d.syncDiscordLinkByUserId(env, db, "1")
-  assert.equal((await d.toDiscordStatus(db, "1")).link.nickStatus, "ok")
+  world.member.nick = "自分の呼び名"
 })
 
 await test("実績を非公開にすると、ロールとレベル表示を外す", async () => {
@@ -226,7 +214,7 @@ await test("期限切れのトークンは取り直す。取り消されてい�
   await db.execute("UPDATE discord_links SET token_expires_at = 1 WHERE user_id = '1'")
   world.summary = { ...world.summary, level: 53 }
   await d.syncDiscordLinkByUserId(env, db, "1")
-  assert.equal(world.member.nick, "自分の呼び名 ✦Lv.53")
+  assert.equal((await d.toDiscordStatus(db, "1")).link.level, 53)
   assert.equal((await d.toDiscordStatus(db, "1")).link.isProfileConnected, false)
   world.tokenInvalid = false
 })
@@ -299,7 +287,7 @@ await test("identify だけの連携: トークンを持たずに取り消し、
   assert.equal(row.refresh_token_enc, null)
   assert.equal(world.revoked, revoked + 1)
   assert.equal(world.roleConnections.length, connections)
-  assert.ok(world.member.nick.endsWith("✦Lv.60"))
+  assert.equal((await d.toDiscordStatus(db, "3")).link.level, 60)
 })
 
 console.log(`\n${passed} passed`)

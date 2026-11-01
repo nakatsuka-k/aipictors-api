@@ -6,7 +6,7 @@ import { getNow } from "./db"
  * Discord 連携
  *
  * - 連携は OAuth2（identify）。本人確認にだけ使い、トークンは持たない（role_connections.write を許可したときだけ暗号化して持つ）
- * - 名前の横の表示は、サーバーのロールアイコンとニックネームの「✦Lv.42」で出す（Discord に個人ごとのバナーの仕組みはない）
+ * - 名前の横の表示は、サーバーのロールアイコンで出す（Discord に個人ごとのバナーの仕組みはない）。ニックネームは変えない
  * - 同期は 5 分ごとの cron と、連携・設定変更・実績の達成のときに行う
  */
 
@@ -27,7 +27,7 @@ const LINK_BONUS_VALID_SECONDS = 7 * 24 * 60 * 60
 const CELEBRATE_MIN_TIER = 3
 const CELEBRATE_MAX_PER_SYNC = 3
 
-const NICK_MAX_LENGTH = 32
+// 以前ニックネームに付けていた「✦Lv.42」。残っていたら外す
 const NICK_SUFFIX_PATTERN = /\s*✦Lv\.\d+$/u
 
 /** Discord のロールは 250 個まで。実績のロールはここまでにして、使われていないものから消す */
@@ -68,21 +68,8 @@ export const toLevelRole = (level) => {
   return matched
 }
 
-/** ニックネームから自分で付けた「✦Lv.42」を外す */
+/** ニックネームから「✦Lv.42」を外す */
 export const stripNickSuffix = (nick) => (nick ?? "").replace(NICK_SUFFIX_PATTERN, "")
-
-/** 32 文字に収まるように名前を詰めて「✦Lv.42」を付ける（絵文字の途中で切らない） */
-export const toNickWithLevel = (base, level) => {
-  const suffix = ` ✦Lv.${level}`
-  const chars = Array.from(base.trim())
-  const room = NICK_MAX_LENGTH - suffix.length
-  let result = ""
-  for (const char of chars) {
-    if (result.length + char.length > room) break
-    result += char
-  }
-  return `${result.trimEnd()}${suffix}`
-}
 
 /* ------------------------------------------------------------------ */
 /* トークンの暗号化                                                    */
@@ -406,9 +393,8 @@ export const syncDiscordLink = async (env, db, link) => {
     if (!(error instanceof DiscordApiError) || error.status !== 404) throw error
   }
 
-  let nickStatus = link.nick_status ?? "ok"
   let celebratedUntil = link.celebrated_until
-  let lastGlobalName = link.last_global_name ?? null
+  const lastGlobalName = link.last_global_name ?? null
 
   if (member) {
     /* ロール */
@@ -441,36 +427,18 @@ export const syncDiscordLink = async (env, db, link) => {
       }
     }
 
-    /* ニックネーム */
-    const globalName = member.user.global_name ?? member.user.username
+    /* 以前付けた「✦Lv」が残っていたら外す */
     const strippedNick = stripNickSuffix(member.nick)
-    // 自分でニックネームを付けていない人は、Discord の表示名の変更についていく
-    const isFollowingGlobal = !strippedNick || strippedNick === lastGlobalName || strippedNick === globalName
-    const base = isFollowingGlobal ? globalName : strippedNick
-    const desiredNick =
-      link.show_nickname && state.isVisible ? toNickWithLevel(base, state.level) : isFollowingGlobal ? null : base
-
-    if ((member.nick ?? null) !== desiredNick) {
-      try {
-        await botFetch(env, {
-          method: "PATCH",
-          path: `/guilds/${DISCORD_GUILD_ID}/members/${link.discord_user_id}`,
-          body: { nick: desiredNick },
-          reason: "Aipictors 連携",
-        })
-        nickStatus = "ok"
-      } catch (error) {
-        // サーバーの管理者などはボットから変更できない
-        if (error instanceof DiscordApiError && error.status === 403) {
-          nickStatus = "no_permission"
-        } else {
-          throw error
-        }
-      }
-    } else {
-      nickStatus = "ok"
+    if (member.nick && strippedNick !== member.nick) {
+      const globalName = member.user.global_name ?? member.user.username
+      const isFollowingGlobal = strippedNick === globalName || strippedNick === lastGlobalName
+      await botFetch(env, {
+        method: "PATCH",
+        path: `/guilds/${DISCORD_GUILD_ID}/members/${link.discord_user_id}`,
+        body: { nick: isFollowingGlobal ? null : strippedNick },
+        reason: "Aipictors 連携",
+      }).catch(() => undefined)
     }
-    lastGlobalName = globalName
 
     /* 実績のお祝い（希望した人だけ） */
     if (link.celebrate && state.isVisible) {
@@ -500,18 +468,16 @@ export const syncDiscordLink = async (env, db, link) => {
             level = $3,
             unlocked_count = $4,
             is_achievement_visible = $5,
-            nick_status = $6,
-            celebrated_until = $7,
-            last_global_name = $8,
-            aipictors_name = $9,
-            aipictors_login = $10,
-            access_token_enc = COALESCE($11, access_token_enc),
-            refresh_token_enc = CASE WHEN $14 THEN COALESCE($12, refresh_token_enc) ELSE NULL END,
-            token_expires_at = COALESCE($13, token_expires_at),
+            celebrated_until = $6,
+            aipictors_name = $7,
+            aipictors_login = $8,
+            access_token_enc = COALESCE($9, access_token_enc),
+            refresh_token_enc = CASE WHEN $12 THEN COALESCE($10, refresh_token_enc) ELSE NULL END,
+            token_expires_at = COALESCE($11, token_expires_at),
             sync_requested_at = NULL,
             sync_error = NULL,
-            synced_at = $15,
-            updated_at = $15
+            synced_at = $13,
+            updated_at = $13
       WHERE user_id = $1`,
     [
       link.user_id,
@@ -519,9 +485,7 @@ export const syncDiscordLink = async (env, db, link) => {
       state.level,
       state.unlockedCount,
       state.isVisible,
-      nickStatus,
       celebratedUntil,
-      lastGlobalName,
       state.name,
       state.login,
       tokens ? await encryptToken(env, tokens.access_token) : null,
@@ -743,8 +707,6 @@ export const toDiscordStatus = async (db, userId) => {
           level: link.level,
           unlockedCount: link.unlocked_count,
           isAchievementVisible: link.is_achievement_visible !== false,
-          nickStatus: link.nick_status ?? "ok",
-          showNickname: link.show_nickname,
           highlightKey: link.highlight_key,
           celebrate: link.celebrate,
           expiryDm: link.expiry_dm,
@@ -759,16 +721,14 @@ export const toDiscordStatus = async (db, userId) => {
 export const updateDiscordSettings = async (db, props) => {
   await db.execute(
     `UPDATE discord_links
-        SET show_nickname = COALESCE($2, show_nickname),
-            celebrate = COALESCE($3, celebrate),
-            expiry_dm = COALESCE($4, expiry_dm),
-            highlight_key = CASE WHEN $5 THEN $6 ELSE highlight_key END,
-            sync_requested_at = $7,
-            updated_at = $7
+        SET celebrate = COALESCE($2, celebrate),
+            expiry_dm = COALESCE($3, expiry_dm),
+            highlight_key = CASE WHEN $4 THEN $5 ELSE highlight_key END,
+            sync_requested_at = $6,
+            updated_at = $6
       WHERE user_id = $1`,
     [
       props.userId,
-      props.showNickname ?? null,
       props.celebrate ?? null,
       props.expiryDm ?? null,
       props.highlightKey !== undefined,

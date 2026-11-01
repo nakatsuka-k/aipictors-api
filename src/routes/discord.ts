@@ -20,7 +20,6 @@ const linkSchema = object({ userId: string(), code: string(), redirectUri: strin
 const userSchema = object({ userId: string() })
 const settingsSchema = object({
   userId: string(),
-  showNickname: optional(boolean()),
   celebrate: optional(boolean()),
   expiryDm: optional(boolean()),
   highlightKey: optional(nullable(string())),
