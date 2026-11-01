@@ -16,7 +16,7 @@ import { json } from "../lib/json"
 export const discordRoutes = new Hono()
 discordRoutes.use("*", requireInternalAuth)
 
-const linkSchema = object({ userId: string(), code: string(), redirectUri: string() })
+const linkSchema = object({ userId: string(), code: string(), redirectUri: string(), codeVerifier: string() })
 const userSchema = object({ userId: string() })
 const settingsSchema = object({
   userId: string(),

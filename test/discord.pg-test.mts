@@ -56,12 +56,14 @@ const fakeFetch = async (input: string, init: any = {}) => {
   const path = url.replace(d.DISCORD_API, "")
   if (path === "/oauth2/token") {
     world.tokenCalls.push(body.get("grant_type"))
+    assert.equal(body.get("client_secret"), null, "公開クライアントなので secret は送らない")
+    if (body.get("grant_type") === "authorization_code") assert.equal(body.get("code_verifier"), "v")
     if (world.tokenInvalid) return ok({ error: "invalid_grant" }, 400)
     return ok({ access_token: `at-${world.tokenCalls.length}`, refresh_token: `rt-${world.tokenCalls.length}`, expires_in: 604800 })
   }
   if (path === "/oauth2/token/revoke") { world.revoked++; return ok({}) }
   if (path === "/users/@me") return ok(world.me)
-  if (path === `/guilds/${G}/members/${d.DISCORD_APPLICATION_ID}`) return ok({ roles: ["botrole"] })
+  if (path === `/guilds/${G}/members/${d.DISCORD_BOT_USER_ID}`) return ok({ roles: ["botrole"] })
   if (path.startsWith(`/guilds/${G}/members/`)) {
     const [, , , , id, , roleId] = path.split("/")
     if (id !== world.me.id || world.member === null) return ok({ message: "Unknown Member", code: 10007 }, 404)
@@ -96,7 +98,7 @@ const fakeFetch = async (input: string, init: any = {}) => {
 const env: any = {
   __fetch: fakeFetch,
   DISCORD_BOT_TOKEN: "bot",
-  DISCORD_CLIENT_SECRET: "secret",
+  DISCORD_ROLE_METADATA_ENABLED: "1",
   DISCORD_TOKEN_KEY: "key",
   DISCORD_CELEBRATION_CHANNEL_ID: "celebrate",
 }
@@ -121,7 +123,7 @@ await test("名前の整形: 32 文字に収める・絵文字を切らない・
 })
 
 await test("連携: トークンは暗号化、ボーナス、ロールとニックネームが付く", async () => {
-  const result = await d.linkDiscordAccount(env, db, { userId: "1", code: "c", redirectUri: "u" })
+  const result = await d.linkDiscordAccount(env, db, { userId: "1", code: "c", redirectUri: "u", codeVerifier: "v" })
   assert.deepEqual(result, { ok: true, bonusCoins: 100 })
   const row = await db.queryOne("SELECT * FROM discord_links WHERE user_id = '1'")
   assert.ok(!row.access_token_enc.includes("at-1"), "平文で保存しない")
@@ -239,7 +241,7 @@ await test("サーバーにいない人は記録だけ。参加後の同期で�
 })
 
 await test("同じ Discord アカウントを別のユーザーで連携できない", async () => {
-  const result = await d.linkDiscordAccount(env, db, { userId: "2", code: "c", redirectUri: "u" })
+  const result = await d.linkDiscordAccount(env, db, { userId: "2", code: "c", redirectUri: "u", codeVerifier: "v" })
   assert.deepEqual(result, { ok: false, code: "DISCORD_ALREADY_LINKED" })
   assert.equal(await balance("2"), 0)
 })
@@ -251,13 +253,13 @@ await test("解除: ロールとニックネームを戻す。解除→再連携
   assert.deepEqual(world.member.roles.sort(), ["booster", "jp"])
   assert.equal(world.revoked, 0, "取り消し済みのトークンは送らない")
   assert.equal((await d.toDiscordStatus(db, "1")).isLinked, false)
-  const again = await d.linkDiscordAccount(env, db, { userId: "1", code: "c", redirectUri: "u" })
+  const again = await d.linkDiscordAccount(env, db, { userId: "1", code: "c", redirectUri: "u", codeVerifier: "v" })
   assert.deepEqual(again, { ok: true, bonusCoins: 0 })
   assert.equal(await balance("1"), before)
   await d.unlinkDiscordAccount(env, db, "1")
   assert.equal(world.revoked, 1, "持っているトークンは取り消す")
   // 同じ Discord アカウントを別のユーザーに移しても、ボーナスはもう付かない
-  const moved = await d.linkDiscordAccount(env, db, { userId: "3", code: "c", redirectUri: "u" })
+  const moved = await d.linkDiscordAccount(env, db, { userId: "3", code: "c", redirectUri: "u", codeVerifier: "v" })
   assert.deepEqual(moved, { ok: true, bonusCoins: 0 })
   assert.equal(await balance("3"), 0)
 })

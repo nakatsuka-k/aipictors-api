@@ -12,7 +12,10 @@ import { getNow } from "./db"
 
 export const DISCORD_API = "https://discord.com/api/v10"
 export const DISCORD_GUILD_ID = "1069968879272595476"
-export const DISCORD_APPLICATION_ID = "1306188881418391573"
+/** 連携（OAuth2）に使う Discord アプリ「Aipictors」。公開クライアントなので secret はなく PKCE で確かめる */
+export const DISCORD_APPLICATION_ID = "1566508809940115497"
+/** ロールやニックネームを変えるボット（ぴくたーちゃん）。サーバーには前からこちらがいる */
+export const DISCORD_BOT_USER_ID = "1306188881418391573"
 export const DISCORD_OAUTH_SCOPES = "identify role_connections.write"
 
 /** 連携ボーナス（1 人 1 回、1 つの Discord アカウントにつき 1 回） */
@@ -162,11 +165,7 @@ const postOAuthToken = async (env, params) => {
   const response = await fetcher(`${DISCORD_API}/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: DISCORD_APPLICATION_ID,
-      client_secret: env.DISCORD_CLIENT_SECRET,
-      ...params,
-    }),
+    body: new URLSearchParams({ client_id: DISCORD_APPLICATION_ID, ...params }),
   })
   const json = await response.json().catch(() => null)
   if (!response.ok) {
@@ -230,7 +229,7 @@ const fetchRoleIcon = async (env, path) => {
 const moveRoleBelowBot = async (env, roleId) => {
   const [roles, botMember] = await Promise.all([
     botFetch(env, { path: `/guilds/${DISCORD_GUILD_ID}/roles` }),
-    botFetch(env, { path: `/guilds/${DISCORD_GUILD_ID}/members/${DISCORD_APPLICATION_ID}` }),
+    botFetch(env, { path: `/guilds/${DISCORD_GUILD_ID}/members/${DISCORD_BOT_USER_ID}` }),
   ])
   const byId = new Map(roles.map((role) => [role.id, role]))
   const top = Math.max(...botMember.roles.map((id) => byId.get(id)?.position ?? 0))
@@ -355,9 +354,10 @@ const updateRoleConnection = async (env, link, state) => {
     body: {
       platform_name: "Aipictors",
       platform_username: state.name ?? state.login ?? "",
-      metadata: state.isVisible
-        ? { level: String(state.level), achievements: String(state.unlockedCount) }
-        : {},
+      // レベルと実績数の項目は、アプリのボットトークンで登録するまで送れない（setup を参照）
+      ...(env.DISCORD_ROLE_METADATA_ENABLED === "1" && state.isVisible
+        ? { metadata: { level: String(state.level), achievements: String(state.unlockedCount) } }
+        : {}),
     },
   })
   return tokens
@@ -608,6 +608,7 @@ export const linkDiscordAccount = async (env, db, props) => {
     grant_type: "authorization_code",
     code: props.code,
     redirect_uri: props.redirectUri,
+    code_verifier: props.codeVerifier,
   })
   const me = await discordFetch({
     path: "/users/@me",
@@ -704,7 +705,6 @@ export const unlinkDiscordAccount = async (env, db, userId) => {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: DISCORD_APPLICATION_ID,
-        client_secret: env.DISCORD_CLIENT_SECRET,
         token: await decryptToken(env, link.refresh_token_enc),
         token_type_hint: "refresh_token",
       }),
@@ -772,7 +772,11 @@ export const updateDiscordSettings = async (db, props) => {
 /* ------------------------------------------------------------------ */
 
 export const setupDiscordIntegration = async (env, db) => {
-  await botFetch(env, {
+  // プロフィールのレベル表示には Aipictors アプリのボットトークンが要る（なくても連携そのものは動く）
+  if (env.DISCORD_OAUTH_APP_BOT_TOKEN) {
+  await discordFetch({
+    auth: `Bot ${env.DISCORD_OAUTH_APP_BOT_TOKEN}`,
+    fetch: env.__fetch,
     method: "PUT",
     path: `/applications/${DISCORD_APPLICATION_ID}/role-connections/metadata`,
     body: [
@@ -794,6 +798,7 @@ export const setupDiscordIntegration = async (env, db) => {
       },
     ],
   })
+  }
 
   // 下のレベルから順に、ボットのすぐ下へ入れる（上のレベルほど上に並ぶ）
   const created = []
