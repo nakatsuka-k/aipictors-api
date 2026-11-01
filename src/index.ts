@@ -10,6 +10,7 @@ import { imageGenerationRoutes } from "./routes/image-generation"
 import { pointsRoutes } from "./routes/points"
 import { stripeRoutes } from "./routes/stripe"
 import { subscriptionRoutes } from "./routes/subscriptions"
+import { supportRoutes } from "./routes/support"
 import { userModelsRoutes } from "./routes/user-models"
 import { webhookRoutes } from "./routes/webhooks"
 const app = new Hono2();
@@ -24,6 +25,7 @@ app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);
 app.route("/admin", adminRoutes);
 app.route("/internal/campaigns", campaignRoutes);
+app.route("/internal/support", supportRoutes);
 app.route("/email", emailPublicRoutes);
 app.route("/stripe", stripeRoutes);
 app.route("/webhooks", webhookRoutes);
