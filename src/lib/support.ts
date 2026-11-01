@@ -5,8 +5,8 @@ import { SUPPORT_KNOWLEDGE } from "./support-knowledge"
 /**
  * お問い合わせ（サポートチャット）
  * AI がナレッジとその人のアカウントの状況（プラン・コイン・最近の生成）を見て答え、
- * 答えられないもの（返金・コインの付与・アカウント削除・不具合の調査など）はスタッフに引き継ぐ。
- * スタッフの返事も同じチャットに届く（Discord に行かなくてよいように）
+ * 有人の窓口はないので、AI で答えられないもの（返金・コインの付与・アカウント削除・不具合の調査など）は
+ * Discord サーバーでの相談を案内する
  */
 
 /** 1 日に AI が答える回数（1 人あたり） */
@@ -215,28 +215,26 @@ export var getAccountContext = async (db, userId) => {
 };
 
 var SYSTEM_RULES = `あなたは AI イラスト投稿・生成サイト「Aipictors」（https://www.aipictors.com）のサポート担当 AI です。
-サイトの中のお問い合わせチャットで、ログイン中のユーザー本人に答えます。
+サイトの中のお問い合わせチャットで、ログイン中のユーザー本人に答えます。Aipictors には有人のサポート窓口はありません。あなたが最後まで対応します。
 
 # 答え方
 - ユーザーが書いた言語で答える（日本語なら自然な日本語。英語で書き始めない）
 - まず結論、次に手順。手順は番号付きで短く。全体で 6〜10 行程度まで。挨拶やお詫びの定型文を長々と書かない
 - ページを案内するときは、ナレッジにあるフル URL を書く
-- 「アカウントの状況」はこのユーザー本人の記録。コイン・プラン・生成の質問では必ず確認し、記録からわかることを具体的に伝える（例:「10/31 20:00 に感謝コイン +2000 が付いています」）。ほかの人の情報は持っていない
-- ナレッジとアカウントの状況に無いことは推測で答えない。わからないときは「確認します」と書いてスタッフに引き継ぐ
-- Discord に行くよう案内しない。ユーザーはサイトの中で解決したい。スタッフへの連絡はこのチャットの中で引き継げる
-- 「キャッシュを消してください」「時間をおいてください」だけで終わらせない。それで直らないときはスタッフに引き継ぐ
+- 「アカウントの状況」はこのユーザー本人の記録。コイン・プラン・生成・運営からのメッセージ・作品への運営の対応について聞かれたら必ず確認し、記録からわかることを具体的に伝える（例:「11/1 15:54 に作品『○○』の年齢区分が 全年齢 → R-18G に変更されています」）。ほかの人の情報は持っていない
+- 運営からのメッセージ（定型文で「詳細:」が空のものが多い）について聞かれたら、「運営の対応」の記録と照らし合わせて、どの作品に何がされたか・ユーザーが何かする必要があるかを説明する
+- ナレッジとアカウントの状況に無いことは推測で答えない
+- 「キャッシュを消してください」「時間をおいてください」だけで終わらせない
 - 個人情報（パスワード・カード番号など）を聞かない。送られてきても繰り返さない
+- 「スタッフに引き継ぎます」「担当者からお返事します」とは書かない（有人の対応はない）
 
-# スタッフに引き継ぐ（escalate を true にする）とき
-- 返金・二重請求・お支払いのトラブル・コインが届かない／減った・コインの付与や返却の依頼
-- アカウントの削除や復旧をスタッフにやってほしい、ログインできずに自分では手続きできない
-- 不具合の報告で、ナレッジの対処で直らない・調査が必要なもの（再現の手順や URL があればそのまま要約に書く）
-- 規約違反の通報で、通報ボタンでは足りない個別の相談、法的な依頼、権利侵害の申し立て
-- ユーザーがはっきり「人に対応してほしい」と言ったとき、怒っている・同じことを何度も聞いているとき
-- 引き継ぐときの answer は「スタッフに引き継ぎました。このチャットでお返事します」と、それまでにわかったことを短く書く。いつまでに返事するかは約束しない
+# AI で解決できないとき（handoff を true にする）
+- ナレッジの「AI で対応できないケース」に当たるもの（返金・二重請求・コインの付与や返却・アカウントの復旧や統合・運営の判断への異議・法的な依頼・調査が必要な不具合など）
+- ユーザーがはっきり「人に対応してほしい」と言ったとき、同じことを何度も聞いている・怒っているとき
+- このときの answer: わかったことを先に短く伝え、そのうえで「AI では対応できないため、Aipictors の Discord サーバー（https://discord.gg/hcQggQEYfn ）でご相談ください」と案内する。不具合・要望は「🔧欲しい機能・不具合・意見」、使い方の質問は「📋なんでも質問してね」チャンネル。書くとよいこと（ユーザーID・作品の URL・日時・画面のメッセージ）を添え、カード番号・パスワード・メールアドレスは公開のチャンネルに書かないよう伝える。いつ解決するかは約束しない
 
 # 出力
-必ず JSON だけを返す: {"answer": "ユーザーへの返事（Markdown 可）", "escalate": true/false, "category": "account|plan|payment|coins|generation|posting|report|bug|other", "summary": "スタッフ向けの一行要約（日本語、60字以内）"}`;
+必ず JSON だけを返す: {"answer": "ユーザーへの返事（Markdown 可）", "handoff": true/false, "category": "account|plan|payment|coins|generation|posting|moderation|report|bug|other", "summary": "運営向けの一行要約（日本語、60字以内）"}`;
 
 /**
  * AI に答えてもらう
@@ -252,7 +250,10 @@ ${SUPPORT_KNOWLEDGE}
 
 # アカウントの状況（このユーザー本人）
 ユーザー名: ${props.userName ?? "不明"} / ユーザー ID: ${props.userId}
-${props.accountContext}`;
+${props.accountContext}${props.extraContext ? `
+
+# 運営からのメッセージ・作品への運営の対応（このユーザー本人。サイトの記録から）
+${props.extraContext}` : ""}`;
   const contents = props.history.slice(-16).map((m) => ({
     role: m.role === "user" ? "user" : "model",
     parts: [{ text: m.role === "staff" ? `（スタッフの返事）${m.body}` : m.role === "system" ? `（お知らせ）${m.body}` : m.body }]
@@ -277,11 +278,11 @@ ${props.accountContext}`;
                 type: "OBJECT",
                 properties: {
                   answer: { type: "STRING" },
-                  escalate: { type: "BOOLEAN" },
+                  handoff: { type: "BOOLEAN" },
                   category: { type: "STRING" },
                   summary: { type: "STRING" }
                 },
-                required: ["answer", "escalate", "category", "summary"]
+                required: ["answer", "handoff", "category", "summary"]
               }
             }
           })
@@ -300,7 +301,7 @@ ${props.accountContext}`;
       }
       return {
         answer: parsed.answer.trim(),
-        escalate: parsed.escalate === true,
+        escalate: parsed.handoff === true || parsed.escalate === true,
         category: typeof parsed.category === "string" ? parsed.category.slice(0, 32) : "other",
         summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 200) : null,
         model,

@@ -24,8 +24,9 @@ import {
 export var supportRoutes = new Hono2();
 supportRoutes.use("*", requireInternalAuth);
 
-var ESCALATED_NOTICE =
-  "スタッフに引き継ぎました。このチャットでお返事します（メールアドレスを登録している方にはメールでもお知らせします）。追加で伝えたいことがあれば、そのまま書いてください。";
+// 有人のサポートはないので、AI で解決できないときは Discord を案内する
+var DISCORD_NOTICE =
+  "AI で解決できないご相談は、Aipictors の Discord サーバー（https://discord.gg/hcQggQEYfn ）でご相談ください。不具合・要望は「🔧欲しい機能・不具合・意見」、使い方の質問は「📋なんでも質問してね」チャンネルへ。ユーザーID・作品の URL・日時・画面のメッセージを書くと早く解決します（カード番号・パスワード・メールアドレスは書かないでください）。";
 
 var loadDb = async (c) => {
   const db = await getDb(c.env);
@@ -119,21 +120,9 @@ supportRoutes.post("/messages", async (c) => {
   await db.execute("UPDATE support_tickets SET updated_at = $2 WHERE id = $1::bigint", [ticket.id, getNow()]);
   const created = [userMessage];
 
-  // スタッフ対応中は AI を挟まない（スタッフに新しいメッセージがあると知らせる）
+  // 以前「スタッフ対応中」になったお問い合わせも、AI が答える（有人の対応はない）
   if (ticket.status === "waiting_staff" || ticket.status === "staff_replied") {
-    await db.execute(
-      "UPDATE support_tickets SET status = 'waiting_staff', staff_unread = TRUE WHERE id = $1::bigint",
-      [ticket.id]
-    );
-    return json({ error: null, data: { ticket: await getTicket(db, ticket.id), messages: created } });
-  }
-
-  // ユーザーが自分から「スタッフに」と押したとき
-  if (body.escalate === true) {
-    const notice = await addMessage(db, { ticketId: ticket.id, userId, role: "system", body: ESCALATED_NOTICE });
-    created.push(notice);
-    await markEscalated(db, ticket.id, { summary: text.slice(0, 120) });
-    return json({ error: null, data: { ticket: await getTicket(db, ticket.id), messages: created } });
+    await db.execute("UPDATE support_tickets SET status = 'ai', staff_unread = FALSE WHERE id = $1::bigint", [ticket.id]);
   }
 
   const used = await countAiRepliesToday(db, userId);
@@ -142,10 +131,9 @@ supportRoutes.post("/messages", async (c) => {
       ticketId: ticket.id,
       userId,
       role: "system",
-      body: "今日の自動回答の上限に達したため、スタッフに引き継ぎました。このチャットでお返事します。"
+      body: `今日の自動回答の上限に達しました。明日またお試しいただくか、${DISCORD_NOTICE}`
     });
     created.push(notice);
-    await markEscalated(db, ticket.id, { summary: text.slice(0, 120) });
     return json({ error: null, data: { ticket: await getTicket(db, ticket.id), messages: created } });
   }
 
@@ -156,6 +144,7 @@ supportRoutes.post("/messages", async (c) => {
       userId,
       userName: body.userName ?? ticket.userName,
       accountContext,
+      extraContext: typeof body.extraContext === "string" ? body.extraContext.slice(0, 6000) : null,
       history
     });
     const aiMessage = await addMessage(db, {
@@ -172,8 +161,12 @@ supportRoutes.post("/messages", async (c) => {
       `UPDATE support_tickets SET category = COALESCE($2, category), summary = COALESCE(summary, $3), updated_at = $4 WHERE id = $1::bigint`,
       [ticket.id, result.category, result.summary, getNow()]
     );
+    // Discord を案内したお問い合わせは、管理画面で見られるように印だけ付ける（状態は変えない）
     if (result.escalate) {
-      await markEscalated(db, ticket.id, { category: result.category, summary: result.summary });
+      await db.execute(
+        "UPDATE support_tickets SET escalated_at = COALESCE(escalated_at, $2) WHERE id = $1::bigint",
+        [ticket.id, getNow()]
+      );
     }
   } catch (error) {
     console.error(JSON.stringify({ event: "support.ai_failed", message: error instanceof Error ? error.message : String(error) }));
@@ -181,16 +174,15 @@ supportRoutes.post("/messages", async (c) => {
       ticketId: ticket.id,
       userId,
       role: "system",
-      body: "自動回答がうまく動かなかったため、スタッフに引き継ぎました。このチャットでお返事します。"
+      body: `自動回答がうまく動きませんでした。少し時間をおいてもう一度送ってください。解決しないときは、${DISCORD_NOTICE}`
     });
     created.push(notice);
-    await markEscalated(db, ticket.id, { summary: text.slice(0, 120) });
   }
   return json({ error: null, data: { ticket: await getTicket(db, ticket.id), messages: created } });
 });
 
 /**
- * 「スタッフに相談する」
+ * 「人に相談したい」（以前の画面のボタン）: 有人の窓口はないので Discord を案内する
  */
 supportRoutes.post("/escalate", async (c) => {
   const body = await c.req.json();
@@ -200,14 +192,11 @@ supportRoutes.post("/escalate", async (c) => {
   const db = await loadDb(c);
   const ticket = await getTicket(db, ticketId);
   if (!ticket || ticket.userId !== userId) return json({ error: "Not found" }, 404);
-  if (body.contactEmail) {
-    await db.execute("UPDATE support_tickets SET contact_email = $2 WHERE id = $1::bigint", [ticketId, body.contactEmail]);
-  }
-  const created = [];
-  if (ticket.status !== "waiting_staff") {
-    created.push(await addMessage(db, { ticketId, userId, role: "system", body: ESCALATED_NOTICE }));
-  }
-  await markEscalated(db, ticketId, {});
+  const created = [await addMessage(db, { ticketId, userId, role: "system", body: DISCORD_NOTICE })];
+  await db.execute(
+    "UPDATE support_tickets SET escalated_at = COALESCE(escalated_at, $2) WHERE id = $1::bigint",
+    [ticketId, getNow()]
+  );
   return json({ error: null, data: { ticket: await getTicket(db, ticketId), messages: created } });
 });
 
