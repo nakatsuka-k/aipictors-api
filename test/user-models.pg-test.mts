@@ -477,6 +477,20 @@ await t("おすすめ設定の自動入力: 空のチェックポイントだけ
   assert.equal(edited.body.data.recommendedSettings.negativePrompt, "my negative")
   // 長すぎるプロンプトは 400
   assert.equal((await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: { qualityPrompt: "x".repeat(2001) } })).status, 400)
+  // 作者の作例が足りていれば、みんなの投稿は読まない
+  const { fetchCivitaiMetasBySha256 } = await import(`${API}/lib/user-model-recommendations.ts`)
+  const author = await fetchCivitaiMetasBySha256(async (url: string) => {
+    assert.ok(url.includes("/model-versions/by-hash/"), url)
+    return new Response(JSON.stringify({ id: 1, images: metas.map((meta) => ({ meta })) }))
+  }, sha)
+  assert.equal(author.length, 3)
+  // 作り方を変えたときは自動で入れたものだけ作り直す。登録者が変えたものは変えない
+  await db.execute("UPDATE user_models SET recommended_settings_auto_at = 1 WHERE id = $1", [bigId])
+  const notRebuilt = await fillRecommendedSettings({ db, fetch: fakeCivitai, limit: 50, now: fakeNow })
+  assert.equal((await callJson("GET", `/${bigId}`)).body.data.recommendedSettings.negativePrompt, "my negative", JSON.stringify(notRebuilt))
+  await db.execute("UPDATE user_models SET recommended_settings = $2, recommended_settings_auto_at = 1 WHERE id = $1", [bigId, JSON.stringify({ ...auto, cfgScale: 2 })])
+  await fillRecommendedSettings({ db, fetch: fakeCivitai, limit: 50, now: fakeNow })
+  assert.equal((await callJson("GET", `/${bigId}`)).body.data.recommendedSettings.cfgScale, 6)
   // 消したら入れ直さない
   await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: null })
   await fillRecommendedSettings({ db, fetch: fakeCivitai, limit: 50, now: fakeNow })

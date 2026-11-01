@@ -1,7 +1,8 @@
 // チェックポイントのおすすめ設定を自動で作る
 //
 // - モデルファイルの sha256 で Civitai を引く（アップロードしたモデルも見つかる）。送るのはハッシュだけ
-// - 見つかったら作例の生成情報を集計する。作例が少なければベースモデルの定番で補う
+// - 見つかったら作例の生成情報を集計する。作者の作例を優先する（みんなの投稿には高速化 LoRA など別の設定が多く混ざり、
+//   作者の説明とずれる）。足りなければみんなの投稿も使い、それでも少なければベースモデルの定番で補う
 // - 登録者が入れた設定は変えない。空のモデルだけに入れる（cron で少しずつ）
 // - 作例には成人向けのプロンプトも混ざるので、品質タグは決まった語だけ通し、ネガティブからも性的・年齢の語を外す
 import {
@@ -344,7 +345,7 @@ const fetchJson = async (fetchImpl: FetchLike, path: string) => {
   return (await response.json()) as any
 }
 
-/** sha256 から、Civitai の作例の生成情報を集める。Civitai に無ければ [] */
+/** sha256 から、Civitai の作例の生成情報を集める（作者の作例が足りていればそれだけ）。Civitai に無ければ [] */
 export const fetchCivitaiMetasBySha256 = async (
   fetchImpl: FetchLike,
   sha256: string,
@@ -354,6 +355,7 @@ export const fetchCivitaiMetasBySha256 = async (
   const fromVersion: CivitaiImageMeta[] = (version.images ?? [])
     .map((image: any) => image?.meta)
     .filter(Boolean)
+  if (fromVersion.length >= MIN_SAMPLES) return fromVersion
   const images = await fetchJson(
     fetchImpl,
     `/images?modelVersionId=${version.id}&limit=100&sort=Most%20Reactions&nsfw=X&withMeta=true`,
@@ -371,9 +373,13 @@ export const fetchCivitaiMetasBySha256 = async (
   })
 }
 
+/** 自動で作る方法を変えたら今の時刻（UNIX 秒）に上げる。これより前に自動で入れたものを作り直す */
+const AUTO_RECOMMENDATION_UPDATED_AT = 1793533200
+
 /**
  * おすすめ設定のないチェックポイントに、少しずつ自動で入れる（cron）
- * 登録者が消したものには入れ直さない（recommended_settings_auto_at を見る）
+ * 登録者が消したものには入れ直さない（recommended_settings_auto_at を見る）。
+ * 登録者が変えたものは source が消えるので作り直さない
  */
 export const fillRecommendedSettings = async (props: {
   db: Db
@@ -384,10 +390,13 @@ export const fillRecommendedSettings = async (props: {
   const rows = await props.db.query<{ id: string; sha256: string; base_model: string }>(
     `SELECT id, sha256, base_model FROM user_models
       WHERE status = 'READY' AND kind = 'CHECKPOINT'
-        AND recommended_settings IS NULL AND recommended_settings_auto_at IS NULL
+        AND (
+          (recommended_settings IS NULL AND recommended_settings_auto_at IS NULL)
+          OR (recommended_settings LIKE '%"source":%' AND recommended_settings_auto_at < $2)
+        )
       ORDER BY created_at DESC
       LIMIT $1`,
-    [props.limit],
+    [props.limit, AUTO_RECOMMENDATION_UPDATED_AT],
   )
   let filled = 0
   let failed = 0
@@ -397,7 +406,7 @@ export const fillRecommendedSettings = async (props: {
       const settings = deriveRecommendedSettings({ metas, baseModel: row.base_model })
       await props.db.execute(
         `UPDATE user_models
-            SET recommended_settings = COALESCE(recommended_settings, $2),
+            SET recommended_settings = $2,
                 recommended_settings_auto_at = $3
           WHERE id = $1`,
         [row.id, settings ? JSON.stringify(settings) : null, props.now],
