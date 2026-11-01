@@ -201,6 +201,30 @@ await t("返却・管理付与のプレミアムコインは当日24:00で失効
   assert.equal(s.freeBalance, 0)
 })
 
+await t("累計の順位: 多い人の数 + 1。0 なら順位なし。運営アカウントは貢献の順位から除く", async () => {
+  const { getSupportSummary, getSupportTotals, CONTRIBUTION_RANKING_EXCLUDED_USER_ID: staff } = await import(`${API}/lib/coin-support.ts`)
+  const put = (user: string, sent: number, received: number) =>
+    db.execute(
+      `INSERT INTO coin_support_totals (user_id, sent_pt_total, received_pt_total, sent_coin_total, received_coin_total, updated_at)
+       VALUES ($1, $2, $3, 0, 0, 0)`,
+      [user, sent, received],
+    )
+  await put("r1", 1000, 10)
+  await put("r2", 500, 300)
+  await put("r3", 0, 200)
+  await put(staff, 99999, 0)
+  const r1 = await getSupportSummary({ db, userId: "r1" })
+  assert.equal(r1.cumulativeSentRank, 1) // 運営は数えない
+  assert.equal(r1.cumulativeReceivedRank, 3)
+  const r3 = await getSupportSummary({ db, userId: "r3" })
+  assert.equal(r3.cumulativeSentRank, null) // 貢献していない
+  assert.equal(r3.cumulativeReceivedRank, 2)
+  assert.equal((await getSupportSummary({ db, userId: staff })).cumulativeSentRank, null)
+  assert.equal((await getSupportSummary({ db, userId: "none" })).cumulativeReceivedRank, null)
+  assert.deepEqual(await getSupportTotals({ db, userId: "r2" }), { cumulativeSentPt: 500, cumulativeReceivedPt: 300 })
+  assert.deepEqual(await getSupportTotals({ db, userId: "none" }), { cumulativeSentPt: 0, cumulativeReceivedPt: 0 })
+})
+
 console.log(`\n${passed} passed`)
 await pool.end()
 await epg.stop()

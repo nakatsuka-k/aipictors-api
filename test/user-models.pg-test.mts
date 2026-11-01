@@ -428,11 +428,11 @@ await t("おすすめの生成設定: 決まった値だけ保存・消せる・
     userId: "a1", recommendedSettings: { sampler: "ER SDE", scheduler: "Simple", cfgScale: 1, steps: 8, clipSkip: 2 },
   })
   assert.equal(set.status, 200)
-  assert.deepEqual(set.body.data.recommendedSettings, { sampler: "ER SDE", scheduler: "Simple", cfgScale: 1, steps: 8, clipSkip: 2 })
+  assert.deepEqual(set.body.data.recommendedSettings, { sampler: "ER SDE", scheduler: "Simple", cfgScale: 1, steps: 8, clipSkip: 2, qualityPrompt: null, negativePrompt: null })
   const kept = await callJson("PATCH", `/${bigId}`, { userId: "a1", name: "名前だけ変更" })
   assert.equal(kept.body.data.recommendedSettings.sampler, "ER SDE")
   const partial = await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: { cfgScale: 5, sampler: "" } })
-  assert.deepEqual(partial.body.data.recommendedSettings, { sampler: null, scheduler: null, cfgScale: 5, steps: null, clipSkip: null })
+  assert.deepEqual(partial.body.data.recommendedSettings, { sampler: null, scheduler: null, cfgScale: 5, steps: null, clipSkip: null, qualityPrompt: null, negativePrompt: null })
   for (const bad of [{ sampler: "DPM adaptive" }, { scheduler: "hoge" }, { cfgScale: 0 }, { cfgScale: 1.5 }, { steps: 99 }, [1]]) {
     assert.equal((await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: bad })).status, 400, JSON.stringify(bad))
   }
@@ -440,6 +440,47 @@ await t("おすすめの生成設定: 決まった値だけ保存・消せる・
   assert.equal(cleared.body.data.recommendedSettings, null)
   const empty = await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: {} })
   assert.equal(empty.body.data.recommendedSettings, null)
+})
+
+await t("おすすめ設定の自動入力: 空のチェックポイントだけ・他の編集で印が残る・変えたら登録者のもの・消したら入れ直さない", async () => {
+  const { fillRecommendedSettings } = await import(`${API}/lib/user-model-recommendations.ts`)
+  const { body } = await callJson("GET", `/${bigId}`)
+  const sha = body.data.sha256 ?? (await db.queryOne("SELECT sha256 FROM user_models WHERE id = $1", [bigId])).sha256
+  await db.execute("UPDATE user_models SET kind = 'CHECKPOINT', base_model = 'ILLUSTRIOUS', recommended_settings = NULL, recommended_settings_auto_at = NULL WHERE id = $1", [bigId])
+  const metas = [1, 2, 3].map((seed) => ({ seed, sampler: "DPM++ 2M Karras", cfgScale: 6, steps: 25, clipSkip: 2, prompt: "masterpiece, best quality, 1girl", negativePrompt: "lowres, worst quality, bad anatomy, bad hands, text" }))
+  const fakeCivitai = async (url: string) => {
+    if (url.includes("/model-versions/by-hash/")) {
+      assert.ok(url.endsWith(sha))
+      return new Response(JSON.stringify({ id: 99, images: [] }))
+    }
+    if (url.includes("/images?modelVersionId=99")) return new Response(JSON.stringify({ items: metas.map((meta) => ({ meta })) }))
+    throw new Error(`unexpected ${url}`)
+  }
+  // 混雑中はやり直せるよう印を付けない
+  const busy = await fillRecommendedSettings({ db, fetch: async () => new Response("", { status: 429 }), limit: 50, now: fakeNow })
+  assert.equal(busy.filled, 0)
+  assert.equal((await db.queryOne("SELECT recommended_settings_auto_at AS a FROM user_models WHERE id = $1", [bigId])).a, null)
+  const result = await fillRecommendedSettings({ db, fetch: fakeCivitai, limit: 50, now: fakeNow })
+  assert.ok(result.filled >= 1)
+  const auto = (await callJson("GET", `/${bigId}`)).body.data.recommendedSettings
+  assert.equal(auto.source, "civitai")
+  assert.equal(auto.sampleCount, 3)
+  assert.equal(auto.sampler, "DPM++ 2M")
+  assert.equal(auto.scheduler, "Karras")
+  assert.equal(auto.qualityPrompt, "masterpiece, best quality")
+  // 編集画面からそのまま保存しても自動の印は残る
+  const same = await callJson("PATCH", `/${bigId}`, { userId: "a1", name: "名前だけ", recommendedSettings: { ...auto, source: "manual-attempt" } })
+  assert.equal(same.body.data.recommendedSettings.source, "civitai")
+  // 中身を変えたら登録者のもの
+  const edited = await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: { ...auto, negativePrompt: "my negative" } })
+  assert.equal(edited.body.data.recommendedSettings.source, undefined)
+  assert.equal(edited.body.data.recommendedSettings.negativePrompt, "my negative")
+  // 長すぎるプロンプトは 400
+  assert.equal((await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: { qualityPrompt: "x".repeat(2001) } })).status, 400)
+  // 消したら入れ直さない
+  await callJson("PATCH", `/${bigId}`, { userId: "a1", recommendedSettings: null })
+  await fillRecommendedSettings({ db, fetch: fakeCivitai, limit: 50, now: fakeNow })
+  assert.equal((await callJson("GET", `/${bigId}`)).body.data.recommendedSettings, null)
 })
 
 await t("GPU 側の sha256 が不一致なら同じファイルの READY をすべて DISABLED に", async () => {

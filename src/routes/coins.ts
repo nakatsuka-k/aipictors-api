@@ -3,7 +3,7 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { approveAmazonExchangeRequest, createAmazonExchangeRequest, listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { requireInternalAuth } from "../lib/auth"
-import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
+import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { adminAdjustCoins, applyCoinDelta, consumeCoins, ensureInitialCoinGrant, getAdminCoinHistory, getCoinSummary, getConsumedCoinBreakdownBySource } from "../lib/coins"
 import { runDailyCoinJob } from "../lib/daily-coins"
 import { getDb, getNow } from "../lib/db"
@@ -444,6 +444,11 @@ coinsRoutes.get("/support/summary", async (c) => {
       cumulativeReceivedCoins: summary.cumulativeReceivedCoins
     }
   });
+});
+coinsRoutes.get("/support/totals/:userId", async (c) => {
+  const db = await getDb(c.env);
+  const totals = await getSupportTotals({ db, userId: c.req.param("userId") });
+  return json({ error: null, data: totals });
 });
 coinsRoutes.get("/support/summary/:userId", async (c) => {
   const db = await getDb(c.env);

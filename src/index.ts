@@ -1,4 +1,5 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
+import { fillRecommendedSettings } from "./lib/user-model-recommendations";
 import { Hono as Hono2 } from "hono"
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
@@ -38,6 +39,19 @@ const scheduled = async (controller, env, ctx) => {
   ctx.waitUntil(
     (async () => {
       const db = await getDb(env);
+      // 5 分ごと: おすすめ設定のないチェックポイントに自動で入れる
+      if (controller?.cron === "*/5 * * * *") {
+        const result = await fillRecommendedSettings({
+          db,
+          fetch: (input, init) => fetch(input, init),
+          limit: 5,
+          now: Math.floor(Date.now() / 1000),
+        });
+        if (result.checked > 0) {
+          console.log(JSON.stringify({ event: "user_models.recommend.done", ...result }));
+        }
+        return;
+      }
       // 10:00 JST: 解約予約中であと 2〜3 日で終わる人へのお知らせ
       if (controller?.cron === "0 1 * * *") {
         const result = await sendCancelReminders(env, db, getStripeCustomerEmail);

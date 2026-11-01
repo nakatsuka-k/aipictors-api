@@ -197,6 +197,25 @@ export type UserModelRecommendedSettings = {
   cfgScale: number | null
   steps: number | null
   clipSkip: number | null
+  /** プロンプトの先頭に足す品質タグ */
+  qualityPrompt: string | null
+  negativePrompt: string | null
+  /** 自動で入れたもの（登録者が入れたものにはない）。civitai=作例から / base-model=ベースモデルの定番 */
+  source?: "civitai" | "base-model"
+  /** source=civitai のとき、集計した作例の数 */
+  sampleCount?: number
+}
+
+const USER_MODEL_RECOMMENDED_PROMPT_MAX = 2000
+
+const promptOrNull = (value: unknown, field: string) => {
+  if (value === undefined || value === null) return null
+  if (typeof value !== "string") throw bad("INVALID_INPUT", `${field} は文字列です`)
+  const text = value.trim()
+  if (text.length > USER_MODEL_RECOMMENDED_PROMPT_MAX) {
+    throw bad("INVALID_INPUT", `${field} は ${USER_MODEL_RECOMMENDED_PROMPT_MAX} 文字までです`)
+  }
+  return text === "" ? null : text
 }
 
 const intInRange = (value: unknown, min: number, max: number, field: string) => {
@@ -221,6 +240,8 @@ export const parseRecommendedSettings = (value: unknown): UserModelRecommendedSe
     cfgScale: intInRange(v.cfgScale, 1, 30, "recommendedSettings.cfgScale"),
     steps: intInRange(v.steps, 1, 50, "recommendedSettings.steps"),
     clipSkip: intInRange(v.clipSkip, 1, 12, "recommendedSettings.clipSkip"),
+    qualityPrompt: promptOrNull(v.qualityPrompt, "recommendedSettings.qualityPrompt"),
+    negativePrompt: promptOrNull(v.negativePrompt, "recommendedSettings.negativePrompt"),
   }
   return Object.values(settings).every((x) => x === null) ? null : settings
 }
@@ -228,7 +249,13 @@ export const parseRecommendedSettings = (value: unknown): UserModelRecommendedSe
 const readRecommendedSettings = (value: string | null | undefined): UserModelRecommendedSettings | null => {
   if (!value) return null
   try {
-    return parseRecommendedSettings(JSON.parse(value)) ?? null
+    const raw = JSON.parse(value)
+    const settings = parseRecommendedSettings(raw)
+    if (!settings) return null
+    // 自動で入れた印は登録者の入力からは受け取らない（保存時にサーバーが決める）
+    if (raw.source === "civitai" || raw.source === "base-model") settings.source = raw.source
+    if (typeof raw.sampleCount === "number") settings.sampleCount = raw.sampleCount
+    return settings
   } catch {
     return null
   }
@@ -903,6 +930,14 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
   const userId = requireUserId(input.userId)
   const row = await requireRow(db, id, { userId })
   const e = parseEditable(input)
+  // 他の項目だけ直したときは、自動で入れた印を残す（中身が変わったら登録者のもの）
+  const currentSettings = readRecommendedSettings(row.recommended_settings)
+  const withoutSource = (settings: UserModelRecommendedSettings | null | undefined) =>
+    settings ? parseRecommendedSettings({ ...settings, source: undefined, sampleCount: undefined }) : null
+  const isSettingsUnchanged =
+    e.recommendedSettings !== undefined &&
+    JSON.stringify(withoutSource(e.recommendedSettings)) === JSON.stringify(withoutSource(currentSettings))
+  const nextSettings = isSettingsUnchanged ? currentSettings : e.recommendedSettings
   const updated = await db.queryOne<UserModelRow>(
     `UPDATE user_models SET
         name = COALESCE($2, name),
@@ -915,7 +950,8 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
         thumbnail_url = CASE WHEN $9 THEN $10 ELSE thumbnail_url END,
         sample_image_urls = COALESCE($11, sample_image_urls),
         updated_at = $12,
-        recommended_settings = CASE WHEN $13 THEN $14 ELSE recommended_settings END
+        recommended_settings = CASE WHEN $13 THEN $14 ELSE recommended_settings END,
+        recommended_settings_auto_at = CASE WHEN $13 THEN COALESCE(recommended_settings_auto_at, $12) ELSE recommended_settings_auto_at END
       WHERE id = $1 AND status <> 'DELETED'
       RETURNING *`,
     [
@@ -932,7 +968,7 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
       e.sampleImageUrls ? JSON.stringify(e.sampleImageUrls) : null,
       now,
       e.recommendedSettings !== undefined,
-      e.recommendedSettings ? JSON.stringify(e.recommendedSettings) : null,
+      nextSettings ? JSON.stringify(nextSettings) : null,
     ],
   )
   if (!updated) throw new UserModelError(404, "NOT_FOUND", "モデルが見つかりません")

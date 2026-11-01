@@ -850,6 +850,28 @@ export var getSupportSummary = async (props) => {
       WHERE user_id = $2`,
     [weekStartDate, props.userId]
   );
+  // 累計の順位（自分より多い人の数 + 1）。まだ貢献・受取がなければ順位なし
+  const sentPtTotal = Number(totals?.sent_pt_total ?? 0);
+  const receivedPtTotal = Number(totals?.received_pt_total ?? 0);
+  const cumulativeSentRank =
+    sentPtTotal > 0 && props.userId !== CONTRIBUTION_RANKING_EXCLUDED_USER_ID
+      ? await props.db.queryOne(
+          `SELECT COUNT(*)::INTEGER + 1 AS rank
+             FROM coin_support_totals
+            WHERE sent_pt_total > $1
+              AND user_id <> $2`,
+          [sentPtTotal, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
+        )
+      : null;
+  const cumulativeReceivedRank =
+    receivedPtTotal > 0
+      ? await props.db.queryOne(
+          `SELECT COUNT(*)::INTEGER + 1 AS rank
+             FROM coin_support_totals
+            WHERE received_pt_total > $1`,
+          [receivedPtTotal]
+        )
+      : null;
   const availableWeekStartDates = await getSupportAvailableWeekStartDates(props.db);
   const receivedBreakdownRows = await props.db.query(
     `SELECT coin_type,
@@ -901,6 +923,8 @@ export var getSupportSummary = async (props) => {
     weeklyReceivedTransferCount: weeklyReceived?.transfer_count ?? 0,
     weeklySentRank: sentRank?.rank ?? null,
     weeklyReceivedRank: receivedRank?.rank ?? null,
+    cumulativeSentRank: cumulativeSentRank?.rank ?? null,
+    cumulativeReceivedRank: cumulativeReceivedRank?.rank ?? null,
     availableWeekStartDates,
     recentReceivedTransfers
   };
@@ -1017,4 +1041,17 @@ export var grantSupportCoinsAdmin = async (props) => {
     [weekStartDate, props.recipientUserId, amount, ptAmount, now]
   );
   return { granted: amount, ptAmount, weekStartDate };
+};
+// 累計の貢献・受取だけ（実績の判定で 5 分おきに読むので軽くする）
+export var getSupportTotals = async (props) => {
+  const totals = await props.db.queryOne(
+    `SELECT sent_pt_total, received_pt_total
+       FROM coin_support_totals
+      WHERE user_id = $1`,
+    [props.userId]
+  );
+  return {
+    cumulativeSentPt: Number(totals?.sent_pt_total ?? 0),
+    cumulativeReceivedPt: Number(totals?.received_pt_total ?? 0),
+  };
 };
