@@ -228,65 +228,77 @@ await t("累計の順位: 多い人の数 + 1。0 なら順位なし。運営ア
 const { getGeminiAllowance } = await import(`${API}/lib/gemini-allowance.ts`)
 const grantPremium = (u: string, n: number) => coins.applyCoinDelta({ db, userId: u, freeDelta: 0, premiumDelta: n, kind: "GRANT", reason: "test" })
 
-await t("Gemini の枠: 適用前はフリーコインから使える", async () => {
+await t("Gemini の枠: 適用前はフリーコインから使え、その分は枠に数えない", async () => {
   fakeNow = Date.parse("2026-11-02T23:00:00+09:00")
   await addSub("g1", "LITE", "paid", 40 * 86400)
   await coins.ensureInitialCoinGrant({ db, userId: "g1", planType: "LITE" })
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 6; i++) {
     const r = await coins.consumeCoins({ db, userId: "g1", amount: 50, reason: "image-generation:gemini-2.5-flash-image" })
     assert.equal(r.freeSpent, 50)
   }
   const a = await getGeminiAllowance({ db, userId: "g1" })
   assert.equal(a.isEnforced, false)
-  assert.equal(a.used, 150)
+  fakeNow = Date.parse("2026-11-03T00:00:10+09:00")
+  const b = await getGeminiAllowance({ db, userId: "g1" })
+  assert.equal(b.isEnforced, true)
+  assert.equal(b.used, 0)
+  assert.equal(b.remaining, 250)
 })
 
-await t("Gemini の枠: 適用後は枠を超えた分だけプレミアムコインを使い、足りなければ失敗して何も減らない", async () => {
-  fakeNow = Date.parse("2026-11-03T00:00:10+09:00")
+await t("Gemini の枠: 枠を超えた分だけプレミアムコインを使い、足りなければ失敗して何も減らない", async () => {
+  fakeNow = Date.parse("2026-11-09T00:00:10+09:00")
   await addSub("g2", "STANDARD", "paid", 40 * 86400)
   await coins.ensureInitialCoinGrant({ db, userId: "g2", planType: "STANDARD" })
   await grantPremium("g2", 120)
   const reason = "image-generation:gemini-2.5-flash-image"
   const nb2 = "image-generation:gemini-3.1-flash-image-preview"
-  for (let i = 0; i < 3; i++) {
-    const r = await coins.consumeCoins({ db, userId: "g2", amount: 50, reason })
-    assert.deepEqual([r.freeSpent, r.premiumSpent], [50, 0])
+  // 週の枠 1000 のうち 950 まで使う（毎日のフリーコインが足りるように日をまたぐ）
+  for (let day = 0; day < 2; day++) {
+    fakeNow = Date.parse(`2026-11-${String(9 + day).padStart(2, "0")}T12:00:00+09:00`)
+    await coins.ensureInitialCoinGrant({ db, userId: "g2", planType: "STANDARD" })
+    await coins.applyCoinDelta({ db, userId: "g2", freeDelta: 1000, premiumDelta: 0, kind: "GRANT", reason: "test" })
+    for (let i = 0; i < (day === 0 ? 10 : 9); i++) {
+      const r = await coins.consumeCoins({ db, userId: "g2", amount: 50, reason })
+      assert.deepEqual([r.freeSpent, r.premiumSpent], [50, 0])
+    }
   }
   assert.equal((await getGeminiAllowance({ db, userId: "g2" })).remaining, 50)
   // 枠が 50 残っているところに 100 コイン: 50 はフリー、50 はプレミアム
   const mixed = await coins.consumeCoins({ db, userId: "g2", amount: 100, reason: nb2 })
   assert.deepEqual([mixed.freeSpent, mixed.premiumSpent], [50, 50])
   assert.equal((await getGeminiAllowance({ db, userId: "g2" })).remaining, 0)
-  // 枠を使い切ったあとはプレミアムのみ。フリーコインは 800 枚残っていても使わない
+  // 枠を使い切ったあとはプレミアムのみ。フリーコインが残っていても使わない
   const paid = await coins.consumeCoins({ db, userId: "g2", amount: 50, reason })
   assert.deepEqual([paid.freeSpent, paid.premiumSpent], [0, 50])
   const before = await coins.getCoinSummary(db, "g2", {})
-  assert.equal(before.freeBalance, 800)
+  assert.ok(before.freeBalance > 0)
   assert.equal(before.premiumBalance, 20)
   const short = await coins.consumeCoins({ db, userId: "g2", amount: 50, reason })
   assert.equal(short.ok, false)
   const after = await coins.getCoinSummary(db, "g2", {})
-  assert.deepEqual([after.freeBalance, after.premiumBalance], [800, 20])
+  assert.deepEqual([after.freeBalance, after.premiumBalance], [before.freeBalance, 20])
   // 普通のモデルはフリーコインで今までどおり作れる
   const sd = await coins.consumeCoins({ db, userId: "g2", amount: 40, reason: "image-generation:standard" })
   assert.deepEqual([sd.freeSpent, sd.premiumSpent], [40, 0])
 })
 
-await t("Gemini の枠: 翌日 0 時（日本時間）に戻り、プランごとの量になる", async () => {
-  fakeNow = Date.parse("2026-12-01T23:59:00+09:00")
+await t("Gemini の枠: 月曜 0 時（日本時間）に戻り、プランごとの量になる", async () => {
+  fakeNow = Date.parse("2026-11-15T23:59:00+09:00") // 日曜
   await addSub("g3", "PREMIUM", "paid", 40 * 86400)
   await addSub("g4", "LITE", "paid", 40 * 86400)
-  assert.equal((await getGeminiAllowance({ db, userId: "g3" })).dailyLimit, 400)
-  assert.equal((await getGeminiAllowance({ db, userId: "g4" })).dailyLimit, 50)
-  assert.equal((await getGeminiAllowance({ db, userId: "nobody" })).dailyLimit, 0)
+  assert.equal((await getGeminiAllowance({ db, userId: "g3" })).weeklyLimit, 2000)
+  assert.equal((await getGeminiAllowance({ db, userId: "g4" })).weeklyLimit, 250)
+  assert.equal((await getGeminiAllowance({ db, userId: "nobody" })).weeklyLimit, 0)
   await coins.ensureInitialCoinGrant({ db, userId: "g3", planType: "PREMIUM" })
   await coins.consumeCoins({ db, userId: "g3", amount: 100, reason: "image-generation:gemini-3.1-flash-image-preview" })
-  assert.equal((await getGeminiAllowance({ db, userId: "g3" })).used, 100)
-  fakeNow = Date.parse("2026-12-02T00:00:05+09:00")
+  const sunday = await getGeminiAllowance({ db, userId: "g3" })
+  assert.equal(sunday.used, 100)
+  assert.equal(sunday.resetsAt, Date.parse("2026-11-16T00:00:00+09:00") / 1000)
+  fakeNow = Date.parse("2026-11-16T00:00:05+09:00") // 月曜
   const a = await getGeminiAllowance({ db, userId: "g3" })
   assert.equal(a.used, 0)
-  assert.equal(a.remaining, 400)
-  assert.equal(a.resetsAt, Date.parse("2026-12-03T00:00:00+09:00") / 1000)
+  assert.equal(a.remaining, 2000)
+  assert.equal(a.resetsAt, Date.parse("2026-11-23T00:00:00+09:00") / 1000)
 })
 
 console.log(`\n${passed} passed`)

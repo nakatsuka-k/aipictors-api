@@ -659,7 +659,7 @@ export var consumeCoins = async (props) => {
     source: "consume",
     recordPendingEvents: true
   });
-  // Gemini はフリーコインから使える量に 1 日の枠がある（超えた分はプレミアムコイン）
+  // Gemini はフリーコインから使える量に週の枠がある（超えた分はプレミアムコイン）
   let maxFreeSpend = amount;
   if (isGeminiCoinReason(props.reason)) {
     const allowance = await getGeminiAllowance({ db: props.db, userId: props.userId, now });
