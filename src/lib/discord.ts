@@ -43,30 +43,28 @@ const TIER_COLORS = {
   7: 0xff4d6d,
 }
 
-/** レベルのロール。到達したレベルで一番上のものを付ける */
-export const LEVEL_ROLES = [
+/** レベルのバッジの色。そのレベルから上がこの色になる */
+const LEVEL_TIERS = [
   { level: 1, tier: 1 },
-  { level: 5, tier: 1 },
   { level: 10, tier: 2 },
-  { level: 15, tier: 2 },
   { level: 20, tier: 3 },
-  { level: 30, tier: 3 },
   { level: 40, tier: 4 },
-  { level: 50, tier: 4 },
   { level: 60, tier: 5 },
-  { level: 70, tier: 5 },
   { level: 80, tier: 6 },
-  { level: 90, tier: 6 },
   { level: 100, tier: 7 },
 ]
 
-export const toLevelRole = (level) => {
-  let matched = LEVEL_ROLES[0]
-  for (const role of LEVEL_ROLES) {
-    if (level >= role.level) matched = role
+export const toLevelTier = (level) => {
+  let matched = LEVEL_TIERS[0].tier
+  for (const item of LEVEL_TIERS) {
+    if (level >= item.level) matched = item.tier
   }
   return matched
 }
+
+/** 作ったばかりのレベルのロールは、付ける前に消さないようしばらく残す */
+const LEVEL_ROLE_GRACE_SECONDS = 60 * 60
+const LEVEL_ROLE_REMOVE_PER_BATCH = 10
 
 /** ニックネームから「✦Lv.42」を外す */
 export const stripNickSuffix = (nick) => (nick ?? "").replace(NICK_SUFFIX_PATTERN, "")
@@ -213,18 +211,27 @@ const fetchRoleIcon = async (env, path) => {
   return `data:image/png;base64,${btoa(binary)}`
 }
 
-/** 新しいロールを、ボットのロールのすぐ下に動かす（実績のアイコンをレベルより優先して見せるため） */
-const moveRoleBelowBot = async (env, roleId) => {
-  const [roles, botMember] = await Promise.all([
+/**
+ * 新しいロールを、ボットのロールのすぐ下に動かす。
+ * レベルのロールは実績のロールより下に置く（アイコンは一番上のロールのものが出るので、実績を優先して見せるため）
+ */
+const moveRoleBelowBot = async (env, db, roleId, isBelowAchievements) => {
+  const [roles, botMember, achievementRows] = await Promise.all([
     botFetch(env, { path: `/guilds/${DISCORD_GUILD_ID}/roles` }),
     botFetch(env, { path: `/guilds/${DISCORD_GUILD_ID}/members/${DISCORD_BOT_USER_ID}` }),
+    isBelowAchievements ? db.query("SELECT role_id FROM discord_roles WHERE role_key LIKE 'achievement:%'") : [],
   ])
   const byId = new Map(roles.map((role) => [role.id, role]))
   const top = Math.max(...botMember.roles.map((id) => byId.get(id)?.position ?? 0))
+  const achievementPositions = achievementRows
+    .map((row) => byId.get(row.role_id)?.position)
+    .filter((position) => position !== undefined)
+  // 下から動かすと間のロールが 1 つずつ下がるので、1 つ下の番号を指定するとそのロールのすぐ下に入る
+  const ceiling = achievementPositions.length > 0 ? Math.min(...achievementPositions) : top
   await botFetch(env, {
     method: "PATCH",
     path: `/guilds/${DISCORD_GUILD_ID}/roles`,
-    body: [{ id: roleId, position: Math.max(1, top - 1) }],
+    body: [{ id: roleId, position: Math.max(1, ceiling - 1) }],
     reason: "Aipictors 連携のロール",
   })
 }
@@ -244,7 +251,7 @@ const createRole = async (env, db, props) => {
     },
     reason: "Aipictors 連携のロール",
   })
-  await moveRoleBelowBot(env, role.id)
+  await moveRoleBelowBot(env, db, role.id, props.key.startsWith("level:"))
   await db.execute(
     `INSERT INTO discord_roles(role_key, role_id, name, created_at, last_used_at)
      VALUES ($1, $2, $3, $4, $4)
@@ -264,15 +271,13 @@ const ensureRole = async (env, db, props) => {
   return createRole(env, db, props)
 }
 
-const ensureLevelRole = (env, db, level) => {
-  const role = toLevelRole(level)
-  return ensureRole(env, db, {
-    key: levelRoleKey(role.level),
-    name: `Lv.${role.level}`,
-    tier: role.tier,
-    iconPath: `discord/level/${role.level}.png`,
+const ensureLevelRole = (env, db, level) =>
+  ensureRole(env, db, {
+    key: levelRoleKey(level),
+    name: `Lv.${level}`,
+    tier: toLevelTier(level),
+    iconPath: `discord/level/${level}.png`,
   })
-}
 
 const ensureAchievementRole = async (env, db, achievement) => {
   const key = achievementRoleKey(achievement.key)
@@ -314,6 +319,41 @@ export const removeUnusedAchievementRoles = async (env, db, limit) => {
     await db.execute("DELETE FROM discord_roles WHERE role_key = $1", [row.role_key])
   }
   return unused.length
+}
+
+/** 誰のレベルでもなくなったロールを消す。レベルごとに作るので、残すとロールの上限（250 個）に近づいていく */
+export const removeUnusedLevelRoles = async (env, db, now = getNow()) => {
+  const unused = await db.query(
+    `SELECT r.role_key, r.role_id
+       FROM discord_roles r
+      WHERE r.role_key LIKE 'level:%'
+        AND r.last_used_at < $1
+        AND NOT EXISTS (
+          SELECT 1 FROM discord_links l
+           WHERE 'level:' || l.level = r.role_key
+             AND l.in_guild = TRUE
+             AND l.is_achievement_visible IS NOT FALSE
+        )
+      ORDER BY r.last_used_at ASC
+      LIMIT $2`,
+    [now - LEVEL_ROLE_GRACE_SECONDS, LEVEL_ROLE_REMOVE_PER_BATCH],
+  )
+  let removed = 0
+  for (const row of unused) {
+    try {
+      await botFetch(env, {
+        method: "DELETE",
+        path: `/guilds/${DISCORD_GUILD_ID}/roles/${row.role_id}`,
+        reason: "Aipictors 連携: 使われていないレベルのロール",
+      })
+    } catch (error) {
+      // 消せなかったものは次回に回す（記録を消すと Discord に残ったままになる）
+      if (!(error instanceof DiscordApiError) || error.status !== 404) continue
+    }
+    await db.execute("DELETE FROM discord_roles WHERE role_key = $1", [row.role_key])
+    removed += 1
+  }
+  return removed
 }
 
 /* ------------------------------------------------------------------ */
@@ -423,6 +463,12 @@ export const syncDiscordLink = async (env, db, link) => {
           method: "PUT",
           path: `/guilds/${DISCORD_GUILD_ID}/members/${link.discord_user_id}/roles/${roleId}`,
           reason: "Aipictors 連携",
+        }).catch(async (error) => {
+          // Discord 側でロールが消えていたら記録を消す。次の同期で作り直す
+          if (error instanceof DiscordApiError && error.code === 10011) {
+            await db.execute("DELETE FROM discord_roles WHERE role_id = $1", [roleId])
+          }
+          throw error
         })
       }
     }
@@ -525,6 +571,9 @@ export const runDiscordSyncBatch = async (env, db, limit) => {
       console.log(JSON.stringify({ event: "discord.sync.failed", message: String(error?.message ?? error) }))
     }
   }
+  await removeUnusedLevelRoles(env, db).catch((error) => {
+    console.log(JSON.stringify({ event: "discord.level_roles.remove_failed", message: String(error?.message ?? error) }))
+  })
   return { synced, failed }
 }
 
@@ -771,17 +820,8 @@ export const setupDiscordIntegration = async (env, db) => {
   })
   }
 
-  // 下のレベルから順に、ボットのすぐ下へ入れる（上のレベルほど上に並ぶ）
-  const created = []
-  for (const role of LEVEL_ROLES) {
-    const key = levelRoleKey(role.level)
-    const row = await db.queryOne("SELECT role_id FROM discord_roles WHERE role_key = $1", [key])
-    if (!row) {
-      await ensureLevelRole(env, db, role.level)
-      created.push(role.level)
-    }
-  }
-  return { created }
+  // レベルのロールは、そのレベルの人が出たときに作る
+  return { ok: true }
 }
 
 /* ------------------------------------------------------------------ */

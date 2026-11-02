@@ -40,6 +40,8 @@ const world: any = {
   dms: [] as any[],
   roleConnections: [] as any[],
   created: 0,
+  rolePatches: [] as any[],
+  deletedRoles: [] as string[],
   revoked: 0,
   tokenCalls: [] as string[],
   tokenInvalid: false,
@@ -68,6 +70,7 @@ const fakeFetch = async (input: string, init: any = {}) => {
   if (path.startsWith(`/guilds/${G}/members/`)) {
     const [, , , , id, , roleId] = path.split("/")
     if (id !== world.me.id || world.member === null) return ok({ message: "Unknown Member", code: 10007 }, 404)
+    if (roleId && method === "PUT" && world.unknownRoles?.includes(roleId)) return ok({ message: "Unknown Role", code: 10011 }, 404)
     if (roleId && method === "PUT") { world.member.roles.push(roleId); return ok(null, 204) }
     if (roleId && method === "DELETE") { world.member.roles = world.member.roles.filter((r: string) => r !== roleId); return ok(null, 204) }
     if (method === "PATCH") {
@@ -84,8 +87,18 @@ const fakeFetch = async (input: string, init: any = {}) => {
     world.roles.push(role)
     return ok(role)
   }
+  if (path === `/guilds/${G}/roles` && method === "PATCH") {
+    world.rolePatches.push(...body)
+    for (const item of body) world.roles.find((r: any) => r.id === item.id).position = item.position
+    return ok(world.roles)
+  }
   if (path === `/guilds/${G}/roles`) return ok(world.roles)
-  if (path.startsWith(`/guilds/${G}/roles/`) && method === "DELETE") return ok(null, 204)
+  if (path.startsWith(`/guilds/${G}/roles/`) && method === "DELETE") {
+    const roleId = path.split("/").at(-1)
+    world.deletedRoles.push(roleId)
+    world.roles = world.roles.filter((r: any) => r.id !== roleId)
+    return ok(null, 204)
+  }
   if (path.startsWith("/users/@me/applications/")) {
     if (world.tokenInvalid) return ok({ message: "401", code: 0 }, 401)
     world.roleConnections.push({ auth: init.headers.authorization, ...body })
@@ -114,9 +127,10 @@ const balance = async (u: string) => (await db.queryOne("SELECT COALESCE(SUM(rem
 await test("レベルのロールを決める・古い ✦Lv を外せる", async () => {
   assert.equal(d.stripNickSuffix("きりと ✦Lv.42"), "きりと")
   assert.equal(d.stripNickSuffix("Lv.42の人"), "Lv.42の人")
-  assert.equal(d.toLevelRole(1).level, 1)
-  assert.equal(d.toLevelRole(42).level, 40)
-  assert.equal(d.toLevelRole(250).level, 100)
+  assert.equal(d.toLevelTier(1), 1)
+  assert.equal(d.toLevelTier(9), 1)
+  assert.equal(d.toLevelTier(43), 4)
+  assert.equal(d.toLevelTier(250), 7)
 })
 
 await test("連携: トークンは暗号化、ボーナス、ロールとニックネームが付く", async () => {
@@ -157,6 +171,57 @@ await test("レベルが上がるとロールが入れ替わり、関係ない�
   assert.ok(world.member.roles.includes("booster"))
   assert.ok(world.member.roles.includes("jp"))
   assert.equal(world.member.roles.length, 3)
+})
+
+await test("バッジは今のレベルの数字: 43 なら Lv.43 のロールと 43 のアイコン", async () => {
+  world.summary = { ...world.summary, level: 43 }
+  const urls: string[] = []
+  const recording = { ...env, __fetch: (input: string, init: any) => { urls.push(String(input)); return fakeFetch(input, init) } }
+  await d.syncDiscordLinkByUserId(recording, db, "1")
+  const role = world.roles.find((r: any) => r.name === "Lv.43")
+  assert.ok(role, "Lv.43 のロールができる")
+  assert.ok(world.member.roles.includes(role.id))
+  assert.ok(urls.some((url) => url.endsWith("/discord/level/43.png")))
+  const levelRoles = world.member.roles.filter((id: string) => world.roles.find((r: any) => r.id === id)?.name?.startsWith("Lv."))
+  assert.deepEqual(levelRoles, [role.id], "レベルのロールは 1 つだけ")
+})
+
+await test("新しいレベルのロールは実績のロールより下に入る", async () => {
+  await d.updateDiscordSettings(db, { userId: "1", highlightKey: "gold-one" })
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  const achievement = world.roles.find((r: any) => r.name === "🏅金の実績")
+  world.summary = { ...world.summary, level: 44 }
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  const level = world.roles.find((r: any) => r.name === "Lv.44")
+  const patch = world.rolePatches.findLast((item: any) => item.id === level.id)
+  assert.equal(patch.position, achievement.position - 1)
+  await d.updateDiscordSettings(db, { userId: "1", highlightKey: null })
+  await d.syncDiscordLinkByUserId(env, db, "1")
+})
+
+await test("誰も使わなくなったレベルのロールは消す。作ったばかりと使っているものは残す", async () => {
+  const lv43 = world.roles.find((r: any) => r.name === "Lv.43")
+  const lv44 = world.roles.find((r: any) => r.name === "Lv.44")
+  assert.equal(await d.removeUnusedLevelRoles(env, db), 0, "作ったばかりは残す")
+  assert.ok((await d.removeUnusedLevelRoles(env, db, Math.floor(Date.now() / 1000) + 7200)) >= 1)
+  assert.ok(world.deletedRoles.includes(lv43.id))
+  assert.ok(!world.deletedRoles.includes(lv44.id), "今のレベルのロールは消さない")
+  assert.ok(world.member.roles.includes(lv44.id))
+  assert.equal(await db.queryOne("SELECT role_id FROM discord_roles WHERE role_key = 'level:43'"), null)
+})
+
+await test("Discord 側でロールが消えていたら、記録を消して次の同期で作り直す", async () => {
+  world.summary = { ...world.summary, level: 45 }
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  const stale = world.roles.find((r: any) => r.name === "Lv.45")
+  world.member.roles = world.member.roles.filter((id: string) => id !== stale.id)
+  world.unknownRoles = [stale.id]
+  await assert.rejects(d.syncDiscordLinkByUserId(env, db, "1"))
+  world.unknownRoles = []
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  const fresh = world.roles.findLast((r: any) => r.name === "Lv.45")
+  assert.notEqual(fresh.id, stale.id)
+  assert.ok(world.member.roles.includes(fresh.id))
 })
 
 await test("以前付けた ✦Lv は外す。ニックネームを変えられなくても、ほかは止めない", async () => {
