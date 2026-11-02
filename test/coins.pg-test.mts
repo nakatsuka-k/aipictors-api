@@ -228,8 +228,8 @@ await t("累計の順位: 多い人の数 + 1。0 なら順位なし。運営ア
 const { getGeminiAllowance } = await import(`${API}/lib/gemini-allowance.ts`)
 const grantPremium = (u: string, n: number) => coins.applyCoinDelta({ db, userId: u, freeDelta: 0, premiumDelta: n, kind: "GRANT", reason: "test" })
 
-await t("Gemini の枠: 12/1 より前はこれまでどおりフリーコインから使える", async () => {
-  fakeNow = Date.parse("2026-11-30T23:00:00+09:00")
+await t("Gemini の枠: 適用前はフリーコインから使える", async () => {
+  fakeNow = Date.parse("2026-11-02T23:00:00+09:00")
   await addSub("g1", "LITE", "paid", 40 * 86400)
   await coins.ensureInitialCoinGrant({ db, userId: "g1", planType: "LITE" })
   for (let i = 0; i < 3; i++) {
@@ -241,8 +241,8 @@ await t("Gemini の枠: 12/1 より前はこれまでどおりフリーコイン
   assert.equal(a.used, 150)
 })
 
-await t("Gemini の枠: 12/1 からは枠を超えた分だけプレミアムコインを使い、足りなければ失敗して何も減らない", async () => {
-  fakeNow = Date.parse("2026-12-01T00:00:10+09:00")
+await t("Gemini の枠: 適用後は枠を超えた分だけプレミアムコインを使い、足りなければ失敗して何も減らない", async () => {
+  fakeNow = Date.parse("2026-11-03T00:00:10+09:00")
   await addSub("g2", "STANDARD", "paid", 40 * 86400)
   await coins.ensureInitialCoinGrant({ db, userId: "g2", planType: "STANDARD" })
   await grantPremium("g2", 120)

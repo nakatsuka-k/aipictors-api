@@ -14,8 +14,8 @@ export var geminiDailyAllowanceByPlan = {
   PREMIUM: 400
 };
 
-/** この時刻（2026-12-01 00:00 JST）から枠を適用する。それまでは数えるだけ */
-export var geminiAllowanceEnforcedFrom = Date.UTC(2026, 10, 30, 15, 0, 0) / 1e3;
+/** この時刻（2026-11-03 00:00 JST）から枠を適用する */
+export var geminiAllowanceEnforcedFrom = Date.UTC(2026, 10, 2, 15, 0, 0) / 1e3;
 
 export var geminiCoinReasonPrefix = "image-generation:gemini-";
 
