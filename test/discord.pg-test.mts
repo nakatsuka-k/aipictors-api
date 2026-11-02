@@ -173,6 +173,37 @@ await test("レベルが上がるとロールが入れ替わり、関係ない�
   assert.equal(world.member.roles.length, 3)
 })
 
+await test("隠し実績はロールにせず、選んでいたら外す。お祝いにも出さない", async () => {
+  const achievements = world.achievements
+  // 他の人から見た隠し実績は hidden- のキーで返る
+  world.achievements = [...achievements, { key: "hidden-abc", name: "???", tier: 3, isUnlocked: true, isHidden: true, unlockedAt: 9999999999 }]
+  await d.updateDiscordSettings(db, { userId: "1", highlightKey: "secret-real-key" })
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  assert.ok(!world.roles.some((r: any) => r.name === "🏅???"))
+  assert.equal((await db.queryOne("SELECT highlight_key FROM discord_links WHERE user_id = '1'")).highlight_key, null)
+  // キーが一致しても隠し実績ならロールにしない
+  await d.updateDiscordSettings(db, { userId: "1", highlightKey: "hidden-abc" })
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  assert.ok(!world.roles.some((r: any) => r.name === "🏅???"))
+  await db.execute("UPDATE discord_links SET celebrate = TRUE, celebrated_until = 0 WHERE user_id = '1'")
+  const posted = world.messages.length
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  assert.ok(world.messages.slice(posted).every((m: any) => !JSON.stringify(m).includes("???")))
+  await db.execute("UPDATE discord_links SET celebrate = FALSE WHERE user_id = '1'")
+  world.achievements = achievements
+})
+
+await test("誰も選んでいない実績のロールは消す", async () => {
+  await d.updateDiscordSettings(db, { userId: "1", highlightKey: "gold-one" })
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  const role = world.roles.find((r: any) => r.name === "🏅金の実績")
+  assert.equal(await d.removeUnusedAchievementRoles(env, db, 0), 0, "選ばれている間は残す")
+  await d.updateDiscordSettings(db, { userId: "1", highlightKey: null })
+  await d.syncDiscordLinkByUserId(env, db, "1")
+  assert.equal(await d.removeUnusedAchievementRoles(env, db, 0), 1)
+  assert.ok(world.deletedRoles.includes(role.id))
+})
+
 await test("バッジは今のレベルの数字: 43 なら Lv.43 のロールと 43 のアイコン", async () => {
   world.summary = { ...world.summary, level: 43 }
   const urls: string[] = []

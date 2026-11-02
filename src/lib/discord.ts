@@ -442,9 +442,13 @@ export const syncDiscordLink = async (env, db, link) => {
     const desired = new Set()
     if (state.isVisible) {
       desired.add(await ensureLevelRole(env, db, state.level))
+      // 公開の情報で見つからない実績（隠し実績は他の人には名前もキーも返らない）はロールにしない。
+      // ロール名でネタバレになるので、選んでいたら選択も外す
       const highlight = state.unlocked.find((item) => item.key === link.highlight_key)
-      if (highlight) {
+      if (highlight && !highlight.isHidden) {
         desired.add(await ensureAchievementRole(env, db, highlight))
+      } else if (link.highlight_key) {
+        await db.execute("UPDATE discord_links SET highlight_key = NULL WHERE user_id = $1", [link.user_id])
       }
     }
     const managedIds = new Set(managed.map((row) => row.role_id))
@@ -573,6 +577,10 @@ export const runDiscordSyncBatch = async (env, db, limit) => {
   }
   await removeUnusedLevelRoles(env, db).catch((error) => {
     console.log(JSON.stringify({ event: "discord.level_roles.remove_failed", message: String(error?.message ?? error) }))
+  })
+  // 誰も選ばなくなった実績のロールは残さない（隠し実績の名前のものが残らないように）
+  await removeUnusedAchievementRoles(env, db, 0).catch((error) => {
+    console.log(JSON.stringify({ event: "discord.achievement_roles.remove_failed", message: String(error?.message ?? error) }))
   })
   return { synced, failed }
 }
