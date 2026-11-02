@@ -4,6 +4,7 @@ import { array, boolean, literal, nullable, number, object, optional, safeParse,
 import { approveAmazonExchangeRequest, createAmazonExchangeRequest, listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
+import { getGeminiAllowance } from "../lib/gemini-allowance";
 import { adminAdjustCoins, applyCoinDelta, consumeCoins, ensureInitialCoinGrant, getAdminCoinHistory, getCoinSummary, getConsumedCoinBreakdownBySource } from "../lib/coins"
 import { runDailyCoinJob } from "../lib/daily-coins"
 import { getDb, getNow } from "../lib/db"
@@ -116,6 +117,11 @@ coinsRoutes.get("/admin-history", async (c) => {
     limit
   });
   return json({ error: null, data: result });
+});
+coinsRoutes.get("/gemini-allowance/:userId", async (c) => {
+  const db = await getDb(c.env);
+  const allowance = await getGeminiAllowance({ db, userId: c.req.param("userId") });
+  return json({ error: null, data: allowance });
 });
 coinsRoutes.get("/:userId", async (c) => {
   const db = await getDb(c.env);

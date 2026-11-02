@@ -1,6 +1,7 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { coinLockKey, getNow } from "./db"
 import { grantDailyCoinsBatch, resolveCoinPlanType, takePendingCoinEvents } from "./daily-coins"
+import { getGeminiAllowance, isGeminiCoinReason } from "./gemini-allowance"
 export var initialFreeCoinsByPlan = {
   FREE: 100,
   LITE: 500,
@@ -658,6 +659,14 @@ export var consumeCoins = async (props) => {
     source: "consume",
     recordPendingEvents: true
   });
+  // Gemini はフリーコインから使える量に 1 日の枠がある（超えた分はプレミアムコイン）
+  let maxFreeSpend = amount;
+  if (isGeminiCoinReason(props.reason)) {
+    const allowance = await getGeminiAllowance({ db: props.db, userId: props.userId, now });
+    if (allowance.isEnforced) {
+      maxFreeSpend = Math.min(amount, allowance.remaining);
+    }
+  }
   const result = await props.db.lockedQueryOne(
     [coinLockKey(props.userId)],
     `WITH ensured AS (
@@ -676,9 +685,9 @@ export var consumeCoins = async (props) => {
       ),
       free_updates AS (
         SELECT id,
-               LEAST(remaining, GREATEST($2 - (cumulative - remaining), 0))::INTEGER AS spend
+               LEAST(remaining, GREATEST($6::INTEGER - (cumulative - remaining), 0))::INTEGER AS spend
           FROM free_candidates
-         WHERE GREATEST($2 - (cumulative - remaining), 0) > 0
+         WHERE GREATEST($6::INTEGER - (cumulative - remaining), 0) > 0
       ),
       free_total AS (
         SELECT COALESCE(SUM(spend), 0)::INTEGER AS free_spend
@@ -780,7 +789,8 @@ export var consumeCoins = async (props) => {
       amount,
       now,
       props.reason ?? null,
-      props.source ?? null
+      props.source ?? null,
+      maxFreeSpend
     ]
   );
   if (!result?.ok) {
