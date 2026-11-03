@@ -1,0 +1,270 @@
+{
+  "healthz": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "notFound": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "unauthorized": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "coins summary empty": {
+    "queries": 4,
+    "rounds": 2
+  },
+  "coins grant": {
+    "queries": 5,
+    "rounds": 3
+  },
+  "coins summary ledger": {
+    "queries": 6,
+    "rounds": 2
+  },
+  "coins invalid paging": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "coins ensure-initial-grant free": {
+    "queries": 9,
+    "rounds": 3
+  },
+  "coins ensure-initial-grant again": {
+    "queries": 7,
+    "rounds": 3
+  },
+  "coins consume": {
+    "queries": 7,
+    "rounds": 5
+  },
+  "coins consume insufficient": {
+    "queries": 4,
+    "rounds": 4
+  },
+  "coins consume invalid": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "coins consume-breakdown": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "coins bulk-adjust": {
+    "queries": 10,
+    "rounds": 6
+  },
+  "coins gemini-allowance": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "coins admin-history": {
+    "queries": 6,
+    "rounds": 6
+  },
+  "coins daily runs": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "coins daily run": {
+    "queries": 5,
+    "rounds": 5
+  },
+  "support transfer": {
+    "queries": 9,
+    "rounds": 5
+  },
+  "support transfer premium anon": {
+    "queries": 9,
+    "rounds": 5
+  },
+  "support to self": {
+    "queries": 7,
+    "rounds": 3
+  },
+  "support rankings": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "support rankings sent": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "support rankings recipient": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "support period weekly": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "support period monthly": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "support weeks": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "support recent": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "support summary": {
+    "queries": 9,
+    "rounds": 2
+  },
+  "support totals": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "public rankings": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "support revert": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "grant-support": {
+    "queries": 3,
+    "rounds": 3
+  },
+  "amazon list": {
+    "queries": 4,
+    "rounds": 2
+  },
+  "amazon admin": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "sub current none": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "sub upsert": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "sub current": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "sub by nanoid": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "sub has previous": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "sub unpaid": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "sub disable invalid": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "points get": {
+    "queries": 2,
+    "rounds": 2
+  },
+  "points grant": {
+    "queries": 3,
+    "rounds": 3
+  },
+  "points consume": {
+    "queries": 3,
+    "rounds": 3
+  },
+  "admin pricing": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "admin pricing unauthorized": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "tasks create": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "tasks by nanoid": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "tasks count": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "tasks cost": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "tasks list": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "tasks cancelable": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "results list": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "results count": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "results protected": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "reserved latest": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "reserved count": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "models list empty": {
+    "queries": 2,
+    "rounds": 1
+  },
+  "models create": {
+    "queries": 6,
+    "rounds": 5
+  },
+  "models mine": {
+    "queries": 3,
+    "rounds": 1
+  },
+  "models bad id": {
+    "queries": 0,
+    "rounds": 0
+  },
+  "models reports": {
+    "queries": 1,
+    "rounds": 1
+  },
+  "support thread": {
+    "queries": 6,
+    "rounds": 6
+  },
+  "support unread": {
+    "queries": 6,
+    "rounds": 6
+  },
+  "support admin tickets": {
+    "queries": 8,
+    "rounds": 8
+  },
+  "email unsubscribe invalid": {
+    "queries": 0,
+    "rounds": 0
+  }
+}

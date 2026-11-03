@@ -1,43 +1,11 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
+import { app } from "./app"
 import { fillRecommendedSettings } from "./lib/user-model-recommendations";
-import { Hono as Hono2 } from "hono"
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
 import { getDb, getNow } from "./lib/db"
 import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
-import { json } from "./lib/json"
-import { adminRoutes } from "./routes/admin"
-import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
-import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
-import { discordBotRoutes, discordRoutes } from "./routes/discord"
-import { imageGenerationRoutes } from "./routes/image-generation"
-import { pointsRoutes } from "./routes/points"
-import { stripeRoutes } from "./routes/stripe"
-import { getStripeCustomerEmail, subscriptionRoutes } from "./routes/subscriptions"
-import { supportRoutes } from "./routes/support"
-import { userModelsRoutes } from "./routes/user-models"
-import { webhookRoutes } from "./routes/webhooks"
-const app = new Hono2();
-app.get("/healthz", (c) => {
-  return json({ ok: true, service: "aipictors-api" });
-});
-app.route("/internal/coins", coinsRoutes);
-app.route("/api/coins", publicCoinsRoutes);
-app.route("/internal/image-generation", imageGenerationRoutes);
-app.route("/internal/points", pointsRoutes);
-app.route("/internal/subscriptions", subscriptionRoutes);
-app.route("/internal/user-models", userModelsRoutes);
-app.route("/admin", adminRoutes);
-app.route("/internal/campaigns", campaignRoutes);
-app.route("/internal/support", supportRoutes);
-app.route("/internal/discord", discordRoutes);
-app.route("/discord-bot", discordBotRoutes);
-app.route("/email", emailPublicRoutes);
-app.route("/stripe", stripeRoutes);
-app.route("/webhooks", webhookRoutes);
-app.notFound(() => json({ error: "Not found" }, 404));
-app.onError((error) => json({ error: error.message }, 500));
-
+import { getStripeCustomerEmail } from "./routes/subscriptions"
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
 const scheduled = async (controller, env, ctx) => {
   ctx.waitUntil(

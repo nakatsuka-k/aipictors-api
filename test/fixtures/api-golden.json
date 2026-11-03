@@ -1,0 +1,1439 @@
+{
+  "healthz": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "ok": true,
+      "service": "aipictors-api"
+    }
+  },
+  "notFound": {
+    "status": 404,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Not found"
+    }
+  },
+  "unauthorized": {
+    "status": 401,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Unauthorized;hasExpected=true;providedFp=8810ad581e59;expectedFp=3bed2cb3a3ac"
+    }
+  },
+  "coins summary empty": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "thanksCampaigns": [],
+        "freeBalance": 0,
+        "premiumBalance": 0,
+        "totalBalance": 0,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [],
+        "expiringLots": [],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": []
+      }
+    }
+  },
+  "coins grant": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "thanksCampaigns": [],
+        "freeBalance": 100,
+        "premiumBalance": 50,
+        "totalBalance": 150,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [],
+        "expiringLots": [],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": [
+          {
+            "kind": "GRANT",
+            "message": "フリーコイン100枚、プレミアムコイン50枚が付与されました。有効期限は本日24:00です。",
+            "freeCoins": 100,
+            "premiumCoins": 50
+          }
+        ]
+      }
+    }
+  },
+  "coins summary ledger": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "thanksCampaigns": [],
+        "freeBalance": 100,
+        "premiumBalance": 50,
+        "totalBalance": 150,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [
+          {
+            "id": 2,
+            "coinType": "FREE",
+            "delta": 100,
+            "kind": "GRANT",
+            "reason": "test",
+            "source": "test:1",
+            "createdAt": 1793761200,
+            "expiresAt": 1793804400
+          },
+          {
+            "id": 1,
+            "coinType": "PREMIUM",
+            "delta": 50,
+            "kind": "GRANT",
+            "reason": "test",
+            "source": "test:1",
+            "createdAt": 1793761200,
+            "expiresAt": null
+          }
+        ],
+        "expiringLots": [
+          {
+            "coinType": "FREE",
+            "amount": 100,
+            "expiresAt": 1793804400
+          }
+        ],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": []
+      }
+    }
+  },
+  "coins invalid paging": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Invalid ledger paging"
+    }
+  },
+  "coins ensure-initial-grant free": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "granted": true,
+        "grantedPlanType": "FREE",
+        "grantedFreeCoins": 100,
+        "grantedPremiumCoins": 0,
+        "thanksCampaigns": [],
+        "freeBalance": 100,
+        "premiumBalance": 0,
+        "totalBalance": 100,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [
+          {
+            "id": 3,
+            "coinType": "FREE",
+            "delta": 100,
+            "kind": "INITIAL_GRANT",
+            "reason": "FREE daily generation coin grant",
+            "source": "generation_page_access",
+            "createdAt": 1793761200,
+            "expiresAt": 1793804400
+          }
+        ],
+        "expiringLots": [
+          {
+            "coinType": "FREE",
+            "amount": 100,
+            "expiresAt": 1793804400
+          }
+        ],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": [
+          {
+            "kind": "GRANT",
+            "message": "フリーコイン100枚が付与されました。有効期限は本日24:00です。",
+            "freeCoins": 100,
+            "premiumCoins": 0
+          }
+        ]
+      }
+    }
+  },
+  "coins ensure-initial-grant again": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "granted": true,
+        "grantedPlanType": "STANDARD",
+        "grantedFreeCoins": 900,
+        "grantedPremiumCoins": 0,
+        "thanksCampaigns": [],
+        "freeBalance": 1000,
+        "premiumBalance": 0,
+        "totalBalance": 1000,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [],
+        "expiringLots": [],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": [
+          {
+            "kind": "GRANT",
+            "message": "フリーコイン900枚が付与されました。有効期限は本日24:00です。",
+            "freeCoins": 900,
+            "premiumCoins": 0
+          }
+        ]
+      }
+    }
+  },
+  "coins consume": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "freeSpent": 30,
+        "premiumSpent": 0,
+        "thanksCampaigns": [],
+        "freeBalance": 170,
+        "premiumBalance": 50,
+        "totalBalance": 220,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [],
+        "expiringLots": [],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": [
+          {
+            "kind": "CONSUME",
+            "message": "フリーコイン30枚を消費しました。",
+            "freeCoins": 30,
+            "premiumCoins": 0
+          }
+        ]
+      }
+    }
+  },
+  "coins consume insufficient": {
+    "status": 409,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Insufficient coins"
+    }
+  },
+  "coins consume invalid": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Invalid amount"
+    }
+  },
+  "coins consume-breakdown": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "freeConsumed": 30,
+        "premiumConsumed": 0
+      }
+    }
+  },
+  "coins bulk-adjust": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "results": [
+          {
+            "userId": "100",
+            "freeGranted": 10,
+            "premiumGranted": 0,
+            "freeReduced": 0,
+            "premiumReduced": 0
+          },
+          {
+            "userId": "102",
+            "freeGranted": 10,
+            "premiumGranted": 0,
+            "freeReduced": 0,
+            "premiumReduced": 0
+          }
+        ],
+        "targetCount": 2
+      }
+    }
+  },
+  "coins gemini-allowance": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "planType": "FREE",
+        "weeklyLimit": 0,
+        "dailyLimit": 0,
+        "used": 0,
+        "remaining": 0,
+        "isEnforced": true,
+        "enforcedFrom": 1793631600,
+        "resetsAt": 1794150000
+      }
+    }
+  },
+  "coins admin-history": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "items": [
+          {
+            "id": 7,
+            "userId": "100",
+            "coinType": "FREE",
+            "delta": 10,
+            "kind": "GRANT",
+            "reason": "bulk",
+            "source": "bulk:1",
+            "createdAt": 1793761200,
+            "expiresAt": 1793804400,
+            "runningFreeBalance": 180,
+            "runningPremiumBalance": 50,
+            "runningTotalBalance": 230
+          },
+          {
+            "id": 6,
+            "userId": "100",
+            "coinType": "FREE",
+            "delta": -30,
+            "kind": "CONSUME",
+            "reason": "image-generation:txt2img",
+            "source": "task:a",
+            "createdAt": 1793761200,
+            "expiresAt": null,
+            "runningFreeBalance": 170,
+            "runningPremiumBalance": 50,
+            "runningTotalBalance": 220
+          },
+          {
+            "id": 5,
+            "userId": "100",
+            "coinType": "FREE",
+            "delta": 100,
+            "kind": "INITIAL_GRANT",
+            "reason": "FREE daily generation coin grant",
+            "source": "consume",
+            "createdAt": 1793761200,
+            "expiresAt": 1793804400,
+            "runningFreeBalance": 200,
+            "runningPremiumBalance": 50,
+            "runningTotalBalance": 250
+          },
+          {
+            "id": 2,
+            "userId": "100",
+            "coinType": "FREE",
+            "delta": 100,
+            "kind": "GRANT",
+            "reason": "test",
+            "source": "test:1",
+            "createdAt": 1793761200,
+            "expiresAt": 1793804400,
+            "runningFreeBalance": 100,
+            "runningPremiumBalance": 50,
+            "runningTotalBalance": 150
+          },
+          {
+            "id": 1,
+            "userId": "100",
+            "coinType": "PREMIUM",
+            "delta": 50,
+            "kind": "GRANT",
+            "reason": "test",
+            "source": "test:1",
+            "createdAt": 1793761200,
+            "expiresAt": null,
+            "runningFreeBalance": 0,
+            "runningPremiumBalance": 50,
+            "runningTotalBalance": 50
+          }
+        ],
+        "totalCount": 5,
+        "offset": 0,
+        "limit": 5,
+        "summary": {
+          "matchedUserCount": 1,
+          "freeGrantedTotal": 210,
+          "premiumGrantedTotal": 50,
+          "freeConsumedTotal": 30,
+          "premiumConsumedTotal": 0,
+          "freeExpiredTotal": 0,
+          "premiumExpiredTotal": 0
+        },
+        "currentBalance": {
+          "freeBalance": 180,
+          "premiumBalance": 50,
+          "totalBalance": 230
+        },
+        "expiringLots": [
+          {
+            "id": 2,
+            "coinType": "FREE",
+            "amount": 70,
+            "expiresAt": 1793804400,
+            "createdAt": 1793761200
+          },
+          {
+            "id": 5,
+            "coinType": "FREE",
+            "amount": 100,
+            "expiresAt": 1793804400,
+            "createdAt": 1793761200
+          },
+          {
+            "id": 6,
+            "coinType": "FREE",
+            "amount": 10,
+            "expiresAt": 1793804400,
+            "createdAt": 1793761200
+          },
+          {
+            "id": 1,
+            "coinType": "PREMIUM",
+            "amount": 50,
+            "expiresAt": null,
+            "createdAt": 1793761200
+          }
+        ]
+      }
+    }
+  },
+  "coins daily runs": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": []
+    }
+  },
+  "coins daily run": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "jobKey": "daily:2026-11-04",
+        "expiredUsers": 0,
+        "expiredFree": 0,
+        "expiredPremium": 0,
+        "subscribers": 0,
+        "grantedUsers": 0,
+        "grantedFree": 0,
+        "elapsedMs": 0
+      }
+    }
+  },
+  "support transfer": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "transferredAmount": 10,
+        "senderPtAdded": 10,
+        "recipientPtAdded": 10,
+        "weekStartDate": "2026-11-02"
+      }
+    }
+  },
+  "support transfer premium anon": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "transferredAmount": 10,
+        "senderPtAdded": 100,
+        "recipientPtAdded": 100,
+        "weekStartDate": "2026-11-02"
+      }
+    }
+  },
+  "support to self": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Cannot support yourself"
+    }
+  },
+  "support rankings": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "kind": "received",
+        "weekStartDate": "2026-11-02",
+        "items": [
+          {
+            "rank": 1,
+            "userId": "103",
+            "coinAmount": 20,
+            "ptAmount": 110,
+            "freePtAmount": 10,
+            "premiumPtAmount": 100,
+            "transferCount": 2
+          }
+        ],
+        "totalCount": 1,
+        "offset": 0,
+        "limit": 50
+      }
+    }
+  },
+  "support rankings sent": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "kind": "sent",
+        "weekStartDate": "2026-11-02",
+        "items": [
+          {
+            "rank": 1,
+            "userId": "100",
+            "coinAmount": 20,
+            "ptAmount": 110,
+            "freePtAmount": 10,
+            "premiumPtAmount": 100,
+            "transferCount": 2
+          }
+        ],
+        "totalCount": 1,
+        "offset": 0,
+        "limit": 50
+      }
+    }
+  },
+  "support rankings recipient": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "kind": "sent",
+        "weekStartDate": "",
+        "items": [
+          {
+            "rank": 1,
+            "userId": "__anonymous__",
+            "coinAmount": 10,
+            "ptAmount": 100,
+            "freePtAmount": 0,
+            "premiumPtAmount": 100,
+            "transferCount": 1,
+            "isAnonymous": true
+          },
+          {
+            "rank": 2,
+            "userId": "100",
+            "coinAmount": 10,
+            "ptAmount": 10,
+            "freePtAmount": 10,
+            "premiumPtAmount": 0,
+            "transferCount": 1,
+            "isAnonymous": false
+          }
+        ],
+        "totalCount": 2,
+        "offset": 0,
+        "limit": 50
+      }
+    }
+  },
+  "support period weekly": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "kind": "received",
+        "period": "weekly",
+        "periodKey": "2026-11-02",
+        "items": [
+          {
+            "rank": 1,
+            "userId": "103",
+            "coinAmount": 20,
+            "ptAmount": 110,
+            "freePtAmount": 10,
+            "premiumPtAmount": 100,
+            "transferCount": 2
+          }
+        ],
+        "totalCount": 1,
+        "offset": 0,
+        "limit": 50
+      }
+    }
+  },
+  "support period monthly": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "kind": "sent",
+        "period": "monthly",
+        "periodKey": "2026-11",
+        "items": [
+          {
+            "rank": 1,
+            "userId": "100",
+            "coinAmount": 20,
+            "ptAmount": 110,
+            "freePtAmount": 10,
+            "premiumPtAmount": 100,
+            "transferCount": 2
+          }
+        ],
+        "totalCount": 1,
+        "offset": 0,
+        "limit": 50
+      }
+    }
+  },
+  "support weeks": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "weekStartDates": [
+          "2026-11-02"
+        ]
+      }
+    }
+  },
+  "support recent": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "items": [
+          {
+            "senderUser": {
+              "id": "__anonymous__",
+              "login": null,
+              "name": null,
+              "iconUrl": null
+            },
+            "recipientUser": {
+              "id": "103",
+              "login": null,
+              "name": null,
+              "iconUrl": null
+            },
+            "coinType": "PREMIUM",
+            "coinAmount": 10,
+            "ptAmount": 100,
+            "isAnonymous": true,
+            "createdAt": 1793761200
+          },
+          {
+            "senderUser": {
+              "id": "100",
+              "login": null,
+              "name": null,
+              "iconUrl": null
+            },
+            "recipientUser": {
+              "id": "103",
+              "login": null,
+              "name": null,
+              "iconUrl": null
+            },
+            "coinType": "FREE",
+            "coinAmount": 10,
+            "ptAmount": 10,
+            "isAnonymous": false,
+            "createdAt": 1793761200
+          }
+        ]
+      }
+    }
+  },
+  "support summary": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "userId": "103",
+        "weekStartDate": "2026-11-02",
+        "cumulativeSentPt": 0,
+        "cumulativeReceivedPt": 110,
+        "cumulativeSentCoins": 0,
+        "cumulativeReceivedCoins": 20,
+        "cumulativeReceivedFreeCoins": 10,
+        "cumulativeReceivedPremiumCoins": 10,
+        "cumulativeReceivedFreePt": 10,
+        "cumulativeReceivedPremiumPt": 100,
+        "weeklySentPt": 0,
+        "weeklyReceivedPt": 110,
+        "weeklySentCoinAmount": 0,
+        "weeklyReceivedCoinAmount": 20,
+        "weeklySentTransferCount": 0,
+        "weeklyReceivedTransferCount": 2,
+        "weeklySentRank": null,
+        "weeklyReceivedRank": 1,
+        "cumulativeSentRank": null,
+        "cumulativeReceivedRank": 1,
+        "availableWeekStartDates": [
+          "2026-11-02"
+        ],
+        "recentReceivedTransfers": [
+          {
+            "senderUserId": "__anonymous__",
+            "isAnonymous": true,
+            "coinType": "PREMIUM",
+            "coinAmount": 10,
+            "ptAmount": 100,
+            "createdAt": 1793761200
+          },
+          {
+            "senderUserId": "100",
+            "isAnonymous": false,
+            "coinType": "FREE",
+            "coinAmount": 10,
+            "ptAmount": 10,
+            "createdAt": 1793761200
+          }
+        ]
+      }
+    }
+  },
+  "support totals": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "cumulativeSentPt": 0,
+        "cumulativeReceivedPt": 110
+      }
+    }
+  },
+  "public rankings": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "kind": "received",
+        "weekStartDate": "2026-11-02",
+        "items": [
+          {
+            "rank": 1,
+            "userId": "103",
+            "coinAmount": 20,
+            "ptAmount": 110,
+            "freePtAmount": 10,
+            "premiumPtAmount": 100,
+            "transferCount": 2
+          }
+        ],
+        "totalCount": 1,
+        "offset": 0,
+        "limit": 3
+      }
+    }
+  },
+  "support revert": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "reversed": true,
+        "freeAmount": 10,
+        "premiumAmount": 0
+      }
+    }
+  },
+  "grant-support": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "granted": 5,
+        "ptAmount": 50,
+        "weekStartDate": "2026-11-02"
+      }
+    }
+  },
+  "amazon list": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "thanksCampaigns": [],
+        "freeBalance": 0,
+        "premiumBalance": 0,
+        "totalBalance": 0,
+        "exchangeablePremiumBalance": 0,
+        "lockedExchangePremiumBalance": 0,
+        "ledger": [],
+        "expiringLots": [],
+        "expiredFreeCoins": 0,
+        "expiredPremiumCoins": 0,
+        "events": []
+      }
+    }
+  },
+  "amazon admin": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "requests": [],
+        "totalCount": 0,
+        "offset": 0,
+        "limit": 50
+      }
+    }
+  },
+  "sub current none": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": null
+    }
+  },
+  "sub upsert": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": true
+    }
+  },
+  "sub current": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "id": 1,
+        "nanoid": "sub-200",
+        "user_id": "200",
+        "type": "STANDARD",
+        "status": "active",
+        "is_disabled": false,
+        "created_at": 1793760200,
+        "current_period_start": 1793760200,
+        "current_period_end": 4102444800,
+        "trial_start": null,
+        "trial_end": null,
+        "stripe_subscription_id": "sub_test_200",
+        "stripe_latest_invoice_id": null,
+        "stripe_payment_intent_id": null,
+        "stripe_subscription_item_id": null,
+        "stripe_price_id": null,
+        "stripe_product_id": null
+      }
+    }
+  },
+  "sub by nanoid": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "id": 1,
+        "nanoid": "sub-200",
+        "user_id": "200",
+        "type": "STANDARD",
+        "status": "active",
+        "is_disabled": false,
+        "created_at": 1793760200,
+        "current_period_start": 1793760200,
+        "current_period_end": 4102444800,
+        "trial_start": null,
+        "trial_end": null,
+        "stripe_subscription_id": "sub_test_200",
+        "stripe_latest_invoice_id": null,
+        "stripe_payment_intent_id": null,
+        "stripe_subscription_item_id": null,
+        "stripe_price_id": null,
+        "stripe_product_id": null
+      }
+    }
+  },
+  "sub has previous": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "exists": true
+      }
+    }
+  },
+  "sub unpaid": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": null
+    }
+  },
+  "sub disable invalid": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Invalid body"
+    }
+  },
+  "points get": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "balance": 0,
+        "ledger": []
+      }
+    }
+  },
+  "points grant": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "balance": 100,
+        "ledger": [
+          {
+            "id": 1,
+            "delta": 100,
+            "kind": "GRANT",
+            "reason": "test",
+            "stripeEventId": null,
+            "stripeSessionId": null,
+            "createdAt": 1793761200
+          }
+        ]
+      }
+    }
+  },
+  "points consume": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "balance": 90,
+        "ledger": [
+          {
+            "id": 2,
+            "delta": -10,
+            "kind": "CONSUME",
+            "reason": "test",
+            "stripeEventId": null,
+            "stripeSessionId": null,
+            "createdAt": 1793761200
+          },
+          {
+            "id": 1,
+            "delta": 100,
+            "kind": "GRANT",
+            "reason": "test",
+            "stripeEventId": null,
+            "stripeSessionId": null,
+            "createdAt": 1793761200
+          }
+        ]
+      }
+    }
+  },
+  "admin pricing": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "yenPerPoint": 1,
+        "pointPackages": {
+          "100": 100,
+          "300": 300,
+          "1000": 1000
+        },
+        "subscriptionPlans": {
+          "LITE": 480,
+          "STANDARD": 1980,
+          "PREMIUM": 3980
+        }
+      }
+    }
+  },
+  "admin pricing unauthorized": {
+    "status": 401,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "Unauthorized"
+    }
+  },
+  "tasks create": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "id": 1,
+        "userId": 400,
+        "request_content": "{}",
+        "request_time": "2026-11-04T03:00:00.000Z",
+        "image_url": null,
+        "generation_time": null,
+        "progress": 0,
+        "status": "wait",
+        "is_deleted": false,
+        "error": "",
+        "IPAdress": null,
+        "request_to_sd_time": null,
+        "request_origin_content": "",
+        "thumbnail_image_url": "",
+        "requester": null,
+        "priority": 0,
+        "type": "txt2img",
+        "rating": 0,
+        "count": 2,
+        "nanoid": "task-1",
+        "platform": "web",
+        "created_at": "<created_at>",
+        "updated_at": "<updated_at>",
+        "is_canceled": 0,
+        "is_reserved": false,
+        "sd": 3,
+        "is_protected": false,
+        "cost": 100,
+        "uuid": "<uuid>"
+      }
+    }
+  },
+  "tasks by nanoid": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "id": 1,
+        "userId": 400,
+        "request_content": "{}",
+        "request_time": "2026-11-04T03:00:00.000Z",
+        "image_url": null,
+        "generation_time": null,
+        "progress": 0,
+        "status": "wait",
+        "is_deleted": false,
+        "error": "",
+        "IPAdress": null,
+        "request_to_sd_time": null,
+        "request_origin_content": "",
+        "thumbnail_image_url": "",
+        "requester": null,
+        "priority": 0,
+        "type": "txt2img",
+        "rating": 0,
+        "count": 2,
+        "nanoid": "task-1",
+        "platform": "web",
+        "created_at": "<created_at>",
+        "updated_at": "<updated_at>",
+        "is_canceled": 0,
+        "is_reserved": false,
+        "sd": 3,
+        "is_protected": false,
+        "cost": 100,
+        "uuid": "<uuid>"
+      }
+    }
+  },
+  "tasks count": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "count": 1
+      }
+    }
+  },
+  "tasks cost": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "totalCost": 0
+      }
+    }
+  },
+  "tasks list": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": [
+        {
+          "id": 1,
+          "userId": 400,
+          "request_content": "{}",
+          "request_time": "2026-11-04T03:00:00.000Z",
+          "image_url": null,
+          "generation_time": null,
+          "progress": 0,
+          "status": "wait",
+          "is_deleted": false,
+          "error": "",
+          "IPAdress": null,
+          "request_to_sd_time": null,
+          "request_origin_content": "",
+          "thumbnail_image_url": "",
+          "requester": null,
+          "priority": 0,
+          "type": "txt2img",
+          "rating": 0,
+          "count": 2,
+          "nanoid": "task-1",
+          "platform": "web",
+          "created_at": "<created_at>",
+          "updated_at": "<updated_at>",
+          "is_canceled": 0,
+          "is_reserved": false,
+          "sd": 3,
+          "is_protected": false,
+          "cost": 100,
+          "uuid": "<uuid>"
+        }
+      ]
+    }
+  },
+  "tasks cancelable": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "id": 1,
+        "userId": 400,
+        "request_content": "{}",
+        "request_time": "2026-11-04T03:00:00.000Z",
+        "image_url": null,
+        "generation_time": null,
+        "progress": 0,
+        "status": "wait",
+        "is_deleted": false,
+        "error": "",
+        "IPAdress": null,
+        "request_to_sd_time": null,
+        "request_origin_content": "",
+        "thumbnail_image_url": "",
+        "requester": null,
+        "priority": 0,
+        "type": "txt2img",
+        "rating": 0,
+        "count": 2,
+        "nanoid": "task-1",
+        "platform": "web",
+        "created_at": "<created_at>",
+        "updated_at": "<updated_at>",
+        "is_canceled": 0,
+        "is_reserved": false,
+        "sd": 3,
+        "is_protected": false,
+        "cost": 100,
+        "uuid": "<uuid>"
+      }
+    }
+  },
+  "results list": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": []
+    }
+  },
+  "results count": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "count": 0
+      }
+    }
+  },
+  "results protected": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "count": 0
+      }
+    }
+  },
+  "reserved latest": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": null
+    }
+  },
+  "reserved count": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "count": 0
+      }
+    }
+  },
+  "models list empty": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "models": [],
+        "totalCount": 0,
+        "offset": 0,
+        "limit": 30,
+        "hasMore": false
+      }
+    }
+  },
+  "models create": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "modelId": "<modelId>",
+        "status": "UPLOADING",
+        "deduplicated": false,
+        "uploadId": "<uploadId>",
+        "partSize": 52428800,
+        "partCount": 1,
+        "model": null
+      }
+    }
+  },
+  "models mine": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "models": [
+          {
+            "id": "<model-id>",
+            "userId": "500",
+            "kind": "LORA",
+            "name": "テスト",
+            "description": "",
+            "baseModel": "SDXL",
+            "triggerWords": "",
+            "recommendedWeight": 0.8,
+            "rating": "G",
+            "tags": [],
+            "thumbnailUrl": null,
+            "sampleImageUrls": [],
+            "originalFilename": "a.safetensors",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sizeBytes": 1024,
+            "status": "UPLOADING",
+            "disabledReason": null,
+            "verifiedAt": null,
+            "useCount": 0,
+            "lastUsedAt": null,
+            "createdAt": 1793761200,
+            "updatedAt": 1793761200,
+            "sourceUrl": null,
+            "sourceCreator": null,
+            "sourceLicense": null,
+            "sourceLicenseAllowsOtherServices": null,
+            "sourceBaseModel": null,
+            "importStatus": null,
+            "recommendedSettings": null,
+            "fileName": "user_<model-id>.safetensors",
+            "generationModel": null,
+            "loraName": "user_<model-id>",
+            "promptSyntax": "<lora:user_<model-id>:0.8>"
+          }
+        ],
+        "limit": 1,
+        "used": 1,
+        "planType": "FREE"
+      }
+    }
+  },
+  "models bad id": {
+    "status": 404,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": "モデルが見つかりません",
+      "code": "NOT_FOUND"
+    }
+  },
+  "models reports": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "reports": []
+      }
+    }
+  },
+  "support thread": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "ticket": null,
+        "messages": []
+      }
+    }
+  },
+  "support unread": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "unread": 0
+      }
+    }
+  },
+  "support admin tickets": {
+    "status": 200,
+    "contentType": "application/json",
+    "cacheControl": "no-store",
+    "body": {
+      "error": null,
+      "data": {
+        "tickets": [],
+        "counts": {},
+        "stats": {
+          "aiReplies": 0,
+          "helpful": 0,
+          "notHelpful": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      }
+    }
+  },
+  "email unsubscribe invalid": {
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "cacheControl": "no-store",
+    "body": "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>配信停止 - Aipictors</title></head><body style=\"font-family:sans-serif;max-width:480px;margin:48px auto;padding:0 16px;line-height:1.7\"><h1 style=\"font-size:20px\">Aipictors</h1><p>リンクが正しくありません。お手数ですが、お問い合わせからご連絡ください。</p><p><a href=\"https://www.aipictors.com/\">Aipictors を開く</a></p></body></html>"
+  }
+}
