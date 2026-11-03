@@ -1,6 +1,6 @@
 // 本物の Postgres（embedded）に対して HTTP の入口からリクエストを流し、応答を test/fixtures/api-golden.json と比べる。
 // 分割・整理で応答が変わっていないことの確認用。ルート一覧も test/fixtures/routes.json と比べる。
-// クエリ回数と往復の段数（同時に投げた文は 1 段）は test/fixtures/query-counts.json に書き出す（比べない。速度改善の記録）。
+// クエリ回数と往復の段数（同時に投げた文は 1 段）は UPDATE_GOLDEN=1 のとき test/fixtures/query-counts.json に書き出す（比べない。速度改善の記録。段数は実行のタイミングで少し揺れる）。
 //
 //   作り直し（応答を意図して変えたときだけ）: UPDATE_GOLDEN=1 npx tsx test/api-golden.pg-test.mts
 import EmbeddedPostgres from "embedded-postgres"
@@ -280,8 +280,8 @@ console.warn = originalWarn
 
 const goldenPath = `${FIXTURES}api-golden.json`
 const routesPath = `${FIXTURES}routes.json`
-writeFileSync(`${FIXTURES}query-counts.json`, `${JSON.stringify(counts, null, 2)}\n`)
 if (UPDATE) {
+  writeFileSync(`${FIXTURES}query-counts.json`, `${JSON.stringify(counts, null, 2)}\n`)
   writeFileSync(goldenPath, `${JSON.stringify(results, null, 2)}\n`)
   writeFileSync(routesPath, `${JSON.stringify(routes, null, 2)}\n`)
   console.log(`updated golden: ${Object.keys(results).length} requests, ${routes.length} routes`)

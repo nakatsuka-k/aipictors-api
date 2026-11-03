@@ -17,6 +17,9 @@ const EXPECTED_CHANGES: Record<string, string> = {
   getString2: "lib/record-fields.ts の getString にまとめた（同じ中身）",
   getString3: "lib/record-fields.ts の getString にまとめた（同じ中身）",
   getNumber2: "lib/record-fields.ts の getNumber にまとめた（書き方が違うだけで同じ動き）",
+  getSupportWeeklyRanking: "一覧と件数を同時に問い合わせる（2 往復 → 1 往復、応答は同じ）",
+  getSupportPeriodRanking: "一覧と件数を同時に問い合わせる（2 往復 → 1 往復、応答は同じ）",
+  getPointSummary: "残高と履歴を同時に問い合わせる（2 往復 → 1 往復、応答は同じ）",
   ensureSupportTables: "DDL を isolate ごとに 1 回だけ（oncePerDb で包んだ。中身は同じ）",
 }
 

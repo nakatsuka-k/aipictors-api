@@ -1,15 +1,17 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { getNow } from "./db"
 export var getPointSummary = async (db, userId) => {
-  const balance = await db.queryOne(
+  const [balance, ledger] = await Promise.all([
+  db.queryOne(
     "SELECT balance FROM point_balances WHERE user_id = $1",
     [userId]
-  );
-  const ledger = await db.query(
+  ),
+  db.query(
     `SELECT id, delta, kind, reason, stripe_event_id AS "stripeEventId", stripe_session_id AS "stripeSessionId", created_at AS "createdAt"
       FROM point_ledger WHERE user_id = $1 ORDER BY id DESC LIMIT 100`,
     [userId]
-  );
+  )
+  ]);
   return {
     balance: balance?.balance ?? 0,
     ledger

@@ -85,23 +85,23 @@
   },
   "support rankings": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "support rankings sent": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "support rankings recipient": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "support period weekly": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "support period monthly": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "support weeks": {
     "queries": 1,
@@ -121,7 +121,7 @@
   },
   "public rankings": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "support revert": {
     "queries": 1,
@@ -169,15 +169,15 @@
   },
   "points get": {
     "queries": 2,
-    "rounds": 2
+    "rounds": 1
   },
   "points grant": {
     "queries": 3,
-    "rounds": 3
+    "rounds": 2
   },
   "points consume": {
     "queries": 3,
-    "rounds": 3
+    "rounds": 2
   },
   "admin pricing": {
     "queries": 1,

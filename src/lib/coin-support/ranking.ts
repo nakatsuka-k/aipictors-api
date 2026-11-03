@@ -12,7 +12,9 @@ export var getSupportWeeklyRanking = async (props) => {
   const userColumn = props.kind === "received" ? "recipient_user_id" : "sender_user_id";
   const excludeContributionUserId = props.kind === "sent" ? CONTRIBUTION_RANKING_EXCLUDED_USER_ID : null;
   if (props.kind === "sent" && props.recipientUserId) {
-    const items2 = await props.db.query(
+    // Neon は 1 文ごとに HTTP の往復になるので同時に投げる
+    const [items2, countRow2] = await Promise.all([
+    props.db.query(
       `WITH grouped AS (
          SELECT CASE
                   WHEN is_anonymous THEN '${ANONYMOUS_SUPPORT_USER_ID}'
@@ -58,8 +60,8 @@ export var getSupportWeeklyRanking = async (props) => {
         LIMIT $2
        OFFSET $3`,
       [props.recipientUserId, limit, offset, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
-    );
-    const countRow2 = await props.db.queryOne(
+    ),
+    props.db.queryOne(
       `SELECT COUNT(*)::INTEGER AS count
          FROM (
            SELECT CASE
@@ -75,7 +77,8 @@ export var getSupportWeeklyRanking = async (props) => {
                      END
          ) AS grouped`,
       [props.recipientUserId, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
-    );
+    )
+    ]);
     return {
       kind: props.kind,
       weekStartDate: "",
@@ -85,7 +88,9 @@ export var getSupportWeeklyRanking = async (props) => {
       limit
     };
   }
-  const items = await props.db.query(
+  // Neon は 1 文ごとに HTTP の往復になるので同時に投げる
+  const [items, countRow] = await Promise.all([
+  props.db.query(
     `WITH grouped AS (
        SELECT ${userColumn} AS "userId",
               SUM(coin_amount)::INTEGER AS "coinAmount",
@@ -122,8 +127,8 @@ export var getSupportWeeklyRanking = async (props) => {
       LIMIT $2
      OFFSET $3`,
     [weekStartDate, limit, offset, excludeContributionUserId]
-  );
-  const countRow = await props.db.queryOne(
+  ),
+  props.db.queryOne(
     `SELECT COUNT(*)::INTEGER AS count
        FROM (
          SELECT ${userColumn}
@@ -133,7 +138,8 @@ export var getSupportWeeklyRanking = async (props) => {
           GROUP BY ${userColumn}
        ) AS grouped`,
     [weekStartDate, excludeContributionUserId]
-  );
+  )
+  ]);
   return {
     kind: props.kind,
     weekStartDate,
@@ -168,7 +174,9 @@ export var getSupportPeriodRanking = async (props) => {
     };
   };
   const { whereSql, params } = getPeriodFilter();
-  const items = await props.db.query(
+  // Neon は 1 文ごとに HTTP の往復になるので同時に投げる
+  const [items, countRow] = await Promise.all([
+  props.db.query(
     `WITH grouped AS (
        SELECT ${userColumn} AS "userId",
               SUM(coin_amount)::INTEGER AS "coinAmount",
@@ -205,8 +213,8 @@ export var getSupportPeriodRanking = async (props) => {
       LIMIT $3
      OFFSET $4`,
     [...params, excludeContributionUserId, limit, offset]
-  );
-  const countRow = await props.db.queryOne(
+  ),
+  props.db.queryOne(
     `SELECT COUNT(*)::INTEGER AS count
        FROM (
          SELECT ${userColumn}
@@ -216,7 +224,8 @@ export var getSupportPeriodRanking = async (props) => {
           GROUP BY ${userColumn}
        ) AS grouped`,
     [...params, excludeContributionUserId]
-  );
+  )
+  ]);
   return {
     kind: props.kind,
     period: props.period,
