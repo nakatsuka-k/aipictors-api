@@ -44,7 +44,7 @@ const parseUrls = (value: unknown) => {
   return value as string[]
 }
 
-const parseThumbnail = (value: unknown) => {
+export const parseThumbnail = (value: unknown) => {
   if (value === undefined || value === null) return value as undefined | null
   if (typeof value !== "string" || value.length > 2000 || !isHttpsUrl(value)) {
     throw bad("INVALID_INPUT", "thumbnailUrl は https の URL です")

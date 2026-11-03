@@ -38,7 +38,7 @@ export type UserModelRow = {
   recommended_settings?: string | null
 }
 
-const parseJsonArray = (value: string | null | undefined): string[] => {
+export const parseJsonArray = (value: string | null | undefined): string[] => {
   try {
     const parsed = JSON.parse(value ?? "[]")
     return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : []

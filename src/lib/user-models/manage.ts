@@ -3,7 +3,7 @@ import { UserModelError, isUserModelId } from "./common"
 import type { Db, UserModelDeps } from "./common"
 import { bad, parseEditable, requireUserId } from "./input"
 import { requireRow } from "./queries"
-import { parseRecommendedSettings, readRecommendedSettings, toUserModel } from "./serialize"
+import { parseJsonArray, parseRecommendedSettings, readRecommendedSettings, toUserModel } from "./serialize"
 import type { UserModelRecommendedSettings, UserModelRow } from "./serialize"
 import { abortQuietly, shaLockKey } from "./upload"
 // ---- 編集・削除 ----
@@ -12,6 +12,14 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
   const userId = requireUserId(input.userId)
   const row = await requireRow(db, id, { userId })
   const e = parseEditable(input)
+  // サムネイルは消せない。残っている画像があればその 1 枚目にする
+  const nextSamples = e.sampleImageUrls ?? parseJsonArray(row.sample_image_urls)
+  const nextThumbnailUrl =
+    e.thumbnailUrl === null ? (nextSamples[0] ?? null) : e.thumbnailUrl
+  if (e.thumbnailUrl === null && nextThumbnailUrl === null) {
+    throw bad("THUMBNAIL_REQUIRED", "サムネイルは外せません。別の画像を設定してください")
+  }
+
   // 他の項目だけ直したときは、自動で入れた印を残す（中身が変わったら登録者のもの）
   const currentSettings = readRecommendedSettings(row.recommended_settings)
   const withoutSource = (settings: UserModelRecommendedSettings | null | undefined) =>
@@ -45,8 +53,8 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
       e.recommendedWeight ?? null,
       e.rating ?? null,
       e.tags ? JSON.stringify(e.tags) : null,
-      e.thumbnailUrl !== undefined,
-      e.thumbnailUrl ?? null,
+      nextThumbnailUrl !== undefined,
+      nextThumbnailUrl ?? null,
       e.sampleImageUrls ? JSON.stringify(e.sampleImageUrls) : null,
       now,
       e.recommendedSettings !== undefined,

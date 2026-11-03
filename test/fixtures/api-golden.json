@@ -1337,7 +1337,7 @@
             "recommendedWeight": 0.8,
             "rating": "G",
             "tags": [],
-            "thumbnailUrl": null,
+            "thumbnailUrl": "https://example.com/t.png",
             "sampleImageUrls": [],
             "originalFilename": "a.safetensors",
             "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

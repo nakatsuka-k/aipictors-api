@@ -20,6 +20,7 @@ import {
   newUserModelId,
   oneOf,
   optionalString,
+  parseThumbnail,
   requireRow,
   requireUserId,
   reserveUserModelRow,
@@ -263,6 +264,24 @@ const pickSafeImages = (images: CivitaiImage[] | undefined) =>
       image.nsfwLevel <= 1,
   )
 
+/**
+ * ファイルのハッシュから Civitai の全年齢の作例を探す（見つからなければ null）
+ * サムネイルなしの登録を減らすためのものなので、通信に失敗しても登録の処理は止めない
+ */
+export const findCivitaiImagesBySha256 = async (deps: ImportSourceDeps, sha256: string) => {
+  try {
+    const version = await fetchCivitaiJson<CivitaiVersion>(deps, `/model-versions/by-hash/${sha256}`)
+    const images = pickSafeImages(version.images)
+    if (images.length === 0) return null
+    return {
+      thumbnailUrl: civitaiImageUrl(images[0].url!, 450),
+      sampleImageUrls: images.slice(0, 8).map((image) => civitaiImageUrl(image.url!, 1024)),
+    }
+  } catch {
+    return null
+  }
+}
+
 const pickFile = (files: CivitaiFile[] | undefined) => {
   const candidates = (files ?? []).filter(
     (f) =>
@@ -415,6 +434,11 @@ export const startUserModelImport = async (
   const name = optionalString(input.name, "name", 100)?.trim()
   const rating = oneOf(input.rating, USER_MODEL_RATINGS, "rating")
   const plan = await loadPlan(deps, input.url)
+  // Civitai に全年齢の作例がないモデルは、登録する人にサムネイルを選んでもらう
+  const thumbnailUrl = plan.thumbnailUrl ?? parseThumbnail(input.thumbnailUrl) ?? null
+  if (!thumbnailUrl) {
+    throw bad("THUMBNAIL_REQUIRED", "このモデルには全年齢の作例がありません。サムネイルにする画像を選んでください")
+  }
   const { maxBytes } = await getUserModelSettings(deps.db)
   if (plan.sizeBytes > maxBytes[plan.kind]) throw new UserModelError(400, "TOO_LARGE", tooLargeMessage(plan.kind, maxBytes[plan.kind]))
   const { planType, limit } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
@@ -453,7 +477,7 @@ export const startUserModelImport = async (
       recommendedSettings: undefined,
       rating: rating ?? plan.rating,
       tags: plan.tags,
-      thumbnailUrl: plan.thumbnailUrl,
+      thumbnailUrl,
       sampleImageUrls: plan.sampleImageUrls,
     },
     source: { url: plan.sourceUrl, creator: plan.creator, license: plan.license, baseModel: plan.sourceBaseModel },

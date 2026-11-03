@@ -172,6 +172,7 @@ const PART = um.USER_MODEL_PART_SIZE
 const uploadAll = async (userId: string, file: Uint8Array, extra: Record<string, unknown> = {}) => {
   const sha256 = await sha256Hex(file)
   const start = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId,
     kind: "LORA",
     filename: "my-lora.safetensors",
@@ -288,6 +289,7 @@ await t("同じ sha256 の READY があれば他のユーザは即 READY（重�
 
 await t("サイズが違う同 sha256 は SIZE_MISMATCH", async () => {
   const r = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId: "a3", kind: "LORA", filename: "x.safetensors", sizeBytes: 999, sha256: bigSha, name: "x",
   })
   assert.equal(r.status, 400)
@@ -295,13 +297,14 @@ await t("サイズが違う同 sha256 は SIZE_MISMATCH", async () => {
 })
 
 await t("拡張子・サイズ上限・sha256 の形式をチェックする", async () => {
-  const base = { userId: "a3", kind: "LORA", sizeBytes: 1000, sha256: "a".repeat(64), name: "x" }
+  const base = { userId: "a3", kind: "LORA", sizeBytes: 1000, sha256: "a".repeat(64), name: "x", thumbnailUrl: "https://example.com/t.png" }
   assert.equal((await callJson("POST", "/uploads", { ...base, filename: "x.ckpt" })).body.code, "INVALID_EXTENSION")
   assert.equal(
     (await callJson("POST", "/uploads", { ...base, filename: "x.safetensors", sizeBytes: 401 * 1024 * 1024 })).body.code,
     "TOO_LARGE",
   )
   const ckpt = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     ...base, kind: "CHECKPOINT", filename: "x.safetensors", sizeBytes: 401 * 1024 * 1024, sha256: "b".repeat(64),
   })
   assert.equal(ckpt.status, 200)
@@ -314,6 +317,7 @@ await t("safetensors でないファイルは最初のパートで拒否し、�
   const junk = new Uint8Array(3000).fill(0x41)
   const sha256 = await sha256Hex(junk)
   const start = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId: "a4", kind: "LORA", filename: "fake.safetensors", sizeBytes: junk.length, sha256, name: "fake",
   })
   const { modelId, uploadId } = start.body.data
@@ -329,6 +333,7 @@ await t("safetensors でないファイルは最初のパートで拒否し、�
 await t("ヘッダーのサイズと申告サイズが違う・LoRA にチェックポイント、は拒否", async () => {
   const file = makeSafetensors(5000)
   const start = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId: "a5", kind: "LORA", filename: "a.safetensors", sizeBytes: 5001, sha256: await sha256Hex(file), name: "a",
   })
   const padded = new Uint8Array(5001)
@@ -338,6 +343,7 @@ await t("ヘッダーのサイズと申告サイズが違う・LoRA にチェッ
 
   const ckpt = makeSafetensors(6000, ["model.diffusion_model.input_blocks.0.weight", "first_stage_model.decoder.weight"])
   const s2 = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId: "a5", kind: "LORA", filename: "c.safetensors", sizeBytes: ckpt.length, sha256: await sha256Hex(ckpt), name: "c",
   })
   const r2 = await call("PUT", `/uploads/${s2.body.data.modelId}/parts/1`, ckpt)
@@ -347,6 +353,7 @@ await t("ヘッダーのサイズと申告サイズが違う・LoRA にチェッ
 await t("パートのサイズ違い・範囲外の partNumber・欠けた parts での complete は拒否", async () => {
   const file = makeSafetensors(PART + 100, undefined, 3)
   const start = await callJson("POST", "/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId: "a6", kind: "LORA", filename: "p.safetensors", sizeBytes: file.length, sha256: await sha256Hex(file), name: "p",
   })
   const id = start.body.data.modelId
@@ -363,6 +370,7 @@ await t("無料ユーザが 10 並列でアップロードを始めても 1 個�
   const rs = await Promise.all(
     Array.from({ length: 10 }, (_, i) =>
       callJson("POST", "/uploads", {
+        thumbnailUrl: "https://example.com/t.png",
         userId: "a7", kind: "LORA", filename: "x.safetensors", sizeBytes: 1000,
         sha256: (i + 1).toString(16).padStart(64, "c"), name: `x${i}`,
       }),
@@ -418,8 +426,15 @@ await t("PATCH は作者のみ。サムネイルを消せる", async () => {
   assert.deepEqual(ok.body.data.tags, ["a", "b"])
   assert.equal(ok.body.data.promptSyntax, `<lora:user_${bigId}:0.65>`)
   const cleared = await callJson("PATCH", `/${bigId}`, { userId: "a1", thumbnailUrl: null })
-  assert.equal(cleared.body.data.thumbnailUrl, null)
-  assert.equal(cleared.body.data.name, "新しい名前")
+  assert.equal(cleared.status, 400)
+  assert.equal(cleared.body.code, "THUMBNAIL_REQUIRED")
+  const toSample = await callJson("PATCH", `/${bigId}`, {
+    userId: "a1",
+    thumbnailUrl: null,
+    sampleImageUrls: ["https://example.com/s.png"],
+  })
+  assert.equal(toSample.body.data.thumbnailUrl, "https://example.com/s.png")
+  assert.equal(toSample.body.data.name, "新しい名前")
   assert.equal((await callJson("PATCH", `/${bigId}`, { userId: "a1", thumbnailUrl: "http://x" })).status, 400)
 })
 
@@ -616,6 +631,19 @@ const fakeFetch = async (input: string, init: RequestInit = {}) => {
     const entry = civitai.models.get(Number(m[1]))
     return entry ? Response.json(entry.model) : new Response("not found", { status: 404 })
   }
+  m = /^\/api\/v1\/model-versions\/by-hash\/([0-9a-f]+)$/.exec(url.pathname)
+  if (url.hostname === "civitai.com" && m) {
+    if (m[1] === "c".repeat(64)) {
+      return Response.json({
+        id: 7,
+        images: [
+          { url: "https://image.civitai.com/k/nsfw/width=832/1.jpeg", nsfwLevel: 8, type: "image" },
+          { url: "https://image.civitai.com/k/hash-safe/width=832/2.jpeg", nsfwLevel: 1, type: "image" },
+        ],
+      })
+    }
+    return new Response("not found", { status: 404 })
+  }
   m = /^\/api\/v1\/model-versions\/(\d+)$/.exec(url.pathname)
   if (url.hostname === "civitai.com" && m) {
     for (const entry of civitai.models.values()) {
@@ -792,6 +820,27 @@ await t("preview: 種類・系統・ライセンス・サムネイル・説明�
   const old = await icall("POST", "/imports/preview", { url: "https://civitai.com/models/100?modelVersionId=200" })
   assert.equal(old.body.code, "UNSUPPORTED_FORMAT")
   assert.equal((await icall("POST", "/imports/preview", { url: "https://civitai.com/models/999" })).body.code, "SOURCE_NOT_FOUND")
+})
+
+await t("アップロード: サムネイルがなければ Civitai の全年齢の作例を使い、それもなければ断る", async () => {
+  const base = { kind: "LORA", filename: "x.safetensors", sizeBytes: 1000, name: "x" }
+  const found = await icall("POST", "/uploads", { ...base, userId: "thumb1", sha256: "c".repeat(64) })
+  assert.equal(found.status, 200, JSON.stringify(found.body))
+  const row = await db.queryOne("SELECT thumbnail_url, sample_image_urls FROM user_models WHERE id = $1", [found.body.data.modelId])
+  assert.equal(row.thumbnail_url, "https://image.civitai.com/k/hash-safe/width=450/2.jpeg")
+  assert.deepEqual(JSON.parse(row.sample_image_urls), ["https://image.civitai.com/k/hash-safe/width=1024/2.jpeg"])
+  const none = await icall("POST", "/uploads", { ...base, userId: "thumb2", sha256: "d".repeat(64) })
+  assert.equal(none.status, 400)
+  assert.equal(none.body.code, "THUMBNAIL_REQUIRED")
+  const sample = await icall("POST", "/uploads", {
+    ...base,
+    userId: "thumb3",
+    sha256: "e".repeat(64),
+    sampleImageUrls: ["https://example.com/first.png"],
+  })
+  assert.equal(sample.status, 200, JSON.stringify(sample.body))
+  const sampleRow = await db.queryOne("SELECT thumbnail_url FROM user_models WHERE id = $1", [sample.body.data.modelId])
+  assert.equal(sampleRow.thumbnail_url, "https://example.com/first.png")
 })
 
 let importedId = ""

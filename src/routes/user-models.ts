@@ -27,6 +27,7 @@ import {
 import {
   cancelUserModelImport,
   getUserModelImportStatus,
+  findCivitaiImagesBySha256,
   previewUserModelImport,
   startUserModelImport,
   type ImportSourceDeps,
@@ -120,7 +121,16 @@ export const createUserModelsRoutes = (
 
   routes.post(
     "/uploads",
-    handle(async (c) => createUserModelUpload(await getDeps(c), await readJson(c))),
+    handle(async (c) => {
+      const importDeps = getImportDeps(c)
+      return createUserModelUpload(
+        {
+          ...(await getDeps(c)),
+          findImagesBySha256: (sha256) => findCivitaiImagesBySha256(importDeps, sha256),
+        },
+        await readJson(c),
+      )
+    }),
   )
 
   routes.put(

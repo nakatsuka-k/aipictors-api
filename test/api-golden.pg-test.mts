@@ -215,6 +215,7 @@ const requests: Req[] = [
   // ユーザーモデル
   internal("models list empty", "GET", "/internal/user-models"),
   internal("models create", "POST", "/internal/user-models/uploads", {
+    thumbnailUrl: "https://example.com/t.png",
     userId: "500",
     kind: "LORA",
     baseModel: "SDXL",

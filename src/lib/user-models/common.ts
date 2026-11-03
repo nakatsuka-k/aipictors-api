@@ -10,7 +10,13 @@ export type Db = {
 
 export type ModelBucket = Pick<R2Bucket, "createMultipartUpload" | "resumeMultipartUpload" | "get" | "delete">
 
-export type UserModelDeps = { db: Db; bucket: ModelBucket; now: number }
+export type UserModelDeps = {
+  db: Db
+  bucket: ModelBucket
+  now: number
+  /** ファイルのハッシュから全年齢の作例を探す（サムネイルが未設定の登録で使う） */
+  findImagesBySha256?: (sha256: string) => Promise<{ thumbnailUrl: string; sampleImageUrls: string[] } | null>
+}
 
 export const USER_MODEL_KINDS = ["LORA", "CHECKPOINT"] as const
 

@@ -191,6 +191,17 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
       `${kind === "LORA" ? "LoRA" : "チェックポイント"} は ${Math.floor(maxBytes[kind] / 1024 / 1024)}MB までです`,
     )
   }
+  // サムネイルのないモデルを作らない: 選んだ画像 → Civitai の全年齢の作例の順に探す
+  const samples = editable.sampleImageUrls ?? []
+  const found =
+    editable.thumbnailUrl || samples.length > 0 || !deps.findImagesBySha256
+      ? null
+      : await deps.findImagesBySha256(sha256)
+  const thumbnailUrl = editable.thumbnailUrl ?? samples[0] ?? found?.thumbnailUrl
+  if (!thumbnailUrl) {
+    throw bad("THUMBNAIL_REQUIRED", "サムネイルにする画像を選んでください")
+  }
+
   const { planType, limit } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
   await cleanupStaleUploads(deps, userId)
 
@@ -205,7 +216,12 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
     filename,
     limit,
     planType,
-    fields: { ...editable, name: editable.name },
+    fields: {
+      ...editable,
+      name: editable.name,
+      thumbnailUrl,
+      sampleImageUrls: samples.length > 0 ? samples : (found?.sampleImageUrls ?? samples),
+    },
   })
   if (inserted === "READY") {
     return {
