@@ -16,7 +16,7 @@ const { schemaStatements, clients, schemaReady } = await import(`${API}/lib/db.t
 const { app } = await import(`${API}/app.ts`)
 
 const dir = `/tmp/api-golden-pg-${process.pid}`
-const port = 54331
+const port = 54400 + (process.pid % 500) // 連続で実行しても前の Postgres の終了を待たない
 const epg = new EmbeddedPostgres({ databaseDir: dir, user: "postgres", password: "pw", port, persistent: false, onLog: () => {}, onError: () => {} })
 await epg.initialise()
 await epg.start()
