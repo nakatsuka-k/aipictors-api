@@ -8,7 +8,9 @@
     "check": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
     "test:coins": "tsx test/coins.pg-test.mts",
-    "test:user-models": "tsx test/user-models.pg-test.mts"
+    "test:user-models": "tsx test/user-models.pg-test.mts",
+    "check:names": "tsx scripts/check-undefined-names.ts",
+    "compare:logic": "tsx scripts/compare-api-logic.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
