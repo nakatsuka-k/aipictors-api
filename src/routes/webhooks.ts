@@ -5,28 +5,12 @@ import { json } from "../lib/json"
 import { applyPointDelta } from "../lib/points"
 import { grantRenewalBonus } from "../lib/loyalty"
 import { createPremiumCoinPurchase, refundPremiumCoinPurchase } from "../lib/premium-coins"
+import { getNumber, getString } from "../lib/record-fields"
 import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
-export var getString3 = (record, key) => {
-  const value = record[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
-};
-export var getNumber2 = (record, key) => {
-  const value = record[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-};
 export var getStringByKeys = (record, keys) => {
   for (const key of keys) {
-    const value = getString3(record, key);
+    const value = getString(record, key);
     if (value) {
       return value;
     }
@@ -119,19 +103,19 @@ webhookRoutes.post("/stripe/premium-coins", async (c) => {
   const object2 = event.data.object;
   if (event.type === "checkout.session.completed") {
     const metadata = object2.metadata ?? {};
-    const kind = getString3(metadata, "kind");
+    const kind = getString(metadata, "kind");
     if (kind === "premium_coins") {
-      const userId = getString3(metadata, "user_id");
-      const coins = Number.parseInt(getString3(metadata, "coins") ?? "", 10);
-      const bonusCoins = Number.parseInt(getString3(metadata, "bonus_coins") ?? "", 10);
-      const priceYen = Number.parseInt(getString3(metadata, "price_yen") ?? "", 10);
+      const userId = getString(metadata, "user_id");
+      const coins = Number.parseInt(getString(metadata, "coins") ?? "", 10);
+      const bonusCoins = Number.parseInt(getString(metadata, "bonus_coins") ?? "", 10);
+      const priceYen = Number.parseInt(getString(metadata, "price_yen") ?? "", 10);
       if (userId && Number.isFinite(coins) && Number.isFinite(bonusCoins) && Number.isFinite(priceYen)) {
         await createPremiumCoinPurchase({
           db,
           userId,
           stripeEventId: event.id,
-          stripeSessionId: getString3(object2, "id"),
-          stripePaymentIntentId: getString3(object2, "payment_intent"),
+          stripeSessionId: getString(object2, "id"),
+          stripePaymentIntentId: getString(object2, "payment_intent"),
           stripeChargeId: null,
           coins,
           bonusCoins,
@@ -144,8 +128,8 @@ webhookRoutes.post("/stripe/premium-coins", async (c) => {
     await refundPremiumCoinPurchase({
       db,
       stripeEventId: event.id,
-      stripePaymentIntentId: getString3(object2, "payment_intent"),
-      stripeChargeId: getString3(object2, "id")
+      stripePaymentIntentId: getString(object2, "payment_intent"),
+      stripeChargeId: getString(object2, "id")
     });
   }
   await db.execute(
@@ -185,10 +169,10 @@ webhookRoutes.post("/stripe", async (c) => {
   const object2 = event.data.object;
   if (event.type === "checkout.session.completed") {
     const metadata = object2.metadata ?? {};
-    const kind = getString3(metadata, "kind");
+    const kind = getString(metadata, "kind");
     if (kind === "points") {
-      const userId = getString3(metadata, "user_id");
-      const points = Number.parseInt(getString3(metadata, "points") ?? "", 10);
+      const userId = getString(metadata, "user_id");
+      const points = Number.parseInt(getString(metadata, "points") ?? "", 10);
       if (userId && Number.isFinite(points)) {
         await applyPointDelta({
           db,
@@ -197,17 +181,17 @@ webhookRoutes.post("/stripe", async (c) => {
           kind: "PURCHASE",
           reason: "Stripe checkout completed",
           stripeEventId: event.id,
-          stripeSessionId: getString3(object2, "id")
+          stripeSessionId: getString(object2, "id")
         });
       }
     }
   }
   if (event.type === "invoice.payment_succeeded") {
     let metadata = getMetadataFromInvoice(object2);
-    const subscriptionId = getString3(object2, "subscription");
+    const subscriptionId = getString(object2, "subscription");
     let userId = getStringByKeys(metadata, ["user_id", "user_index"]);
     let nanoid = getStringByKeys(metadata, ["subscription_nanoid", "pass_id", "subscription_id"]);
-    let passType = getString3(metadata, "pass_type");
+    let passType = getString(metadata, "pass_type");
     let subscriptionCurrentPeriodStart = null;
     let subscriptionCurrentPeriodEnd = null;
     let stripePriceId = null;
@@ -223,15 +207,15 @@ webhookRoutes.post("/stripe", async (c) => {
         metadata = { ...stripeMetadata, ...metadata };
         userId = userId ?? getStringByKeys(stripeMetadata, ["user_id", "user_index"]);
         nanoid = nanoid ?? getStringByKeys(stripeMetadata, ["subscription_nanoid", "pass_id", "subscription_id"]);
-        passType = passType ?? getString3(stripeMetadata, "pass_type");
-        subscriptionCurrentPeriodStart = getNumber2(stripeSubscription, "current_period_start");
-        subscriptionCurrentPeriodEnd = getNumber2(stripeSubscription, "current_period_end");
+        passType = passType ?? getString(stripeMetadata, "pass_type");
+        subscriptionCurrentPeriodStart = getNumber(stripeSubscription, "current_period_start");
+        subscriptionCurrentPeriodEnd = getNumber(stripeSubscription, "current_period_end");
         const items = stripeSubscription.items;
         const firstItem = Array.isArray(items?.data) ? items.data[0] : void 0;
-        stripeSubscriptionItemId = getString3(firstItem ?? {}, "id");
+        stripeSubscriptionItemId = getString(firstItem ?? {}, "id");
         const price = firstItem?.price ?? {};
-        stripePriceId = getString3(price, "id");
-        stripeProductId = getString3(price, "product");
+        stripePriceId = getString(price, "id");
+        stripeProductId = getString(price, "product");
         passType = passType ?? inferPassType({ stripePriceId, stripeProductId });
       } catch (error) {
         console.warn("Failed to fetch Stripe subscription for metadata fallback", {
@@ -241,12 +225,12 @@ webhookRoutes.post("/stripe", async (c) => {
         });
       }
     }
-    const createdAt = getNumber2(object2, "created") ?? Math.floor(Date.now() / 1e3);
+    const createdAt = getNumber(object2, "created") ?? Math.floor(Date.now() / 1e3);
     const lines = object2.lines;
     const firstLine = Array.isArray(lines?.data) ? lines.data[0] : void 0;
     const period = firstLine?.period ?? {};
-    const periodStart = getNumber2(period, "start") ?? getNumber2(object2, "period_start") ?? createdAt;
-    const periodEnd = getNumber2(period, "end") ?? getNumber2(object2, "period_end") ?? createdAt + 30 * 24 * 60 * 60;
+    const periodStart = getNumber(period, "start") ?? getNumber(object2, "period_start") ?? createdAt;
+    const periodEnd = getNumber(period, "end") ?? getNumber(object2, "period_end") ?? createdAt + 30 * 24 * 60 * 60;
     const debugInfo = {
       eventId: event.id,
       metadata,
@@ -254,12 +238,12 @@ webhookRoutes.post("/stripe", async (c) => {
       nanoid,
       passType,
       subscriptionId,
-      invoiceId: getString3(object2, "id"),
+      invoiceId: getString(object2, "id"),
       source: (!getStringByKeys(getMetadataFromInvoice(object2), ["user_id", "user_index"]) || !getStringByKeys(getMetadataFromInvoice(object2), [
         "subscription_nanoid",
         "pass_id",
         "subscription_id"
-      ]) || !getString3(getMetadataFromInvoice(object2), "pass_type")) && subscriptionId ? "stripe.subscription_fallback" : "invoice_metadata",
+      ]) || !getString(getMetadataFromInvoice(object2), "pass_type")) && subscriptionId ? "stripe.subscription_fallback" : "invoice_metadata",
       period_start: periodStart,
       period_end: periodEnd,
       stripePriceId,
@@ -288,7 +272,7 @@ webhookRoutes.post("/stripe", async (c) => {
         nanoid,
         userId,
         type: passType,
-        status: getString3(object2, "status") ?? "active",
+        status: getString(object2, "status") ?? "active",
         isDisabled: false,
         createdAt,
         currentPeriodStart: subscriptionCurrentPeriodStart ?? periodStart,
@@ -296,16 +280,16 @@ webhookRoutes.post("/stripe", async (c) => {
         trialStart: null,
         trialEnd: null,
         stripeSubscriptionId: subscriptionId ?? "",
-        stripeLatestInvoiceId: getString3(object2, "id"),
-        stripePaymentIntentId: getString3(object2, "payment_intent"),
+        stripeLatestInvoiceId: getString(object2, "id"),
+        stripePaymentIntentId: getString(object2, "payment_intent"),
         stripeSubscriptionItemId,
         stripePriceId,
         stripeProductId
       });
       // 更新（2か月目以降）のたびに継続ボーナスのプレミアムコインを付ける
-      if (getString3(object2, "billing_reason") === "subscription_cycle") {
+      if (getString(object2, "billing_reason") === "subscription_cycle") {
         try {
-          await grantRenewalBonus({ db, userId, passType, invoiceId: getString3(object2, "id") });
+          await grantRenewalBonus({ db, userId, passType, invoiceId: getString(object2, "id") });
         } catch (error) {
           console.warn("Failed to grant renewal bonus", {
             eventId: event.id,
@@ -322,7 +306,7 @@ webhookRoutes.post("/stripe", async (c) => {
     }
   }
   if (event.type === "customer.subscription.deleted") {
-    const subscriptionId = getString3(object2, "id");
+    const subscriptionId = getString(object2, "id");
     if (subscriptionId) {
       await disableSubscriptionByStripeId(db, subscriptionId);
     }

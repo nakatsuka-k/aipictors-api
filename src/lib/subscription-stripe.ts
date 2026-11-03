@@ -1,42 +1,20 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 // サブスクの Stripe API 呼び出しと応答の読み取り
+import { getArray, getNumber, getRecord, getString } from "./record-fields"
 export var stripeProductIdByPassType = {
   PREMIUM: "prod_OneEB60sXmxvu1",
   LITE: "prod_One9y8yOCumS2G",
   STANDARD: "prod_OaCLGmzAoDVJjY"
 };
 
-export var getString2 = (record, key) => {
-  const value = record[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
-};
 
-export var getNumber = (record, key) => {
-  const value = record[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-};
 
-export var getRecord = (record, key) => {
-  const value = record[key];
-  return typeof value === "object" && value !== null ? value : null;
-};
 
-export var getArray = (record, key) => {
-  const value = record[key];
-  return Array.isArray(value) ? value : [];
-};
 
 export var getSubscriptionItemId = (stripeSubscription) => {
   const items = stripeSubscription.items;
   const [firstItem] = items?.data ?? [];
-  return firstItem ? getString2(firstItem, "id") : null;
+  return firstItem ? getString(firstItem, "id") : null;
 };
 
 export var getPreviewProrationAmount = (invoice) => {
@@ -68,7 +46,7 @@ export var isInvoicePaid = (invoice) => {
   if (!invoice) {
     return false;
   }
-  const status = getString2(invoice, "status");
+  const status = getString(invoice, "status");
   if (status === "paid") {
     return true;
   }

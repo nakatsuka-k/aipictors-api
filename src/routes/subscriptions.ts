@@ -4,6 +4,7 @@ import { boolean, literal, nullable, number, object, optional, safeParse, string
 import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
+import { getArray, getNumber, getRecord, getString } from "../lib/record-fields"
 import { getPricingSettings } from "../lib/pricing"
 import { saveCancelReason } from "../lib/retention"
 import { sendSubscriptionCancellationEmail } from "../lib/subscription-cancellation-email"
@@ -17,10 +18,7 @@ import {
 } from "../lib/subscriptions"
 import {
   cancelOtherActiveSubscriptions,
-  getNumber,
   getPreviewProrationAmount,
-  getRecord,
-  getString2,
   getStripe,
   getStripeCustomerEmail,
   getSubscriptionItemId,
@@ -72,7 +70,7 @@ subscriptionRoutes.get("/current/:userId", async (c) => {
   if (!current) {
     return json({ error: null, data: null });
   }
-  const stripeSubscriptionId = getString2(current, "stripe_subscription_id");
+  const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId || !c.env.STRIPE_SECRET_KEY) {
     return json({ error: null, data: current });
   }
@@ -82,7 +80,7 @@ subscriptionRoutes.get("/current/:userId", async (c) => {
       `/subscriptions/${stripeSubscriptionId}`
     );
     const cancelAtPeriodEnd = stripeSubscription.cancel_at_period_end === true;
-    const stripeStatus = getString2(stripeSubscription, "status");
+    const stripeStatus = getString(stripeSubscription, "status");
     if (cancelAtPeriodEnd) {
       await db.execute(
         `UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = $1`,
@@ -135,15 +133,15 @@ subscriptionRoutes.get("/unpaid/:userId", async (c) => {
         c.env.STRIPE_SECRET_KEY,
         `/subscriptions/${row.stripe_subscription_id}?expand[]=latest_invoice`
       );
-      const status = getString2(sub, "status");
+      const status = getString(sub, "status");
       if (!["past_due", "unpaid", "incomplete"].includes(status ?? "")) {
         continue;
       }
       const invoice = getRecord(sub, "latest_invoice");
-      if (!invoice || getString2(invoice, "status") !== "open") {
+      if (!invoice || getString(invoice, "status") !== "open") {
         continue;
       }
-      const url = getString2(invoice, "hosted_invoice_url");
+      const url = getString(invoice, "hosted_invoice_url");
       if (!url) {
         continue;
       }
@@ -197,7 +195,7 @@ subscriptionRoutes.post("/billing-portal/:userId", async (c) => {
   }
   form.set("flow_data[type]", "payment_method_update");
   const session = await postStripeForm2(c.env.STRIPE_SECRET_KEY, "/billing_portal/sessions", form);
-  const url = getString2(session ?? {}, "url");
+  const url = getString(session ?? {}, "url");
   if (!url) {
     console.warn("[subscriptions.billing-portal] failed", session?.error?.message);
     return json({ error: "お支払い方法の変更画面を開けませんでした", data: null }, 502);
@@ -255,7 +253,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
         const toEmail = toDeliverableEmail(parsed.output.userEmail) ?? await getStripeCustomerEmail(
           c.env.STRIPE_SECRET_KEY,
           stripeCustomerId,
-          getString2(current ?? {}, "stripe_subscription_id")
+          getString(current ?? {}, "stripe_subscription_id")
         );
         if (!toEmail) {
           console.warn("[subscriptions.cancel-current] no recipient email; cancellation email skipped", { userId: parsed.output.userId });
@@ -284,7 +282,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
       note: parsed.output.reasonNote
     }).catch((error) => console.error("[subscriptions.cancel-current] failed to save reason", error));
   }
-  const stripeSubscriptionId = getString2(current, "stripe_subscription_id");
+  const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {
     return json({ error: "Stripe subscription id is missing" }, 409);
   }
@@ -323,7 +321,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
       [stripeSubscriptionId]
     );
     await cancelOtherActiveSubscriptions(c.env.STRIPE_SECRET_KEY, db, parsed.output.userId, stripeSubscriptionId);
-    sendCancellationEmail("canceled", getString2(stripeResponse, "customer"));
+    sendCancellationEmail("canceled", getString(stripeResponse, "customer"));
     return json({
       error: null,
       data: {
@@ -342,7 +340,7 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
     [stripeSubscriptionId]
   );
   await cancelOtherActiveSubscriptions(c.env.STRIPE_SECRET_KEY, db, parsed.output.userId, stripeSubscriptionId);
-  sendCancellationEmail("cancellation_requested", getString2(stripeResponse, "customer"));
+  sendCancellationEmail("cancellation_requested", getString(stripeResponse, "customer"));
   return json({
     error: null,
     data: {
@@ -365,7 +363,7 @@ subscriptionRoutes.post("/resume-current", async (c) => {
   if (!current) {
     return json({ error: "No active subscription found" }, 404);
   }
-  const stripeSubscriptionId = getString2(current, "stripe_subscription_id");
+  const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {
     return json({ error: "Stripe subscription id is missing" }, 409);
   }
@@ -405,13 +403,13 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   if (!current) {
     return json({ error: "No active subscription found" }, 404);
   }
-  const stripeSubscriptionId = getString2(current, "stripe_subscription_id");
+  const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {
     return json({ error: "Stripe subscription id is missing" }, 409);
   }
   const pricing = await getPricingSettings(db);
   const nextAmount = pricing.subscriptionPlans[parsed.output.passType];
-  const currentType = getString2(current, "type");
+  const currentType = getString(current, "type");
   if (currentType === parsed.output.passType) {
     return json({
       error: null,
@@ -419,7 +417,7 @@ subscriptionRoutes.post("/change-plan", async (c) => {
         passType: parsed.output.passType,
         renewalAmountJpy: nextAmount,
         chargedNowAmountJpy: 0,
-        status: getString2(current, "status") ?? "active"
+        status: getString(current, "status") ?? "active"
       }
     });
   }
@@ -435,7 +433,7 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   if (!stripeSubscriptionItemId) {
     return json({ error: "Stripe subscription item is missing" }, 409);
   }
-  const subscriptionNanoid = getString2(current, "nanoid");
+  const subscriptionNanoid = getString(current, "nanoid");
   const prorationDate = typeof parsed.output.prorationDate === "number" && Number.isFinite(parsed.output.prorationDate) ? parsed.output.prorationDate : void 0;
   const form = new URLSearchParams();
   form.set("proration_behavior", "always_invoice");
@@ -468,8 +466,8 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   const latestInvoice = getRecord(stripeUpdate, "latest_invoice");
   const paymentIntent = getRecord(latestInvoice ?? {}, "payment_intent");
   const chargedNowAmountJpy = getNumber(latestInvoice ?? {}, "amount_paid") ?? getNumber(latestInvoice ?? {}, "amount_due") ?? 0;
-  const hostedInvoiceUrl = getString2(latestInvoice ?? {}, "hosted_invoice_url");
-  const paymentIntentStatus = getString2(paymentIntent ?? {}, "status");
+  const hostedInvoiceUrl = getString(latestInvoice ?? {}, "hosted_invoice_url");
+  const paymentIntentStatus = getString(paymentIntent ?? {}, "status");
   const updatedStatus = typeof stripeUpdate.status === "string" ? stripeUpdate.status : "active";
   const updatedPeriodStart = getNumber(stripeUpdate, "current_period_start") ?? getNumber(current, "current_period_start") ?? Math.floor(Date.now() / 1e3);
   const updatedPeriodEnd = getNumber(stripeUpdate, "current_period_end") ?? getNumber(current, "current_period_end") ?? Math.floor(Date.now() / 1e3);
@@ -504,9 +502,9 @@ subscriptionRoutes.post("/change-plan", async (c) => {
       updatedStatus,
       updatedPeriodStart,
       updatedPeriodEnd,
-      getString2(updatedFirstItem ?? {}, "id") ?? stripeSubscriptionItemId,
-      getString2(updatedPrice ?? {}, "id"),
-      getString2(updatedPrice ?? {}, "product"),
+      getString(updatedFirstItem ?? {}, "id") ?? stripeSubscriptionItemId,
+      getString(updatedPrice ?? {}, "id"),
+      getString(updatedPrice ?? {}, "product"),
       stripeSubscriptionId
     ]
   );
@@ -536,13 +534,13 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
   if (!current) {
     return json({ error: "No active subscription found" }, 404);
   }
-  const stripeSubscriptionId = getString2(current, "stripe_subscription_id");
+  const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {
     return json({ error: "Stripe subscription id is missing" }, 409);
   }
   const pricing = await getPricingSettings(db);
   const nextAmount = pricing.subscriptionPlans[parsed.output.passType];
-  const currentType = getString2(current, "type");
+  const currentType = getString(current, "type");
   if (currentType === parsed.output.passType) {
     return json({
       error: null,

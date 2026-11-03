@@ -5,12 +5,9 @@ import { literal, number, object, optional, safeParse, string, union } from "val
 import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
+import { getString } from "../lib/record-fields"
 import { createPremiumCoinPurchase } from "../lib/premium-coins"
 import { createPointCheckout, createPremiumCoinCheckout, createSubscriptionCheckout, fetchStripeCheckoutSession } from "../lib/stripe"
-export var getString = (record, key) => {
-  const value = record[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
-};
 export var pointCheckoutSchema = object({
   userId: string(),
   points: union([literal(100), literal(300), literal(1e3)]),

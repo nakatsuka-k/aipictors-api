@@ -14,6 +14,9 @@ const BASE = process.argv[2] ?? "663b890"
 
 // 名前 → 理由。名前のない文（ルート登録など）は先頭 60 文字
 const EXPECTED_CHANGES: Record<string, string> = {
+  getString2: "lib/record-fields.ts の getString にまとめた（同じ中身）",
+  getString3: "lib/record-fields.ts の getString にまとめた（同じ中身）",
+  getNumber2: "lib/record-fields.ts の getNumber にまとめた（書き方が違うだけで同じ動き）",
   ensureSupportTables: "DDL を isolate ごとに 1 回だけ（oncePerDb で包んだ。中身は同じ）",
 }
 
@@ -31,6 +34,9 @@ const tokens = (node: ts.Node, sf: ts.SourceFile): string[] => {
   return out
 }
 
+// 名前だけまとめたヘルパー。呼び出し側はこの置き換えを無視して比べる
+const RENAMED: Record<string, string> = { getString2: "getString", getString3: "getString", getNumber2: "getNumber" }
+
 type Unit = { name: string; file: string; normalized: string }
 
 const unitsOf = (file: string, text: string): Unit[] => {
@@ -43,7 +49,7 @@ const unitsOf = (file: string, text: string): Unit[] => {
     else if ((ts.isTypeAliasDeclaration(s) || ts.isClassDeclaration(s) || ts.isFunctionDeclaration(s)) && s.name) name = s.name.text
     const list = tokens(s, sf)
     if (list[0] === "export") list.shift()
-    units.push({ name, file, normalized: list.join(" ") })
+    units.push({ name, file, normalized: list.map((t) => RENAMED[t] ?? t).join(" ") })
   }
   return units
 }
