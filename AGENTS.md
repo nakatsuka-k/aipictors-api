@@ -44,4 +44,5 @@ DDL は戻らない。
 
 - `src/index.ts`: Worker の入口と cron。`src/app.ts`: ルートの組み立て。`src/routes/`: ルート。`src/lib/`: 処理。
 - `lib/coins.ts`、`lib/coin-support.ts`、`lib/user-models.ts` は同名のディレクトリへの再 export。中身はディレクトリ側を直す。
+- `/internal/subscriptions/current/:userId` は契約者の取得のたびに呼ばれる。`customer.subscription.updated` を受けていないのでポータルでの解約予約と取り消しは Stripe に聞く必要があるが、解約予定の契約だけ同期（1 分に 1 回）、他は裏で確認（10 分に 1 回）にしている。
 - Neon は 1 文ごとに HTTP の往復になる。互いに依存しない読み取りは `Promise.all` で同時に投げる。

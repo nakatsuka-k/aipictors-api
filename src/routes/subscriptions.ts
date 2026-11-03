@@ -18,6 +18,7 @@ import {
 } from "../lib/subscriptions"
 import {
   cancelOtherActiveSubscriptions,
+  claimCurrentSubscriptionCheck,
   getPreviewProrationAmount,
   getStripe,
   getStripeCustomerEmail,
@@ -26,6 +27,7 @@ import {
   postStripeForm2,
   setPlanPriceData,
   setPreviewPlanPriceData,
+  syncCurrentSubscriptionFromStripe,
   toDeliverableEmail,
 } from "../lib/subscription-stripe"
 export * from "../lib/subscription-stripe"
@@ -71,45 +73,15 @@ subscriptionRoutes.get("/current/:userId", async (c) => {
     return json({ error: null, data: null });
   }
   const stripeSubscriptionId = getString(current, "stripe_subscription_id");
-  if (!stripeSubscriptionId || !c.env.STRIPE_SECRET_KEY) {
+  if (!stripeSubscriptionId || !c.env.STRIPE_SECRET_KEY || !claimCurrentSubscriptionCheck(current)) {
     return json({ error: null, data: current });
   }
-  try {
-    const stripeSubscription = await getStripe(
-      c.env.STRIPE_SECRET_KEY,
-      `/subscriptions/${stripeSubscriptionId}`
-    );
-    const cancelAtPeriodEnd = stripeSubscription.cancel_at_period_end === true;
-    const stripeStatus = getString(stripeSubscription, "status");
-    if (cancelAtPeriodEnd) {
-      await db.execute(
-        `UPDATE subscriptions SET status = 'cancellation_requested' WHERE stripe_subscription_id = $1`,
-        [stripeSubscriptionId]
-      );
-      return json({
-        error: null,
-        data: {
-          ...current,
-          status: "cancellation_requested"
-        }
-      });
-    }
-    if (stripeStatus === "canceled") {
-      await db.execute(
-        `UPDATE subscriptions SET status = 'canceled', is_disabled = TRUE WHERE stripe_subscription_id = $1`,
-        [stripeSubscriptionId]
-      );
-      return json({
-        error: null,
-        data: {
-          ...current,
-          status: "canceled",
-          is_disabled: 1
-        }
-      });
-    }
-  } catch {
+  // 解約予定のときだけ、応答を待たせて確かめる（取り消しがすぐ見えるように）
+  if (getString(current, "status") === "cancellation_requested") {
+    return json({ error: null, data: await syncCurrentSubscriptionFromStripe(c.env.STRIPE_SECRET_KEY, db, current) });
   }
+  // それ以外は DB の値を返し、裏で確かめる（結果は次の取得から見える）
+  c.executionCtx.waitUntil(syncCurrentSubscriptionFromStripe(c.env.STRIPE_SECRET_KEY, db, current));
   return json({ error: null, data: current });
 });
 // 更新の支払いに失敗して未払いのままになっている契約（Stripe 上で past_due / unpaid / incomplete）の請求書を返す。
