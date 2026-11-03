@@ -13,7 +13,9 @@ const ROOT = new URL("..", import.meta.url).pathname
 const BASE = process.argv[2] ?? "663b890"
 
 // 名前 → 理由。名前のない文（ルート登録など）は先頭 60 文字
-const EXPECTED_CHANGES: Record<string, string> = {}
+const EXPECTED_CHANGES: Record<string, string> = {
+  ensureSupportTables: "DDL を isolate ごとに 1 回だけ（oncePerDb で包んだ。中身は同じ）",
+}
 
 const tokens = (node: ts.Node, sf: ts.SourceFile): string[] => {
   const out: string[] = []

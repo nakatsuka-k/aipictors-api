@@ -1,5 +1,6 @@
 // @ts-nocheck -- 周りのファイルに合わせて型は付けていない
 import { getNow } from "./db"
+import { oncePerDb } from "./once-per-db"
 import { SUPPORT_KNOWLEDGE } from "./support-knowledge"
 
 /**
@@ -18,7 +19,8 @@ export var SUPPORT_MESSAGE_MAX_LENGTH = 4000;
 // 安くて日本語が自然なもの。上がだめなら下を使う（1 回あたり 1 円未満）
 var DEFAULT_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
 
-export var ensureSupportTables = async (db) => {
+// 未読の確認など毎ページ呼ばれるので、DDL 5 文を流すのは isolate ごとに 1 回だけ
+export var ensureSupportTables = oncePerDb(async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS support_tickets (
     id BIGSERIAL PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -57,7 +59,7 @@ export var ensureSupportTables = async (db) => {
   await db.execute(
     "CREATE INDEX IF NOT EXISTS support_messages_ticket_idx ON support_messages(ticket_id, id)"
   );
-};
+});
 
 var toTicket = (row) => {
   if (!row) return null;

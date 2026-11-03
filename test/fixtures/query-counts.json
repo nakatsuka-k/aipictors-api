@@ -256,12 +256,12 @@
     "rounds": 6
   },
   "support unread": {
-    "queries": 6,
-    "rounds": 6
+    "queries": 1,
+    "rounds": 1
   },
   "support admin tickets": {
-    "queries": 8,
-    "rounds": 8
+    "queries": 3,
+    "rounds": 3
   },
   "email unsubscribe invalid": {
     "queries": 0,
