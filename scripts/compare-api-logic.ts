@@ -23,6 +23,7 @@ const EXPECTED_CHANGES: Record<string, string> = {
 const tokens = (node: ts.Node, sf: ts.SourceFile): string[] => {
   const out: string[] = []
   const visit = (n: ts.Node) => {
+    if (ts.isJSDoc(n)) return
     const children = n.getChildren(sf)
     if (children.length === 0) {
       if (n.kind !== ts.SyntaxKind.EndOfFileToken && n.getWidth(sf) > 0) out.push(n.getText(sf))

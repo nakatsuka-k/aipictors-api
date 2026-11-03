@@ -14,6 +14,7 @@ await epg.initialise()
 await epg.start()
 await epg.createDatabase("t")
 const pool = new pg.Pool({ connectionString: "postgres://postgres:pw@127.0.0.1:54329/t", max: 40 })
+pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
 pg.types.setTypeParser(20, (v) => Number(v)) // BIGINT を number に（neon と同じ扱い）
 
 const db = {

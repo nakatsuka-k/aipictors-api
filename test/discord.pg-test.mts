@@ -13,6 +13,7 @@ await epg.initialise()
 await epg.start()
 await epg.createDatabase("t")
 const pool = new pg.Pool({ connectionString: "postgres://postgres:pw@127.0.0.1:54331/t", max: 10 })
+pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
 pg.types.setTypeParser(20, (v) => Number(v))
 const db = {
   async query(text: string, params: unknown[] = []) { return (await pool.query(text, params)).rows },
