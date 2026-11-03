@@ -206,7 +206,8 @@ imageGenerationRoutes.get("/results/count/:userId", async (c) => {
   const count = await countImageGenerationResultsForUserSince(
     db,
     userId,
-    new Date(fromDate)
+    new Date(fromDate),
+    { includeDeleted: c.req.query("includeDeleted") === "1" }
   );
   return json({ error: null, data: { count } });
 });

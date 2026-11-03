@@ -493,14 +493,14 @@ export var createImageGenerationResult = async (db, input) => {
     ]
   );
 };
-export var countImageGenerationResultsForUserSince = async (db, userId, since) => {
+export var countImageGenerationResultsForUserSince = async (db, userId, since, options = {}) => {
   const result = await db.queryOne(
     `SELECT COUNT(*)::text AS count
        FROM image_generation_results
       WHERE user_id = $1
         AND generation_time >= $2
         AND status <> 'error'
-        AND is_deleted = FALSE`,
+        ${options.includeDeleted ? "" : "AND is_deleted = FALSE"}`,
     [userId, since]
   );
   return Number(result?.count ?? 0);
