@@ -7,7 +7,7 @@ import { join, relative } from "node:path"
 import ts from "typescript"
 
 const ROOT = new URL("..", import.meta.url).pathname
-const CANNOT_FIND_NAME = new Set([2304, 2552, 2503, 2305, 2307, 2614])
+const CANNOT_FIND_NAME = new Set([2304, 2552, 2503, 2305, 2307, 2459, 2614])
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {

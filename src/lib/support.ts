@@ -19,7 +19,7 @@ export var SUPPORT_MESSAGE_MAX_LENGTH = 4000;
 // 安くて日本語が自然なもの。上がだめなら下を使う（1 回あたり 1 円未満）
 var DEFAULT_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
 
-// 未読の確認など毎ページ呼ばれるので、DDL 5 文を流すのは isolate ごとに 1 回だけ
+// 読むだけのリクエスト（未読の確認など）でも DDL 5 文を流さないよう、isolate ごとに 1 回だけ
 export var ensureSupportTables = oncePerDb(async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS support_tickets (
     id BIGSERIAL PRIMARY KEY,
