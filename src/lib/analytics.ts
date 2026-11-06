@@ -155,13 +155,22 @@ var collectCloudflare = async (token, day, range) => {
   if (!token) return null;
   const startTime = new Date(range.start * 1000).toISOString();
   const endTime = new Date(range.end * 1000).toISOString();
-  const zone = await cloudflareQuery(
+  // 日別の合計は長く残るが、詳しい集計（流入元など）は古い日だと取れないので分けて聞く
+  const totals = await cloudflareQuery(
     token,
-    `query($z: String!, $day: Date!, $s: Time!, $e: Time!) {
+    `query($z: String!, $day: Date!) {
       viewer { zones(filter: { zoneTag: $z }) {
         daily: httpRequests1dGroups(limit: 1, filter: { date: $day }) {
           sum { requests pageViews bytes } uniq { uniques }
         }
+      } }
+    }`,
+    { z: ZONE_ID, day }
+  );
+  const zone = await cloudflareQuery(
+    token,
+    `query($z: String!, $s: Time!, $e: Time!) {
+      viewer { zones(filter: { zoneTag: $z }) {
         referers: httpRequestsAdaptiveGroups(limit: 20, filter: { datetime_geq: $s, datetime_lt: $e, requestSource: "eyeball", edgeResponseContentTypeName: "html", edgeResponseStatus: 200 }, orderBy: [count_DESC]) {
           count dimensions { clientRefererHost }
         }
@@ -173,9 +182,9 @@ var collectCloudflare = async (token, day, range) => {
         }
       } }
     }`,
-    { z: ZONE_ID, day, s: startTime, e: endTime }
-  );
-  const daily = zone?.daily?.[0];
+    { z: ZONE_ID, s: startTime, e: endTime }
+  ).catch(() => null);
+  const daily = totals?.daily?.[0];
   const pv = { total: 0, landings: 0, bySource: {}, bySection: {} };
   for (const group of zone?.pv ?? []) {
     const params = new URLSearchParams(String(group.dimensions?.clientRequestQuery ?? "").replace(/^\?/, ""));
