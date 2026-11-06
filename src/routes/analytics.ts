@@ -12,7 +12,7 @@ import { json } from "../lib/json"
 
 /**
  * 分析ページ（/admin/analytics）と運営の分析用の日別の数字
- * 内部トークンのほか、読むだけの ANALYTICS_READ_TOKEN でも見られる（集め直しは内部トークンだけ）
+ * 内部トークンのほか、運営の分析用の ANALYTICS_READ_TOKEN でも使える（読む・集め直すだけで、利用者のデータは変えない）
  */
 export var analyticsRoutes = new Hono2();
 
@@ -44,7 +44,7 @@ analyticsRoutes.get("/daily", async (c) => {
  * { from: "YYYY-MM-DD", to: "YYYY-MM-DD" }。1 回 31 日まで、古い日から順に
  */
 analyticsRoutes.post("/collect", async (c) => {
-  if (!isInternal(c)) return json({ error: "Unauthorized" }, 401);
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
   const body = await c.req.json().catch(() => ({}));
   const pattern = /^\d{4}-\d{2}-\d{2}$/;
   const to = pattern.test(body.to ?? "") ? body.to : jstDayBefore(getNow(), 1);
