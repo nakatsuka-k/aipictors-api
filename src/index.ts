@@ -4,6 +4,7 @@ import { fillRecommendedSettings } from "./lib/user-model-recommendations";
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
 import { getDb, getNow } from "./lib/db"
+import { collectAnalyticsDay, jstDayBefore } from "./lib/analytics"
 import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
 import { getStripeCustomerEmail } from "./routes/subscriptions"
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
@@ -49,6 +50,15 @@ const scheduled = async (controller, env, ctx) => {
       }
       const result = await runDailyCoinJob(db, getNow());
       console.log(JSON.stringify({ event: "coins.daily_job.done", ...result }));
+      // 00:30 JST: 前日の分析用の数字を保存する（00:00 の回は日付が変わった直後なので 00:30 だけ）
+      if (controller?.cron === "30 15 * * *") {
+        const day = jstDayBefore(getNow(), 1);
+        const analytics = await collectAnalyticsDay(env, db, day).catch((error) => {
+          console.log(JSON.stringify({ event: "analytics.daily.failed", day, message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (analytics) console.log(JSON.stringify({ event: "analytics.daily.done", day, errors: analytics.metrics.errors }));
+      }
     })()
   );
 };

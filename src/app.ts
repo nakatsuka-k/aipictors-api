@@ -3,6 +3,7 @@
 import { Hono as Hono2 } from "hono"
 import { json } from "./lib/json"
 import { adminRoutes } from "./routes/admin"
+import { analyticsRoutes } from "./routes/analytics"
 import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
 import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
 import { discordBotRoutes, discordRoutes } from "./routes/discord"
@@ -25,6 +26,7 @@ app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);
 app.route("/admin", adminRoutes);
 app.route("/internal/campaigns", campaignRoutes);
+app.route("/internal/analytics", analyticsRoutes);
 app.route("/internal/support", supportRoutes);
 app.route("/internal/discord", discordRoutes);
 app.route("/discord-bot", discordBotRoutes);
