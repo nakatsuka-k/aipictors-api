@@ -1,29 +1,14 @@
 // Discord 連携を本物の Postgres と偽の Discord API で検証する
-import EmbeddedPostgres from "embedded-postgres"
-import pg from "pg"
 import assert from "node:assert/strict"
 
 const API = new URL("../src", import.meta.url).pathname
-const { schemaStatements } = await import(`${API}/lib/db.ts`)
 const d = await import(`${API}/lib/discord.ts`)
 
-const dir = `/tmp/discord-test-pg-${process.pid}`
-const epg = new EmbeddedPostgres({ databaseDir: dir, user: "postgres", password: "pw", port: 54331, persistent: false, onLog: () => {}, onError: () => {} })
-await epg.initialise()
-await epg.start()
-await epg.createDatabase("t")
-const pool = new pg.Pool({ connectionString: "postgres://postgres:pw@127.0.0.1:54331/t", max: 10 })
-pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
-pg.types.setTypeParser(20, (v) => Number(v))
-const db = {
-  async query(text: string, params: unknown[] = []) { return (await pool.query(text, params)).rows },
-  async queryOne(text: string, params: unknown[] = []) { return (await pool.query(text, params)).rows[0] ?? null },
-  async execute(text: string, params: unknown[] = []) { await pool.query(text, params) },
-  async executeResult(text: string, params: unknown[] = []) { return { rowCount: (await pool.query(text, params)).rowCount ?? 0 } },
-  async lockedQuery(_k: string[], text: string, params: unknown[] = []) { return (await pool.query(text, params)).rows },
-  async lockedQueryOne(_k: string[], text: string, params: unknown[] = []) { return (await pool.query(text, params)).rows[0] ?? null },
-}
-for (const s of schemaStatements) await db.execute(s)
+import { createTestD1 } from "./d1.mts"
+const d1 = await createTestD1()
+const db = d1.db
+const pool = { query: async (text: string, params: unknown[] = []) => ({ rows: await db.query(text, params), rowCount: 0 }) }
+
 
 /* 偽の Discord と GraphQL */
 const G = d.DISCORD_GUILD_ID
@@ -123,7 +108,7 @@ const test = async (name: string, fn: () => Promise<void>) => {
   try { await fn(); passed++; console.log("ok -", name) } catch (e) { console.log("FAIL -", name, e); process.exitCode = 1 }
 }
 // 残高は coin_lots が正（coin_balances は読むときに合わせ直す）
-const balance = async (u: string) => (await db.queryOne("SELECT COALESCE(SUM(remaining), 0)::INTEGER AS total FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE'", [u])).total
+const balance = async (u: string) => (await db.queryOne("SELECT COALESCE(SUM(remaining), 0) AS total FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE'", [u])).total
 
 await test("レベルのロールを決める・古い ✦Lv を外せる", async () => {
   assert.equal(d.stripNickSuffix("きりと ✦Lv.42"), "きりと")
@@ -186,11 +171,11 @@ await test("隠し実績はロールにせず、選んでいたら外す。お�
   await d.updateDiscordSettings(db, { userId: "1", highlightKey: "hidden-abc" })
   await d.syncDiscordLinkByUserId(env, db, "1")
   assert.ok(!world.roles.some((r: any) => r.name === "🏅???"))
-  await db.execute("UPDATE discord_links SET celebrate = TRUE, celebrated_until = 0 WHERE user_id = '1'")
+  await db.execute("UPDATE discord_links SET celebrate = 1, celebrated_until = 0 WHERE user_id = '1'")
   const posted = world.messages.length
   await d.syncDiscordLinkByUserId(env, db, "1")
   assert.ok(world.messages.slice(posted).every((m: any) => !JSON.stringify(m).includes("???")))
-  await db.execute("UPDATE discord_links SET celebrate = FALSE WHERE user_id = '1'")
+  await db.execute("UPDATE discord_links SET celebrate = 0 WHERE user_id = '1'")
   world.achievements = achievements
 })
 
@@ -293,7 +278,7 @@ await test("お祝い: 希望者だけ、ゴールド以上で新しく達成し
   await db.execute("UPDATE discord_links SET celebrated_until = $1 WHERE user_id = '1'", [now])
   await d.syncDiscordLinkByUserId(env, db, "1")
   assert.equal(world.messages.length, 0, "オフの人は投稿しない")
-  await db.execute("UPDATE discord_links SET celebrated_until = $1, celebrate = TRUE WHERE user_id = '1'", [now])
+  await db.execute("UPDATE discord_links SET celebrated_until = $1, celebrate = 1 WHERE user_id = '1'", [now])
   await d.syncDiscordLinkByUserId(env, db, "1")
   assert.equal(world.messages.length, 1)
   assert.equal(world.messages[0].embeds.length, 1)
@@ -388,6 +373,5 @@ await test("identify だけの連携: トークンを持たずに取り消し、
 })
 
 console.log(`\n${passed} passed`)
-await pool.end()
-await epg.stop()
+await d1.dispose()
 process.exit(process.exitCode ?? 0)

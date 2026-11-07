@@ -1,60 +1,16 @@
 // aipictors-api のユーザーモデル（アップロード・一覧・削除・ファイル配信）を本物の Postgres と簡易 R2 モックで検証する
-import EmbeddedPostgres from "embedded-postgres"
-import pg from "pg"
 import assert from "node:assert/strict"
 import { Hono } from "hono"
 
 const API = process.env.API_SRC ?? new URL("../src", import.meta.url).pathname
-const { schemaStatements } = await import(`${API}/lib/db.ts`)
 const um = await import(`${API}/lib/user-models.ts`)
 const { createUserModelsRoutes } = await import(`${API}/routes/user-models.ts`)
 
-const dir = `/tmp/user-models-test-pg-${process.pid}`
-const epg = new EmbeddedPostgres({ databaseDir: dir, user: "postgres", password: "pw", port: 54331, persistent: false })
-await epg.initialise()
-await epg.start()
-await epg.createDatabase("t")
-const pool = new pg.Pool({ connectionString: "postgres://postgres:pw@127.0.0.1:54331/t", max: 40 })
-pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
-pg.types.setTypeParser(20, (v) => Number(v))
+import { createTestD1 } from "./d1.mts"
+const d1 = await createTestD1()
+const db = d1.db
+const pool = { query: async (text: string, params: unknown[] = []) => ({ rows: await db.query(text, params), rowCount: 0 }) }
 
-const db = {
-  async query(text: string, params: unknown[] = []) {
-    return (await pool.query(text, params)).rows
-  },
-  async queryOne(text: string, params: unknown[] = []) {
-    return (await pool.query(text, params)).rows[0] ?? null
-  },
-  async execute(text: string, params: unknown[] = []) {
-    await pool.query(text, params)
-  },
-  async executeResult(text: string, params: unknown[] = []) {
-    return { rowCount: (await pool.query(text, params)).rowCount ?? 0 }
-  },
-  async lockedQuery(keys: string[], text: string, params: unknown[] = []) {
-    const c = await pool.connect()
-    try {
-      await c.query("BEGIN ISOLATION LEVEL READ COMMITTED")
-      await c.query(
-        `SELECT pg_advisory_xact_lock(h)
-           FROM (SELECT DISTINCT hashtextextended(k, 0) AS h FROM unnest($1::text[]) AS k ORDER BY h) AS ordered`,
-        [[...new Set(keys)]],
-      )
-      const r = await c.query(text, params)
-      await c.query("COMMIT")
-      return r.rows
-    } catch (e) {
-      await c.query("ROLLBACK")
-      throw e
-    } finally {
-      c.release()
-    }
-  },
-  async lockedQueryOne(keys: string[], text: string, params: unknown[] = []) {
-    return (await this.lockedQuery(keys, text, params))[0] ?? null
-  },
-}
-for (const s of schemaStatements) await db.execute(s)
 
 // ---- 簡易 R2 モック ----
 const readAll = async (value: ReadableStream<Uint8Array> | Uint8Array | ArrayBuffer) => {
@@ -198,7 +154,7 @@ const uploadAll = async (userId: string, file: Uint8Array, extra: Record<string,
 const addSub = (u: string, type: string) =>
   db.execute(
     `INSERT INTO subscriptions(nanoid, user_id, type, status, is_disabled, created_at, current_period_start, current_period_end, stripe_subscription_id)
-     VALUES ($1, $2, $3, 'paid', FALSE, $4, $4, $5, $1)`,
+     VALUES ($1, $2, $3, 'paid', 0, $4, $4, $5, $1)`,
     [`sub_${u}_${type}`, u, type, fakeNow - 86400, fakeNow + 30 * 86400],
   )
 
@@ -789,7 +745,7 @@ let civSha = ""
 
 await t("preview: 種類・系統・ライセンス・サムネイル・説明（クレジット付き）を返し、副作用がない", async () => {
   civSha = await addCivitaiModel({ id: 100, versionId: 201, file: civFile, nsfw: true })
-  const before = await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")
+  const before = await db.queryOne("SELECT COUNT(*) AS n FROM user_models")
   const r = await icall("POST", "/imports/preview", { url: "https://civitai.com/models/100/cute" })
   assert.equal(r.status, 200, JSON.stringify(r.body))
   const p = r.body.data
@@ -812,7 +768,7 @@ await t("preview: 種類・系統・ライセンス・サムネイル・説明�
   assert.match(p.description, /^かわいいスタイルの LoRA です&\n\n元のモデル: https:\/\/civitai\.com\/models\/100\?modelVersionId=201\n作者: alice$/)
   assert.equal(p.downloadUrl, undefined)
   assert.equal(p.alreadyStored, false)
-  const after = await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")
+  const after = await db.queryOne("SELECT COUNT(*) AS n FROM user_models")
   assert.equal(after.n, before.n)
   // バージョン指定・download URL からも引ける
   const byVersion = await icall("POST", "/imports/preview", { url: "https://civitai.com/api/download/models/201" })
@@ -921,12 +877,12 @@ await t("取り込み: 上限（進行中も数える）・ログインが必要
   assert.equal(second.body.code, "LIMIT_EXCEEDED")
 
   await addCivitaiModel({ id: 130, versionId: 231, file: makeSafetensors(7000, undefined, 13), loginRequired: true })
-  const rowsBefore = (await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")).n
+  const rowsBefore = (await db.queryOne("SELECT COUNT(*) AS n FROM user_models")).n
   const login = await icall("POST", "/imports", { userId: "imp4", url: "https://civitai.com/models/130" })
   assert.equal(login.status, 400)
   assert.equal(login.body.code, "LOGIN_REQUIRED")
   assert.equal(login.body.error, "このモデルは Civitai のログインが必要なため、今は取り込めません")
-  assert.equal((await db.queryOne("SELECT COUNT(*)::int AS n FROM user_models")).n, rowsBefore)
+  assert.equal((await db.queryOne("SELECT COUNT(*) AS n FROM user_models")).n, rowsBefore)
   // API キーがあれば解決できる
   const url = await imp.resolveCivitaiDownload({ fetch: fakeFetch, civitaiToken: "civ-token" }, "https://civitai.com/api/download/models/231")
   assert.match(url, /^https:\/\/signed\.example\/v231\?sig=\d+$/)
@@ -1002,6 +958,5 @@ await t("取り込みの中止: 行は DELETED、Workflow はスキップ、mult
 })
 
 console.log(`\n${passed} passed`)
-await pool.end()
-await epg.stop()
+await d1.dispose()
 process.exit(0)

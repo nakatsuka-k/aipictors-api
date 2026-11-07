@@ -1,36 +1,15 @@
 // /internal/subscriptions/current/:userId が Stripe をいつ呼ぶかを本物の Postgres で検証する（Stripe はモック）
-import EmbeddedPostgres from "embedded-postgres"
-import pg from "pg"
 import assert from "node:assert/strict"
 
 const API = process.env.API_SRC ?? new URL("../src", import.meta.url).pathname
-const { schemaStatements, clients, schemaReady } = await import(`${API}/lib/db.ts`)
 const { app } = await import(`${API}/app.ts`)
 const { resetCurrentSubscriptionChecks } = await import(`${API}/lib/subscription-stripe.ts`)
 
-const dir = `/tmp/subscription-current-pg-${process.pid}`
-const port = 54950 + (process.pid % 40)
-const epg = new EmbeddedPostgres({ databaseDir: dir, user: "postgres", password: "pw", port, persistent: false, onLog: () => {}, onError: () => {} })
-await epg.initialise()
-await epg.start()
-await epg.createDatabase("t")
-const pool = new pg.Pool({ connectionString: `postgres://postgres:pw@127.0.0.1:${port}/t` })
-pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
-pg.types.setTypeParser(20, (v) => Number(v)) // BIGINT を number に（neon と同じ扱い）
-
-const db = {
-  query: async (text: string, params: unknown[] = []) => (await pool.query(text, params)).rows,
-  queryOne: async (text: string, params: unknown[] = []) => (await pool.query(text, params)).rows[0] ?? null,
-  execute: async (text: string, params: unknown[] = []) => {
-    await pool.query(text, params)
-  },
-}
-for (const s of schemaStatements) await pool.query(s)
-
-const databaseUrl = "postgres://subscription-current.test/db"
-clients.set(databaseUrl, db)
-schemaReady.set(databaseUrl, Promise.resolve())
-const env = { DATABASE_URL: databaseUrl, INTERNAL_API_TOKEN: "internal", STRIPE_SECRET_KEY: "sk_test_dummy" }
+import { createTestD1 } from "./d1.mts"
+const d1 = await createTestD1()
+const db = d1.db
+const pool = { query: async (text: string, params: unknown[] = []) => ({ rows: await db.query(text, params), rowCount: 0 }) }
+const env = { DB: d1.DB, GENLOG: d1.GENLOG, INTERNAL_API_TOKEN: "internal", STRIPE_SECRET_KEY: "sk_test_dummy" }
 
 // Stripe のモック
 let stripeBody: unknown = {}
@@ -55,7 +34,7 @@ const insert = async (status: string) => {
   const sec = Math.floor(now / 1000)
   await pool.query(
     `INSERT INTO subscriptions(nanoid, user_id, type, status, is_disabled, created_at, current_period_start, current_period_end, stripe_subscription_id)
-     VALUES ($1, $2, 'STANDARD', $3, FALSE, $4, $4, $5, $6)`,
+     VALUES ($1, $2, 'STANDARD', $3, 0, $4, $4, $5, $6)`,
     [`sub-${userId}`, userId, status, sec, sec + 86400, `sub_${userId}`],
   )
   return userId
@@ -194,7 +173,6 @@ try {
 } finally {
   globalThis.fetch = realFetch
   Date.now = realNow
-  await pool.end()
-  await epg.stop()
+  await d1.dispose()
 }
 process.exit(0)

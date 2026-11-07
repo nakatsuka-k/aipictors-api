@@ -54,7 +54,7 @@ export const listUserModels = async (db: Db, query: ListUserModelsQuery) => {
     ? query.ratings.split(",").map((r) => oneOf(r.trim(), USER_MODEL_RATINGS, "ratings"))
     : null
   const q = query.q?.trim() ? `%${escapeLike(query.q.trim().slice(0, 100))}%` : null
-  const tag = query.tag?.trim() ? JSON.stringify(query.tag.trim()) : null
+  const tag = query.tag?.trim() ? query.tag.trim() : null
   const offset = Math.max(0, Math.min(10000, Number.parseInt(String(query.offset ?? "0"), 10) || 0))
   const limit = Math.max(1, Math.min(100, Number.parseInt(String(query.limit ?? "30"), 10) || 30))
   const order = query.sort === "new" ? "created_at DESC, id DESC" : "use_count DESC, created_at DESC, id DESC"
@@ -62,7 +62,7 @@ export const listUserModels = async (db: Db, query: ListUserModelsQuery) => {
       AND ($1 IS NULL OR kind = $1)
       AND ($2 IS NULL OR base_model = $2)
       AND ($3 IS NULL OR rating IN (SELECT value FROM json_each($3)))
-      AND ($4 IS NULL OR name LIKE $4 OR trigger_words LIKE $4 OR description LIKE $4 OR tags LIKE $4)
+      AND ($4 IS NULL OR name LIKE $4 ESCAPE '\\' OR trigger_words LIKE $4 ESCAPE '\\' OR description LIKE $4 ESCAPE '\\' OR tags LIKE $4 ESCAPE '\\')
       AND ($5 IS NULL OR user_id = $5)
       AND ($6 IS NULL OR EXISTS (SELECT 1 FROM json_each(user_models.tags) WHERE json_each.value = $6))`
   const params = [kind, baseModel, ratings, q, query.userId || null, tag]
