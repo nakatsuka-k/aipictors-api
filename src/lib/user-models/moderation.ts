@@ -75,7 +75,7 @@ export const listUserModelReports = async (db: Db, query: { offset?: string; lim
   const limit = Math.max(1, Math.min(100, Number.parseInt(String(query.limit ?? "50"), 10) || 50))
   const rows = await db.query<UserModelRow & { report_count: number | string; reasons: string; last_reported_at: number | string }>(
     `SELECT m.*, r.report_count, r.reasons, r.last_reported_at
-       FROM (SELECT model_id, COUNT(*) AS report_count, STRING_AGG(DISTINCT reason, ',') AS reasons,
+       FROM (SELECT model_id, COUNT(*) AS report_count, group_concat(DISTINCT reason) AS reasons,
                     MAX(created_at) AS last_reported_at
                FROM user_model_reports WHERE resolved_at IS NULL GROUP BY model_id) r
        JOIN user_models m ON m.id = r.model_id

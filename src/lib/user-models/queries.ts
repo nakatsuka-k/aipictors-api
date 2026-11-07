@@ -64,7 +64,7 @@ export const listUserModels = async (db: Db, query: ListUserModelsQuery) => {
       AND ($3 IS NULL OR rating IN (SELECT value FROM json_each($3)))
       AND ($4 IS NULL OR name LIKE $4 OR trigger_words LIKE $4 OR description LIKE $4 OR tags LIKE $4)
       AND ($5 IS NULL OR user_id = $5)
-      AND ($6 IS NULL OR tags::jsonb @> jsonb_build_array($6))`
+      AND ($6 IS NULL OR EXISTS (SELECT 1 FROM json_each(user_models.tags) WHERE json_each.value = $6))`
   const params = [kind, baseModel, ratings, q, query.userId || null, tag]
   const [rows, count] = await Promise.all([
     db.query<UserModelRow>(`SELECT * FROM user_models WHERE ${where} ORDER BY ${order} LIMIT $7 OFFSET $8`, [

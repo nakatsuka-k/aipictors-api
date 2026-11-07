@@ -39,12 +39,7 @@ export var grantCoins = async (props) => {
          WHERE user_id = $1`,
       params
     },
-    {
-      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
-        SELECT $1, 'FREE', $2, $8, $4, $4
-         WHERE $2 > 0`,
-      params
-    },
+  // Neon 版と同じ id の順（プレミアム → フリー）
     {
       text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
         SELECT $1, 'PREMIUM', $3, $9, $4, $4
@@ -52,15 +47,21 @@ export var grantCoins = async (props) => {
       params
     },
     {
-      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, 'FREE', $2, $5, $6, $7, $4, CASE WHEN $2 > 0 THEN $8 ELSE NULL END
-         WHERE $2 <> 0`,
+      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
+        SELECT $1, 'FREE', $2, $8, $4, $4
+         WHERE $2 > 0`,
       params
     },
     {
       text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
         SELECT $1, 'PREMIUM', $3, $5, $6, $7, $4, CASE WHEN $3 > 0 THEN $9 ELSE NULL END
          WHERE $3 <> 0`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $1, 'FREE', $2, $5, $6, $7, $4, CASE WHEN $2 > 0 THEN $8 ELSE NULL END
+         WHERE $2 <> 0`,
       params
     }
   ]);

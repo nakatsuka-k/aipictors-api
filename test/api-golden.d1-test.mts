@@ -1,83 +1,20 @@
-// 本物の Postgres（embedded）に対して HTTP の入口からリクエストを流し、応答を test/fixtures/api-golden.json と比べる。
+// D1（Miniflare）に対して HTTP の入口からリクエストを流し、応答を test/fixtures/api-golden.json と比べる。
 // 分割・整理で応答が変わっていないことの確認用。ルート一覧も test/fixtures/routes.json と比べる。
 // クエリ回数と往復の段数（同時に投げた文は 1 段）は UPDATE_GOLDEN=1 のとき test/fixtures/query-counts.json に書き出す（比べない。速度改善の記録。段数は実行のタイミングで少し揺れる）。
 //
 //   作り直し（応答を意図して変えたときだけ）: UPDATE_GOLDEN=1 npx tsx test/api-golden.pg-test.mts
-import EmbeddedPostgres from "embedded-postgres"
-import pg from "pg"
 import assert from "node:assert/strict"
 import { readFileSync, writeFileSync } from "node:fs"
+import { createTestD1 } from "./d1.mts"
 
 const API = process.env.API_SRC ?? new URL("../src", import.meta.url).pathname
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname
 const UPDATE = process.env.UPDATE_GOLDEN === "1"
 
-const { schemaStatements, clients, schemaReady } = await import(`${API}/lib/db.ts`)
 const { app } = await import(`${API}/app.ts`)
-
-const dir = `/tmp/api-golden-pg-${process.pid}`
-const port = 54400 + (process.pid % 500) // 連続で実行しても前の Postgres の終了を待たない
-const epg = new EmbeddedPostgres({ databaseDir: dir, user: "postgres", password: "pw", port, persistent: false, onLog: () => {}, onError: () => {} })
-await epg.initialise()
-await epg.start()
-await epg.createDatabase("t")
-const pool = new pg.Pool({ connectionString: `postgres://postgres:pw@127.0.0.1:${port}/t`, max: 20 })
-pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
-pg.types.setTypeParser(20, (v) => Number(v)) // BIGINT を number に（neon と同じ扱い）
-pg.types.setTypeParser(1082, (v) => v) // DATE は文字列のまま
-
-// クエリの回数と、同時に走っていない「段」の数を数える（Neon は 1 文ごとに HTTP の往復）
-const stats = { count: 0, rounds: 0, inFlight: 0 }
-const counted = async <T,>(run: () => Promise<T>) => {
-  stats.count++
-  if (stats.inFlight === 0) stats.rounds++
-  stats.inFlight++
-  try {
-    return await run()
-  } finally {
-    stats.inFlight--
-  }
-}
-const db = {
-  query: (text: string, params: unknown[] = []) => counted(async () => (await pool.query(text, params)).rows),
-  queryOne: (text: string, params: unknown[] = []) => counted(async () => (await pool.query(text, params)).rows[0] ?? null),
-  execute: (text: string, params: unknown[] = []) =>
-    counted(async () => {
-      await pool.query(text, params)
-    }),
-  executeResult: (text: string, params: unknown[] = []) => counted(async () => ({ rowCount: (await pool.query(text, params)).rowCount ?? 0 })),
-  lockedQuery: (keys: string[], text: string, params: unknown[] = []) =>
-    counted(async () => {
-      const c = await pool.connect()
-      try {
-        await c.query("BEGIN ISOLATION LEVEL READ COMMITTED")
-        await c.query(
-          `SELECT pg_advisory_xact_lock(h)
-             FROM (SELECT DISTINCT hashtextextended(k, 0) AS h FROM unnest($1::text[]) AS k ORDER BY h) AS ordered`,
-          [[...new Set(keys)]],
-        )
-        const r = await c.query(text, params)
-        await c.query("COMMIT")
-        return r.rows
-      } catch (e) {
-        await c.query("ROLLBACK")
-        throw e
-      } finally {
-        c.release()
-      }
-    }),
-  async lockedQueryOne(keys: string[], text: string, params: unknown[] = []) {
-    return (await this.lockedQuery(keys, text, params))[0] ?? null
-  },
-}
-
-for (const s of schemaStatements) await pool.query(s)
-await pool.query(readFileSync(`${FIXTURES}image-generation-schema.sql`, "utf8"))
-
-const DATABASE_URL = "postgres://test/api-golden"
-clients.set(DATABASE_URL, db)
-schemaReady.set(DATABASE_URL, Promise.resolve())
-const env = { DATABASE_URL, INTERNAL_API_TOKEN: "internal", ADMIN_API_TOKEN: "admin" }
+const d1 = await createTestD1()
+const stats = { count: 0, rounds: 0 }
+const env = { DB: d1.DB, GENLOG: d1.GENLOG, INTERNAL_API_TOKEN: "internal", ADMIN_API_TOKEN: "admin" }
 
 const NOW = Date.parse("2026-11-04T12:00:00+09:00")
 Date.now = () => NOW
@@ -274,21 +211,29 @@ const routes = (app.routes as Array<{ method: string; path: string }>)
   .map((route) => `${route.method} ${route.path}`)
   .sort()
 
-await pool.end()
-await epg.stop()
+await d1.dispose()
 console.log = originalLog
 console.warn = originalWarn
 
 const goldenPath = `${FIXTURES}api-golden.json`
 const routesPath = `${FIXTURES}routes.json`
 if (UPDATE) {
-  writeFileSync(`${FIXTURES}query-counts.json`, `${JSON.stringify(counts, null, 2)}\n`)
   writeFileSync(goldenPath, `${JSON.stringify(results, null, 2)}\n`)
   writeFileSync(routesPath, `${JSON.stringify(routes, null, 2)}\n`)
   console.log(`updated golden: ${Object.keys(results).length} requests, ${routes.length} routes`)
 } else {
   assert.deepEqual(routes, JSON.parse(readFileSync(routesPath, "utf8")), "ルート一覧が変わった")
-  assert.deepEqual(results, JSON.parse(readFileSync(goldenPath, "utf8")), "応答が変わった")
+  const golden = JSON.parse(readFileSync(goldenPath, "utf8"))
+  const diffs = Object.keys(golden).filter((name) => JSON.stringify(results[name]) !== JSON.stringify(golden[name]))
+  for (const name of diffs) {
+    console.log(`--- ${name}`)
+    try {
+      assert.deepEqual(results[name], golden[name])
+    } catch (e) {
+      console.log(String((e as Error).message).split("\n").slice(0, 40).join("\n"))
+    }
+  }
+  assert.equal(diffs.length, 0, `応答が変わった: ${diffs.join(", ")}`)
   console.log(`${Object.keys(results).length} requests, ${routes.length} routes passed`)
 }
 process.exit(0)

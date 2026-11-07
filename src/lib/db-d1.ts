@@ -55,6 +55,23 @@ export const toSqliteParam = (value: unknown) => {
   return value
 }
 
+// Postgres で boolean だった列（D1 では 0 / 1）。応答の形を変えないよう、読んだときに true / false に戻す。
+// 別名（camelCase）で読んでいる箇所もあるので両方
+const BOOLEAN_COLUMNS = new Set(
+  [
+    "is_anonymous", "show_nickname", "celebrate", "expiry_dm", "in_guild", "is_achievement_visible",
+    "is_deleted", "is_reserved", "is_protected", "is_generated", "is_disabled", "staff_unread", "user_unread", "is_stripe",
+  ].flatMap((name) => [name, name.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]),
+)
+const restoreBooleans = (rows: unknown[]) => {
+  for (const row of rows as Record<string, unknown>[]) {
+    for (const key in row) {
+      if (BOOLEAN_COLUMNS.has(key) && (row[key] === 0 || row[key] === 1)) row[key] = row[key] === 1
+    }
+  }
+  return rows
+}
+
 // SQL の中で使っている一番大きい番号まで渡す（D1 は余った引数があるとエラーになる）
 const usedParamCount = (sql: string) => {
   let max = 0
@@ -105,7 +122,7 @@ export const createD1Client = (d1: D1Like) => {
     dialect: "sqlite" as const,
     async query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
       const result = await withSql(text, () => prepare(text, params).all())
-      return (result.results ?? []) as T[]
+      return restoreBooleans(result.results ?? []) as T[]
     },
     async queryOne<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T | null> {
       const rows = await client.query<T>(text, params)
@@ -132,7 +149,7 @@ export const createD1Client = (d1: D1Like) => {
         d1.batch(statements.map((s) => prepare(s.text, s.params ?? []))),
       )
       return results.map((r) => ({
-        rows: (r.results ?? []) as Record<string, unknown>[],
+        rows: restoreBooleans(r.results ?? []) as Record<string, unknown>[],
         changes: r.meta?.changes ?? 0,
         lastRowId: r.meta?.last_row_id ?? null,
       }))

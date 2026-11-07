@@ -17,18 +17,6 @@ export var campaignRoutes = new Hono2();
 export var emailPublicRoutes = new Hono2();
 
 var ensureTables = async (db) => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS email_optouts (
-    user_id TEXT PRIMARY KEY,
-    created_at BIGINT NOT NULL
-  )`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS email_campaign_sends (
-    campaign TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    email TEXT NOT NULL,
-    sent_at BIGINT NOT NULL,
-    resend_id TEXT,
-    PRIMARY KEY (campaign, user_id)
-  )`);
 };
 
 var sign = async (secret, userId) => {
@@ -63,14 +51,16 @@ campaignRoutes.post("/thanks-coins", async (c) => {
   if (!onlyUserIds || onlyUserIds.length === 0) return json({ error: "userIds is required" }, 400);
   const db = await getDb(c.env);
   const rows = await db.query(
-    `SELECT DISTINCT ON (user_id) user_id, type
-       FROM subscriptions
-      WHERE is_disabled = FALSE
-        AND type IN ('LITE', 'STANDARD', 'PREMIUM')
-        AND current_period_end > unixepoch()
-        AND user_id IN (SELECT value FROM json_each($1))
-      ORDER BY user_id,
-               CASE type WHEN 'PREMIUM' THEN 3 WHEN 'STANDARD' THEN 2 ELSE 1 END DESC`,
+    `SELECT user_id, type FROM (
+       SELECT user_id, type,
+              ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY CASE type WHEN 'PREMIUM' THEN 3 WHEN 'STANDARD' THEN 2 ELSE 1 END DESC) AS rn
+         FROM subscriptions
+        WHERE is_disabled = FALSE
+          AND type IN ('LITE', 'STANDARD', 'PREMIUM')
+          AND current_period_end > unixepoch()
+          AND user_id IN (SELECT value FROM json_each($1))
+     ) WHERE rn = 1
+     ORDER BY user_id`,
     [onlyUserIds]
   );
   const results = [];

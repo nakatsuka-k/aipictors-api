@@ -22,27 +22,6 @@ export var CANCEL_REASONS = {
 };
 
 export var ensureRetentionTables = async (db) => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS subscription_cancel_reasons (
-    id BIGSERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    pass_type TEXT,
-    reason TEXT NOT NULL,
-    note TEXT,
-    months NUMERIC,
-    created_at BIGINT NOT NULL
-  )`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS email_optouts (
-    user_id TEXT PRIMARY KEY,
-    created_at BIGINT NOT NULL
-  )`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS email_campaign_sends (
-    campaign TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    email TEXT NOT NULL,
-    sent_at BIGINT NOT NULL,
-    resend_id TEXT,
-    PRIMARY KEY (campaign, user_id)
-  )`);
 };
 
 export var saveCancelReason = async (db, props) => {

@@ -25,7 +25,7 @@ export var getSupportWeeklyRanking = async (props) => {
                 SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END) AS "freePtAmount",
                 SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END) AS "premiumPtAmount",
                 COUNT(*) AS "transferCount",
-                BOOL_OR(is_anonymous) AS "isAnonymous"
+                max(is_anonymous) AS "isAnonymous"
            FROM coin_support_transfers
           WHERE recipient_user_id = $1
             AND sender_user_id <> $4
@@ -164,12 +164,12 @@ export var getSupportPeriodRanking = async (props) => {
     }
     if (props.period === "monthly") {
       return {
-        whereSql: "to_char(timezone('Asia/Tokyo', to_timestamp(created_at)), 'YYYY-MM') = $1",
+        whereSql: "strftime('%Y-%m', created_at, 'unixepoch', '+9 hours') = $1",
         params: [props.periodKey]
       };
     }
     return {
-      whereSql: "to_char(timezone('Asia/Tokyo', to_timestamp(created_at)), 'YYYY-MM-DD') = $1",
+      whereSql: "strftime('%Y-%m-%d', created_at, 'unixepoch', '+9 hours') = $1",
       params: [props.periodKey]
     };
   };

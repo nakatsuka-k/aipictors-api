@@ -21,41 +21,12 @@ var DEFAULT_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
 
 // 読むだけのリクエスト（未読の確認など）でも DDL 5 文を流さないよう、isolate ごとに 1 回だけ
 export var ensureSupportTables = oncePerDb(async (db) => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS support_tickets (
-    id BIGSERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'ai',
-    category TEXT,
-    summary TEXT,
-    contact_email TEXT,
-    user_name TEXT,
-    pass_type TEXT,
-    staff_unread BOOLEAN NOT NULL DEFAULT FALSE,
-    user_unread BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at BIGINT NOT NULL,
-    updated_at BIGINT NOT NULL,
-    escalated_at BIGINT,
-    resolved_at BIGINT
-  )`);
   await db.execute(
     "CREATE INDEX IF NOT EXISTS support_tickets_user_idx ON support_tickets(user_id, id DESC)"
   );
   await db.execute(
     "CREATE INDEX IF NOT EXISTS support_tickets_status_idx ON support_tickets(status, updated_at DESC)"
   );
-  await db.execute(`CREATE TABLE IF NOT EXISTS support_messages (
-    id BIGSERIAL PRIMARY KEY,
-    ticket_id BIGINT NOT NULL,
-    user_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    body TEXT NOT NULL,
-    staff_user_id TEXT,
-    model TEXT,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    helpful SMALLINT,
-    created_at BIGINT NOT NULL
-  )`);
   await db.execute(
     "CREATE INDEX IF NOT EXISTS support_messages_ticket_idx ON support_messages(ticket_id, id)"
   );
