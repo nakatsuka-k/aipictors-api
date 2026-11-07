@@ -45,11 +45,21 @@ export const toSqlitePlaceholders = (text: string) => {
   return out
 }
 
+// 生成の表の日時は Neon（timestamp without time zone）と同じ「YYYY-MM-DD HH:MM:SS.sss」の文字列で持つ。
+// Neon の時と同じく、Date は UTC の時刻、ISO 形式の文字列はタイムゾーンを無視した時刻として入れる（文字列の大小で比べられる）
+const ISO_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(?:Z|[+-]\d{2}:?\d{2})?$/
+export const toTimestampText = (value: Date | string) => {
+  if (value instanceof Date) return value.toISOString().replace("T", " ").replace("Z", "")
+  const m = ISO_TIMESTAMP.exec(value)
+  return m ? `${m[1]} ${m[2]}` : value
+}
+
 export const toSqliteParam = (value: unknown) => {
   if (value === undefined) return null
   if (typeof value === "boolean") return value ? 1 : 0
   if (typeof value === "bigint") return Number(value)
-  if (value instanceof Date) return value.toISOString()
+  if (value instanceof Date) return toTimestampText(value)
+  if (typeof value === "string" && ISO_TIMESTAMP.test(value)) return toTimestampText(value)
   if (Array.isArray(value)) return JSON.stringify(value)
   if (value !== null && typeof value === "object") return JSON.stringify(value)
   return value
@@ -63,10 +73,22 @@ const BOOLEAN_COLUMNS = new Set(
     "is_deleted", "is_reserved", "is_protected", "is_generated", "is_disabled", "staff_unread", "user_unread", "is_stripe",
   ].flatMap((name) => [name, name.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]),
 )
+// 生成の表の日時の列。Neon の driver は Date で返していた（JSON にすると ISO 形式の UTC）ので同じ形にする
+const TIMESTAMP_COLUMNS = new Set(
+  ["request_time", "generation_time", "request_to_sd_time", "created_at", "updated_at"].flatMap((name) => [
+    name,
+    name.replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
+  ]),
+)
+const TIMESTAMP_TEXT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/
 const restoreBooleans = (rows: unknown[]) => {
   for (const row of rows as Record<string, unknown>[]) {
     for (const key in row) {
-      if (BOOLEAN_COLUMNS.has(key) && (row[key] === 0 || row[key] === 1)) row[key] = row[key] === 1
+      const value = row[key]
+      if (BOOLEAN_COLUMNS.has(key) && (value === 0 || value === 1)) row[key] = value === 1
+      else if (TIMESTAMP_COLUMNS.has(key) && typeof value === "string" && TIMESTAMP_TEXT.test(value)) {
+        row[key] = new Date(`${value.replace(" ", "T").slice(0, 23)}Z`)
+      }
     }
   }
   return rows
