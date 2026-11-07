@@ -62,6 +62,8 @@
   "POST /internal/coins/grant-support",
   "POST /internal/coins/support",
   "POST /internal/coins/support/revert",
+  "POST /internal/d1/genlog/batch",
+  "POST /internal/d1/genlog/query",
   "POST /internal/discord/link",
   "POST /internal/discord/request-sync",
   "POST /internal/discord/settings",

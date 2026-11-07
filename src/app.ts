@@ -6,6 +6,7 @@ import { adminRoutes } from "./routes/admin"
 import { analyticsRoutes } from "./routes/analytics"
 import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
 import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
+import { d1ProxyRoutes } from "./routes/d1-proxy"
 import { discordBotRoutes, discordRoutes } from "./routes/discord"
 import { imageGenerationRoutes } from "./routes/image-generation"
 import { pointsRoutes } from "./routes/points"
@@ -21,6 +22,7 @@ app.get("/healthz", (c) => {
 app.route("/internal/coins", coinsRoutes);
 app.route("/api/coins", publicCoinsRoutes);
 app.route("/internal/image-generation", imageGenerationRoutes);
+app.route("/internal/d1", d1ProxyRoutes);
 app.route("/internal/points", pointsRoutes);
 app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);

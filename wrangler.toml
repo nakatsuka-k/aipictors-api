@@ -7,9 +7,21 @@ account_id = "7f2a200bf2994f36f45e733751a30be6"
 # See README "Custom routes (dashboard)".
 workers_dev = false
 
-# Neon project: lucky-bonus-09897233 (Aipictors)
-# Required secret:
-# DATABASE_URL=postgresql://...
+# DB は D1（2026-11 に Neon から移行）。表の定義は migrations/gen・migrations/genlog
+#   npx wrangler d1 migrations apply aipictors-gen --remote
+#   npx wrangler d1 migrations apply aipictors-genlog --remote
+[[d1_databases]]
+binding = "DB"
+database_name = "aipictors-gen"
+database_id = "a6298c09-482c-428c-961b-1bec7980c8ba"
+migrations_dir = "migrations/gen"
+
+# 生成の依頼・結果・予約（大きいので別の DB）
+[[d1_databases]]
+binding = "GENLOG"
+database_name = "aipictors-genlog"
+database_id = "b0fcb116-e313-4743-a6ad-8b5790d0ecc2"
+migrations_dir = "migrations/genlog"
 
 [vars]
 STRIPE_WEBHOOK_PATH = "/webhooks/stripe"

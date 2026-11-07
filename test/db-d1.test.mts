@@ -43,3 +43,29 @@ await assert.rejects(
 assert.equal((await g.queryOne<any>("SELECT status FROM generated_queues WHERE nanoid = 'n1'")).status, "wait")
 await d1.dispose()
 console.log("ok  db-d1")
+
+// 生成ワーカー用の SQL の入口
+{
+  const { app } = await import(`${API}/app.ts`)
+  const t = await createTestD1()
+  const env = { DB: t.DB, GENLOG: t.GENLOG, INTERNAL_API_TOKEN: "internal" }
+  const call = async (path: string, body: unknown, token = "internal") => {
+    const res = await app.fetch(
+      new Request(`http://api.test/internal/d1/genlog/${path}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) }),
+      env,
+      { waitUntil: () => {}, passThroughOnException: () => {} },
+    )
+    return { status: res.status, body: (await res.json()) as any }
+  }
+  assert.equal((await call("query", { sql: "SELECT 1" }, "wrong")).status, 401)
+  assert.equal((await call("query", { sql: "DROP TABLE generated_queues" })).status, 400)
+  const ins = await call("query", { sql: "INSERT INTO generated_reservation_queues (user_id, request_content, request_origin_content, nanoid) VALUES ($1, '{}', '{}', $2) RETURNING id", params: [7, "r1"] })
+  assert.equal(ins.status, 200)
+  assert.equal(ins.body.rows[0].id, 1)
+  const b = await call("batch", { statements: [{ sql: "UPDATE generated_reservation_queues SET is_generated = 1 WHERE nanoid = ?1", params: ["r1"] }, { sql: "SELECT is_generated, created_at FROM generated_reservation_queues WHERE nanoid = ?1", params: ["r1"] }] })
+  assert.equal(b.body.results[0].changes, 1)
+  assert.equal(b.body.results[1].rows[0].is_generated, true)
+  assert.match(b.body.results[1].rows[0].created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  await t.dispose()
+  console.log("ok  d1-proxy")
+}
