@@ -101,7 +101,9 @@ export var taskQuerySchema = object({
   priority: optional(nullable(number())),
   isDeleted: optional(nullable(boolean())),
   fromDate: optional(nullable(string())),
-  requestTimeLte: optional(nullable(string()))
+  requestTimeLte: optional(nullable(string())),
+  // 生成の種類（txt2img / img2img / inpaint など）で絞る
+  types: optional(nullable(array(string())))
 });
 export var resultQuerySchema = object({
   userId: number(),
@@ -335,7 +337,8 @@ imageGenerationRoutes.post("/tasks/query/count", async (c) => {
     priority: parsed.output.priority ?? null,
     isDeleted: parsed.output.isDeleted ?? null,
     fromDate: parsed.output.fromDate ? new Date(parsed.output.fromDate) : null,
-    requestTimeLte: parsed.output.requestTimeLte ? new Date(parsed.output.requestTimeLte) : null
+    requestTimeLte: parsed.output.requestTimeLte ? new Date(parsed.output.requestTimeLte) : null,
+    types: parsed.output.types ?? null
   });
   return json({ error: null, data: { count } });
 });

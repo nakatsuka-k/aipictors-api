@@ -542,6 +542,10 @@ export var buildTaskQuery = (input) => {
     params.push(input.requestTimeLte);
     conditions.push(`request_time <= $${params.length}`);
   }
+  if (input.types && input.types.length > 0) {
+    params.push(input.types);
+    conditions.push(`type::text = ANY($${params.length}::text[])`);
+  }
   return { params, whereSql: conditions.join(" AND ") };
 };
 export var buildResultQuery = (input) => {
