@@ -69,17 +69,20 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
 export const deleteUserModel = async (deps: UserModelDeps, id: string, userIdInput: unknown) => {
   const userId = requireUserId(userIdInput)
   const row = await requireRow(deps.db, id, { userId })
-  const result = await deps.db.lockedQueryOne<{ deleted: string | null; refs: number | string }>(
-    [shaLockKey(row.sha256)],
-    `WITH target AS (
-        UPDATE user_models SET status = 'DELETED', upload_id = NULL, updated_at = $3
+  // 参照数は削除する行を除いて数えるので、更新の前でも後でも同じ（1 つのトランザクション）
+  const [refsResult, deletedResult] = await deps.db.batch([
+    {
+      text: `SELECT COUNT(*) AS refs FROM user_models WHERE r2_key = $4 AND status <> 'DELETED' AND id <> $1`,
+      params: [row.id, userId, deps.now, row.r2_key],
+    },
+    {
+      text: `UPDATE user_models SET status = 'DELETED', upload_id = NULL, updated_at = $3
          WHERE id = $1 AND user_id = $2 AND status <> 'DELETED'
-        RETURNING id
-      )
-      SELECT (SELECT id FROM target) AS deleted,
-             (SELECT COUNT(*) FROM user_models WHERE r2_key = $4 AND status <> 'DELETED' AND id <> $1) AS refs`,
-    [row.id, userId, deps.now, row.r2_key],
-  )
+        RETURNING id`,
+      params: [row.id, userId, deps.now, row.r2_key],
+    },
+  ])
+  const result = { deleted: deletedResult.rows[0]?.id ?? null, refs: refsResult.rows[0]?.refs ?? 0 }
   if (!result?.deleted) throw new UserModelError(404, "NOT_FOUND", "モデルが見つかりません")
   let fileDeleted = false
   if (row.status === "UPLOADING") {

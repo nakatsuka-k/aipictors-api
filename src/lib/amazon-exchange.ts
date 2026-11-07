@@ -34,95 +34,63 @@ export var listAmazonExchangeRequestsByUser = async (props) => {
 export var createAmazonExchangeRequest = async (props) => {
   const now = props.now ?? getNow();
   const requestId = crypto.randomUUID();
-  const result = await props.db.queryOne(
-    `WITH pending_count AS (
-        SELECT COUNT(*) AS pending_count
-          FROM amazon_exchange_requests
-         WHERE user_id = $1
-           AND status = 'PENDING'
-      ),
-      candidate_lots AS (
-        SELECT id,
-               max(remaining - locked_amount, 0) AS available,
-               SUM(max(remaining - locked_amount, 0)) OVER (
-                 ORDER BY expires_at ASC NULLS LAST, id ASC
-               ) AS cumulative
-          FROM coin_lots
-         WHERE user_id = $1
-           AND coin_type = 'PREMIUM'
-           AND source_kind = 'SUPPORT'
-           AND remaining > locked_amount
-      ),
-      allocations AS (
-        SELECT id,
+  const pendingSql = `(SELECT COUNT(*) FROM amazon_exchange_requests WHERE user_id = $1 AND status = 'PENDING')`;
+  const allocationsSql = `SELECT id,
                min(available, max($2 - (cumulative - available), 0)) AS amount
-          FROM candidate_lots
-         WHERE max($2 - (cumulative - available), 0) > 0
-      ),
-      allocation_sum AS (
-        SELECT COALESCE(SUM(amount), 0) AS locked_amount
-          FROM allocations
-      ),
-      eligible AS (
-        SELECT 1 AS ok
-         WHERE (SELECT pending_count FROM pending_count) < $6
-           AND (SELECT locked_amount FROM allocation_sum) = $2
-      ),
-      updated_lots AS (
-        UPDATE coin_lots
+          FROM (
+            SELECT id,
+                   max(remaining - locked_amount, 0) AS available,
+                   SUM(max(remaining - locked_amount, 0)) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS cumulative
+              FROM coin_lots
+             WHERE user_id = $1
+               AND coin_type = 'PREMIUM'
+               AND source_kind = 'SUPPORT'
+               AND remaining > locked_amount
+          )
+         WHERE max($2 - (cumulative - available), 0) > 0`;
+  const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
+  const params = [
+    props.userId,
+    Math.max(0, Math.floor(props.coinAmount)),
+    requestId,
+    props.packageId,
+    now,
+    AMAZON_EXCHANGE_MAX_PENDING,
+    Math.max(0, Math.floor(props.amazonPointYen))
+  ];
+  // 申請数の上限と、確保できる量を「書く前」に判定して d1_guard に入れ、以降の文はその行があるときだけ書く
+  const results = await props.db.batch([
+    { text: `SELECT ${pendingSql} AS pending_count`, params },
+    {
+      text: `INSERT INTO d1_guard(ok) SELECT 1
+         WHERE ${pendingSql} < $6
+           AND (SELECT COALESCE(SUM(amount), 0) FROM (${allocationsSql})) = $2`,
+      params
+    },
+    {
+      text: `INSERT INTO amazon_exchange_requests(id, user_id, package_id, coin_amount, amazon_point_yen, status, amazon_gift_code, locked_lot_allocations_json, applied_at, approved_at, approved_by_user_id, created_at, updated_at)
+        SELECT $3, $1, $4, $2, $7, 'PENDING', NULL,
+               COALESCE((SELECT json_group_array(json_object('lotId', id, 'amount', amount)) FROM (${allocationsSql})), '[]'),
+               $5, NULL, NULL, $5, $5
+         WHERE ${guarded}`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
            SET locked_amount = coin_lots.locked_amount + allocations.amount,
                updated_at = $5
-          FROM allocations, eligible
+          FROM (${allocationsSql}) AS allocations
          WHERE coin_lots.id = allocations.id
-        RETURNING coin_lots.id
-      ),
-      request_row AS (
-        INSERT INTO amazon_exchange_requests(
-          id,
-          user_id,
-          package_id,
-          coin_amount,
-          amazon_point_yen,
-          status,
-          amazon_gift_code,
-          locked_lot_allocations_json,
-          applied_at,
-          approved_at,
-          approved_by_user_id,
-          created_at,
-          updated_at
-        )
-        SELECT $3,
-               $1,
-               $4,
-               $2,
-               $7,
-               'PENDING',
-               NULL,
-               COALESCE(
-                 (SELECT jsonb_agg(jsonb_build_object('lotId', id, 'amount', amount)) FROM allocations),
-                 '[]'
-               ),
-               $5,
-               NULL,
-               NULL,
-               $5,
-               $5
-          FROM eligible
-        RETURNING id
-      )
-      SELECT (SELECT pending_count FROM pending_count) AS pending_count,
-             EXISTS(SELECT 1 FROM request_row) AS created`,
-    [
-      props.userId,
-      Math.max(0, Math.floor(props.coinAmount)),
-      requestId,
-      props.packageId,
-      now,
-      AMAZON_EXCHANGE_MAX_PENDING,
-      Math.max(0, Math.floor(props.amazonPointYen))
-    ]
-  );
+           AND ${guarded}`,
+      params
+    },
+    { text: `SELECT ${guarded} AS created` },
+    { text: "DELETE FROM d1_guard" }
+  ]);
+  const result = {
+    pending_count: results[0].rows[0]?.pending_count ?? 0,
+    created: Boolean(results[4].rows[0]?.created)
+  };
   const pendingCount = result?.pending_count ?? 0;
   const remainingSlots = Math.max(
     0,
@@ -178,97 +146,78 @@ export var listAmazonExchangeRequestsForAdmin = async (props) => {
 };
 export var approveAmazonExchangeRequest = async (props) => {
   const now = props.now ?? getNow();
-  const result = await props.db.queryOne(
-    `WITH request_row AS (
-        SELECT *
-          FROM amazon_exchange_requests
-         WHERE id = $1
-           AND status = 'PENDING'
-      ),
-      allocations AS (
-        SELECT (entry->>'lotId') AS lot_id,
-               (entry->>'amount') AS amount
-          FROM request_row,
-               jsonb_array_elements(locked_lot_allocations_json::jsonb) AS entry
-      ),
-      allocation_totals AS (
-        SELECT COUNT(*) AS allocation_count,
-               COALESCE(SUM(amount), 0) AS coin_amount
-          FROM allocations
-      ),
-      lot_check AS (
-        SELECT COUNT(*) AS matched_count,
-               COALESCE(BOOL_AND(coin_lots.locked_amount >= allocations.amount AND coin_lots.remaining >= allocations.amount), FALSE) AS valid
-          FROM allocations
-          JOIN coin_lots ON coin_lots.id = allocations.lot_id
-      ),
-      eligible AS (
-        SELECT 1 AS ok
-         WHERE EXISTS (SELECT 1 FROM request_row)
-           AND (SELECT allocation_count FROM allocation_totals) = (SELECT matched_count FROM lot_check)
-           AND (SELECT valid FROM lot_check)
-      ),
-      updated_lots AS (
-        UPDATE coin_lots
-           SET locked_amount = coin_lots.locked_amount - allocations.amount,
-               remaining = coin_lots.remaining - allocations.amount,
+  const requestSql = `SELECT * FROM amazon_exchange_requests WHERE id = $1 AND status = 'PENDING'`;
+  const allocationsSql = `SELECT json_extract(entry.value, '$.lotId') AS lot_id,
+               json_extract(entry.value, '$.amount') AS amount
+          FROM (${requestSql}) AS request_row,
+               json_each(request_row.locked_lot_allocations_json) AS entry`;
+  const coinAmountSql = `(SELECT COALESCE(SUM(amount), 0) FROM (${allocationsSql}))`;
+  const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
+  const params = [props.requestId, props.amazonGiftCode, props.moderatorUserId, now];
+  // 申請とロットの確認を「書く前」に行って d1_guard に入れ、以降の文はその行があるときだけ書く。申請の更新は最後
+  const results = await props.db.batch([
+    {
+      text: `INSERT INTO d1_guard(ok) SELECT 1
+         WHERE EXISTS (${requestSql})
+           AND (SELECT COUNT(*) FROM (${allocationsSql})) = (
+             SELECT COUNT(*) FROM (${allocationsSql}) AS a JOIN coin_lots ON coin_lots.id = a.lot_id
+           )
+           AND COALESCE((
+             SELECT min(coin_lots.locked_amount >= a.amount AND coin_lots.remaining >= a.amount)
+               FROM (${allocationsSql}) AS a JOIN coin_lots ON coin_lots.id = a.lot_id
+           ), 0)`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
+        SELECT user_id, 0, 0, $4 FROM (${requestSql}) WHERE true
+        ON CONFLICT (user_id) DO NOTHING`,
+      params
+    },
+    {
+      text: `UPDATE coin_balances
+           SET premium_balance = max(coin_balances.premium_balance - ${coinAmountSql}, 0),
                updated_at = $4
-          FROM allocations, eligible
-         WHERE coin_lots.id = allocations.lot_id
-        RETURNING coin_lots.id
-      ),
-      ensured_balance AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
-        SELECT user_id, 0, 0, $4
-          FROM request_row
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      updated_balance AS (
-        UPDATE coin_balances
-           SET premium_balance = max(
-                 coin_balances.premium_balance - (SELECT coin_amount FROM allocation_totals),
-                 0
-               ),
+         WHERE user_id = (SELECT user_id FROM (${requestSql}))
+           AND ${guarded}`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT user_id, 'PREMIUM', -${coinAmountSql}, 'CONSUME', 'amazon-exchange', 'amazon_exchange', $4, NULL
+          FROM (${requestSql})
+         WHERE ${guarded}`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
+           SET locked_amount = coin_lots.locked_amount - a.amount,
+               remaining = coin_lots.remaining - a.amount,
                updated_at = $4
-         WHERE user_id = (SELECT user_id FROM request_row)
-           AND EXISTS (SELECT 1 FROM eligible)
-        RETURNING user_id
-      ),
-      ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT user_id,
-               'PREMIUM',
-               -(SELECT coin_amount FROM allocation_totals),
-               'CONSUME',
-               'amazon-exchange',
-               'amazon_exchange',
-               $4,
-               NULL
-          FROM request_row
-         WHERE EXISTS (SELECT 1 FROM updated_balance)
-      ),
-      updated_request AS (
-        UPDATE amazon_exchange_requests
+          FROM (${allocationsSql}) AS a
+         WHERE coin_lots.id = a.lot_id
+           AND ${guarded}`,
+      params
+    },
+    {
+      text: `UPDATE amazon_exchange_requests
            SET status = 'APPROVED',
                amazon_gift_code = $2,
                approved_at = $4,
                approved_by_user_id = $3,
                updated_at = $4
          WHERE id = $1
-           AND EXISTS (SELECT 1 FROM updated_balance)
-        RETURNING user_id, coin_amount, amazon_point_yen
-      )
-      SELECT EXISTS(SELECT 1 FROM updated_request) AS approved,
-             (SELECT user_id FROM updated_request) AS user_id,
-             (SELECT coin_amount FROM updated_request) AS coin_amount,
-             (SELECT amazon_point_yen FROM updated_request) AS amazon_point_yen`,
-    [
-      props.requestId,
-      props.amazonGiftCode,
-      props.moderatorUserId,
-      now
-    ]
-  );
+           AND status = 'PENDING'
+           AND ${guarded}
+        RETURNING user_id, coin_amount, amazon_point_yen`,
+      params
+    },
+    { text: "DELETE FROM d1_guard" }
+  ]);
+  const approvedRow = results[5].rows[0];
+  const result = approvedRow
+    ? { approved: true, user_id: approvedRow.user_id, coin_amount: approvedRow.coin_amount, amazon_point_yen: approvedRow.amazon_point_yen }
+    : { approved: false };
   if (!result?.approved) {
     return {
       ok: false,

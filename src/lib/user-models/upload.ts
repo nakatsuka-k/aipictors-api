@@ -35,20 +35,15 @@ export const abortQuietly = async (bucket: ModelBucket, key: string, uploadId: s
 export const STALE_IMPORT_SECONDS = 3 * 24 * 60 * 60
 
 export const cleanupStaleUploads = async (deps: UserModelDeps, userId: string) => {
-  const stale = await deps.db.query<{ id: string; r2_key: string; upload_id: string | null }>(
-    `WITH stale AS (
-        SELECT id, r2_key, upload_id FROM user_models
-         WHERE user_id = $1 AND status = 'UPLOADING'
-           AND created_at < CASE WHEN import_status IS NULL THEN $2 ELSE $4 END
-         FOR UPDATE
-      ),
-      upd AS (
-        UPDATE user_models SET status = 'DELETED', upload_id = NULL, updated_at = $3
-         WHERE id IN (SELECT id FROM stale)
-      )
-      SELECT id, r2_key, upload_id FROM stale`,
-    [userId, deps.now - STALE_UPLOAD_SECONDS, deps.now, deps.now - STALE_IMPORT_SECONDS],
-  )
+  const where = `user_id = $1 AND status = 'UPLOADING'
+           AND created_at < CASE WHEN import_status IS NULL THEN $2 ELSE $4 END`
+  const params = [userId, deps.now - STALE_UPLOAD_SECONDS, deps.now, deps.now - STALE_IMPORT_SECONDS]
+  // 更新前の upload_id が要るので、同じトランザクションで先に読んでから消す
+  const [staleResult] = await deps.db.batch([
+    { text: `SELECT id, r2_key, upload_id FROM user_models WHERE ${where}`, params },
+    { text: `UPDATE user_models SET status = 'DELETED', upload_id = NULL, updated_at = $3 WHERE ${where}`, params },
+  ])
+  const stale = staleResult.rows as Array<{ id: string; r2_key: string; upload_id: string | null }>
   for (const row of stale) await abortQuietly(deps.bucket, row.r2_key, row.upload_id)
 }
 
@@ -76,16 +71,7 @@ export type ReserveUserModelInput = {
 export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUserModelInput): Promise<"READY" | "UPLOADING"> => {
   const { id, userId, sha256, sizeBytes, limit, planType, fields } = input
   const sizeMustMatch = input.existingSizeMustMatch ?? true
-  const result = await deps.db.lockedQueryOne<{
-    used: number | string
-    mine_id: string | null
-    uploading_id: string | null
-    existing_id: string | null
-    existing_size: number | string | null
-    inserted_status: UserModelStatus | null
-  }>(
-    [userLockKey(userId), shaLockKey(sha256)],
-    `WITH existing AS (
+  const ctes = `WITH existing AS (
         SELECT id, size_bytes FROM user_models WHERE sha256 = $3 AND status = 'READY' ORDER BY created_at, id LIMIT 1
       ),
       mine AS (
@@ -96,32 +82,8 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       ),
       used AS (
         SELECT COUNT(*) AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED'
-      ),
-      ins AS (
-        INSERT INTO user_models(
-          id, user_id, kind, name, description, base_model, trigger_words, recommended_weight, rating, tags,
-          thumbnail_url, sample_image_urls, original_filename, sha256, size_bytes, r2_key, status, created_at, updated_at,
-          source_url, source_creator, source_license, source_base_model, import_status, recommended_settings
-        )
-        SELECT $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3,
-               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END, $16,
-               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17,
-               $20, $21, $22, $23,
-               CASE WHEN $20 IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
-               $24
-         WHERE (SELECT n FROM used) < $18
-           AND NOT EXISTS (SELECT 1 FROM mine)
-           AND (EXISTS (SELECT 1 FROM existing) OR NOT EXISTS (SELECT 1 FROM uploading))
-           AND (NOT $19 OR NOT EXISTS (SELECT 1 FROM existing) OR (SELECT size_bytes FROM existing) = $15)
-        RETURNING status
-      )
-      SELECT (SELECT n FROM used) AS used,
-             (SELECT id FROM mine) AS mine_id,
-             (SELECT id FROM uploading) AS uploading_id,
-             (SELECT id FROM existing) AS existing_id,
-             (SELECT size_bytes FROM existing) AS existing_size,
-             (SELECT status FROM ins) AS inserted_status`,
-    [
+      )`
+  const params = [
       id,
       userId,
       sha256,
@@ -146,8 +108,47 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       input.source?.license ? JSON.stringify(input.source.license) : null,
       input.source?.baseModel ?? null,
       fields.recommendedSettings ? JSON.stringify(fields.recommendedSettings) : null,
-    ],
-  )
+    ]
+  // 判定に使う値は INSERT の前に読む（同じトランザクション。D1 は書き込みを 1 本ずつ順に実行するのでロックは要らない）
+  const [stateResult, insertResult] = await deps.db.batch([
+    {
+      text: `${ctes}
+      SELECT (SELECT n FROM used) AS used,
+             (SELECT id FROM mine) AS mine_id,
+             (SELECT id FROM uploading) AS uploading_id,
+             (SELECT id FROM existing) AS existing_id,
+             (SELECT size_bytes FROM existing) AS existing_size`,
+      params,
+    },
+    {
+      text: `${ctes}
+        INSERT INTO user_models(
+          id, user_id, kind, name, description, base_model, trigger_words, recommended_weight, rating, tags,
+          thumbnail_url, sample_image_urls, original_filename, sha256, size_bytes, r2_key, status, created_at, updated_at,
+          source_url, source_creator, source_license, source_base_model, import_status, recommended_settings
+        )
+        SELECT $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3,
+               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END, $16,
+               CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17,
+               $20, $21, $22, $23,
+               CASE WHEN $20 IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
+               $24
+         WHERE (SELECT n FROM used) < $18
+           AND NOT EXISTS (SELECT 1 FROM mine)
+           AND (EXISTS (SELECT 1 FROM existing) OR NOT EXISTS (SELECT 1 FROM uploading))
+           AND (NOT $19 OR NOT EXISTS (SELECT 1 FROM existing) OR (SELECT size_bytes FROM existing) = $15)
+        RETURNING status`,
+      params,
+    },
+  ])
+  const result = { ...stateResult.rows[0], inserted_status: insertResult.rows[0]?.status ?? null } as {
+    used: number | string
+    mine_id: string | null
+    uploading_id: string | null
+    existing_id: string | null
+    existing_size: number | string | null
+    inserted_status: UserModelStatus | null
+  }
   if (!result?.inserted_status) {
     if (result?.mine_id) {
       throw new UserModelError(409, "ALREADY_REGISTERED", `同じファイルはすでに登録済みです（${result.mine_id}）`)

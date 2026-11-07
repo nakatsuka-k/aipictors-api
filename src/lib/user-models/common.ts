@@ -6,6 +6,7 @@ export type Db = {
   execute(text: string, params?: unknown[]): Promise<void>
   lockedQuery<T = Record<string, unknown>>(lockKeys: string[], text: string, params?: unknown[]): Promise<T[]>
   lockedQueryOne<T = Record<string, unknown>>(lockKeys: string[], text: string, params?: unknown[]): Promise<T | null>
+  batch(statements: Array<{ text: string; params?: unknown[] }>): Promise<Array<{ rows: any[]; changes: number }>>
 }
 
 export type ModelBucket = Pick<R2Bucket, "createMultipartUpload" | "resumeMultipartUpload" | "get" | "delete">

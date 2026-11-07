@@ -46,64 +46,7 @@ export var createPremiumCoinPurchase = async (props) => {
   const expiresAt = addMonthsUnix(now, PREMIUM_PURCHASE_EXPIRY_MONTHS);
   let inserted = null;
   try {
-    inserted = await props.db.queryOne(
-      `WITH ensured AS (
-          INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
-          VALUES ($1, 0, 0, $8)
-          ON CONFLICT (user_id) DO NOTHING
-        ),
-        lot AS (
-          INSERT INTO coin_lots(
-            user_id,
-            coin_type,
-            remaining,
-            locked_amount,
-            source_kind,
-            source_ref_id,
-            granted_by_user_id,
-            expires_at,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, 'PREMIUM', $2, 0, 'PURCHASE', $3, NULL, $9, $8, $8)
-          RETURNING id
-        ),
-        updated_balance AS (
-          UPDATE coin_balances
-             SET premium_balance = coin_balances.premium_balance + $2,
-                 updated_at = $8
-           WHERE user_id = $1
-        ),
-        ledger AS (
-          INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-          VALUES ($1, 'PREMIUM', $2, 'GRANT', 'premium-coin-purchase', 'stripe', $8, $9)
-        ),
-        purchase AS (
-          INSERT INTO premium_coin_purchases(
-            id,
-            user_id,
-            stripe_event_id,
-            stripe_session_id,
-            stripe_payment_intent_id,
-            stripe_charge_id,
-            coins,
-            bonus_coins,
-            total_coins,
-            price_yen,
-            lot_id,
-            expires_at,
-            refunded_at,
-            refund_event_id,
-            created_at,
-            updated_at
-          )
-          SELECT $3, $1, $4, $5, $6, $7, $10, $11, $2, $12, id, $9, NULL, NULL, $8, $8
-            FROM lot
-          RETURNING lot_id
-        )
-        SELECT lot_id
-          FROM purchase`,
-      [
+    const params = [
         props.userId,
         totalCoins,
         purchaseId,
@@ -116,8 +59,33 @@ export var createPremiumCoinPurchase = async (props) => {
         coins,
         bonusCoins,
         Math.max(0, Math.floor(props.priceYen))
-      ]
-    );
+      ];
+    // 購入記録の重複（UNIQUE）で失敗したら batch 全体が取り消される
+    const results = await props.db.batch([
+      { text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at) VALUES ($1, 0, 0, $8) ON CONFLICT (user_id) DO NOTHING`, params },
+      {
+        text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at)
+          VALUES ($1, 'PREMIUM', $2, 0, 'PURCHASE', $3, NULL, $9, $8, $8)`,
+        params
+      },
+      // last_insert_rowid() は直前の文で入ったロットの id
+      {
+        text: `INSERT INTO premium_coin_purchases(id, user_id, stripe_event_id, stripe_session_id, stripe_payment_intent_id, stripe_charge_id, coins, bonus_coins, total_coins, price_yen, lot_id, expires_at, refunded_at, refund_event_id, created_at, updated_at)
+          VALUES ($3, $1, $4, $5, $6, $7, $10, $11, $2, $12, last_insert_rowid(), $9, NULL, NULL, $8, $8)`,
+        params
+      },
+      {
+        text: `UPDATE coin_balances SET premium_balance = coin_balances.premium_balance + $2, updated_at = $8 WHERE user_id = $1`,
+        params
+      },
+      {
+        text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+          VALUES ($1, 'PREMIUM', $2, 'GRANT', 'premium-coin-purchase', 'stripe', $8, $9)`,
+        params
+      },
+      { text: `SELECT lot_id FROM premium_coin_purchases WHERE id = $3`, params }
+    ]);
+    inserted = results[5].rows[0] ?? null;
   } catch (error) {
     if (!isDuplicatePurchaseError(error)) {
       throw error;
@@ -167,68 +135,58 @@ export var refundPremiumCoinPurchase = async (props) => {
     };
   }
   const now = props.now ?? getNow();
-  const result = await props.db.queryOne(
-    `WITH purchase AS (
-        SELECT id, user_id, lot_id, total_coins
+  const purchaseSql = `SELECT id, user_id, lot_id, total_coins
           FROM premium_coin_purchases
          WHERE id = $1
-           AND refunded_at IS NULL
-      ),
-      refundable AS (
-        SELECT min(COALESCE(coin_lots.remaining, 0), COALESCE(purchase.total_coins, 0)) AS deducted,
+           AND refunded_at IS NULL`;
+  const refundableSql = `SELECT min(COALESCE(coin_lots.remaining, 0), COALESCE(purchase.total_coins, 0)) AS deducted,
                COALESCE(purchase.total_coins, 0) AS total_coins
-          FROM purchase
-          LEFT JOIN coin_lots ON coin_lots.id = purchase.lot_id
-      ),
-      updated_lot AS (
-        UPDATE coin_lots
-           SET remaining = coin_lots.remaining - (SELECT deducted FROM refundable),
+          FROM (${purchaseSql}) AS purchase
+          LEFT JOIN coin_lots ON coin_lots.id = purchase.lot_id`;
+  const deductedSql = `(SELECT deducted FROM (${refundableSql}))`;
+  const params = [purchase.id, now, props.stripeChargeId, props.stripeEventId];
+  // 返金前のロット・購入記録から計算する文を先に、ロットと購入記録の更新を最後にする（同じトランザクション内）
+  const results = await props.db.batch([
+    { text: `SELECT deducted, total_coins FROM (${refundableSql})`, params },
+    {
+      text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
+        SELECT user_id, 0, 0, $2 FROM (${purchaseSql}) WHERE true
+        ON CONFLICT (user_id) DO NOTHING`,
+      params
+    },
+    {
+      text: `UPDATE coin_balances
+           SET premium_balance = max(coin_balances.premium_balance - COALESCE(${deductedSql}, 0), 0),
                updated_at = $2
-         WHERE coin_lots.id = (SELECT lot_id FROM purchase)
-           AND (SELECT deducted FROM refundable) > 0
-        RETURNING id
-      ),
-      ensured_balance AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
-        SELECT user_id, 0, 0, $2
-          FROM purchase
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      updated_balance AS (
-        UPDATE coin_balances
-           SET premium_balance = max(
-                 coin_balances.premium_balance - (SELECT deducted FROM refundable),
-                 0
-               ),
+         WHERE user_id = (SELECT user_id FROM (${purchaseSql}))`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT user_id, 'PREMIUM', -${deductedSql}, 'CONSUME', 'premium-coin-refund', 'stripe_refund', $2, NULL
+          FROM (${purchaseSql})
+         WHERE ${deductedSql} > 0`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
+           SET remaining = coin_lots.remaining - ${deductedSql},
                updated_at = $2
-         WHERE user_id = (SELECT user_id FROM purchase)
-      ),
-      ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT user_id,
-               'PREMIUM',
-               -(SELECT deducted FROM refundable),
-               'CONSUME',
-               'premium-coin-refund',
-               'stripe_refund',
-               $2,
-               NULL
-          FROM purchase
-         WHERE (SELECT deducted FROM refundable) > 0
-      ),
-      updated_purchase AS (
-        UPDATE premium_coin_purchases
+         WHERE coin_lots.id = (SELECT lot_id FROM (${purchaseSql}))
+           AND ${deductedSql} > 0`,
+      params
+    },
+    {
+      text: `UPDATE premium_coin_purchases
            SET stripe_charge_id = COALESCE($3, stripe_charge_id),
                refunded_at = $2,
                refund_event_id = $4,
                updated_at = $2
-         WHERE id = (SELECT id FROM purchase)
-        RETURNING id
-      )
-      SELECT (SELECT deducted FROM refundable) AS deducted,
-             (SELECT total_coins FROM refundable) AS total_coins`,
-    [purchase.id, now, props.stripeChargeId, props.stripeEventId]
-  );
+         WHERE id = (SELECT id FROM (${purchaseSql}))`,
+      params
+    }
+  ]);
+  const result = results[0].rows[0] ?? null;
   const refundedCoins = result?.deducted ?? 0;
   const totalCoins = result?.total_coins ?? purchase.total_coins;
   return {
