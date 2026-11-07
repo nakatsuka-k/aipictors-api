@@ -9,6 +9,8 @@ import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
 import { getStripeCustomerEmail } from "./routes/subscriptions"
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
 const scheduled = async (controller, env, ctx) => {
+  // 移行中の読み取り専用のときは定期処理も止める（00:30 の再実行で取りこぼしは拾える）
+  if (env.READ_ONLY === "1") return;
   ctx.waitUntil(
     (async () => {
       const db = await getDb(env);
