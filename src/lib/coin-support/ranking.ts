@@ -99,7 +99,7 @@ export var getSupportWeeklyRanking = async (props) => {
               SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END) AS "premiumPtAmount",
               COUNT(*) AS "transferCount"
          FROM coin_support_transfers
-        WHERE week_start_date = $1
+        WHERE week_start_date = date($1)
          AND ($4 IS NULL OR ${userColumn} <> $4)
         GROUP BY ${userColumn}
      ),
@@ -133,7 +133,7 @@ export var getSupportWeeklyRanking = async (props) => {
        FROM (
          SELECT ${userColumn}
            FROM coin_support_transfers
-          WHERE week_start_date = $1
+          WHERE week_start_date = date($1)
             AND ($2 IS NULL OR ${userColumn} <> $2)
           GROUP BY ${userColumn}
        ) AS grouped`,
@@ -158,7 +158,7 @@ export var getSupportPeriodRanking = async (props) => {
   const getPeriodFilter = () => {
     if (props.period === "weekly") {
       return {
-        whereSql: "week_start_date = $1",
+        whereSql: "week_start_date = date($1)",
         params: [props.periodKey]
       };
     }
@@ -284,14 +284,14 @@ export var getSupportSummary = async (props) => {
     props.db.queryOne(
     `SELECT pt_amount, coin_amount, transfer_count
        FROM coin_support_weekly_sent_points
-      WHERE week_start_date = $1
+      WHERE week_start_date = date($1)
         AND user_id = $2`,
     [weekStartDate, props.userId]
     ),
     props.db.queryOne(
     `SELECT pt_amount, coin_amount, transfer_count
        FROM coin_support_weekly_received_points
-      WHERE week_start_date = $1
+      WHERE week_start_date = date($1)
         AND user_id = $2`,
     [weekStartDate, props.userId]
     ),
@@ -302,7 +302,7 @@ export var getSupportSummary = async (props) => {
                 ORDER BY pt_amount DESC, transfer_count DESC, user_id ASC
               ) AS rank
          FROM coin_support_weekly_sent_points
-        WHERE week_start_date = $1
+        WHERE week_start_date = date($1)
           AND user_id <> $3
      )
      SELECT rank
@@ -317,7 +317,7 @@ export var getSupportSummary = async (props) => {
                 ORDER BY pt_amount DESC, transfer_count DESC, user_id ASC
               ) AS rank
          FROM coin_support_weekly_received_points
-        WHERE week_start_date = $1
+        WHERE week_start_date = date($1)
      )
      SELECT rank
        FROM ranked

@@ -100,7 +100,7 @@ await t("00:00 のジョブ: 全員を 1 回だけ失効させ、契約者に付
   assert.equal((await ledger("u2", "INITIAL_GRANT")).length, 2) // 昨日 1 回 + 今日 1 回
   assert.ok(job.subscribers >= 3)
   const expireTimes = await db.query(`SELECT DISTINCT created_at FROM coin_ledger WHERE kind = 'EXPIRE' AND user_id IN ('u3','u4','u5')`)
-  assert.ok(expireTimes.every((r: { created_at: number }) => r.created_at === sec()))
+  assert.ok(expireTimes.every((r: { created_at: number }) => Number(r.created_at) === sec()))
 })
 
 await t("ジョブを再実行しても何も起きない（取りこぼし用の 00:30 実行）", async () => {
@@ -169,11 +169,11 @@ await t("累計の順位: 多い人の数 + 1。0 なら順位なし。運営ア
   await put("r3", 0, 200)
   await put(staff, 99999, 0)
   const r1 = await getSupportSummary({ db, userId: "r1" })
-  assert.equal(r1.cumulativeSentRank, 1) // 運営は数えない
-  assert.equal(r1.cumulativeReceivedRank, 3)
+  assert.equal(Number(r1.cumulativeSentRank), 1) // 運営は数えない
+  assert.equal(Number(r1.cumulativeReceivedRank), 3)
   const r3 = await getSupportSummary({ db, userId: "r3" })
   assert.equal(r3.cumulativeSentRank, null) // 貢献していない
-  assert.equal(r3.cumulativeReceivedRank, 2)
+  assert.equal(Number(r3.cumulativeReceivedRank), 2)
   assert.equal((await getSupportSummary({ db, userId: staff })).cumulativeSentRank, null)
   assert.equal((await getSupportSummary({ db, userId: "none" })).cumulativeReceivedRank, null)
   assert.deepEqual(await getSupportTotals({ db, userId: "r2" }), { cumulativeSentPt: 500, cumulativeReceivedPt: 300 })

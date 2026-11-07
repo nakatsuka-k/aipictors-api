@@ -88,23 +88,23 @@
         "lockedExchangePremiumBalance": 0,
         "ledger": [
           {
-            "id": 2,
+            "id": "2",
             "coinType": "FREE",
             "delta": 100,
             "kind": "GRANT",
             "reason": "test",
             "source": "test:1",
-            "createdAt": 1793761200,
-            "expiresAt": 1793804400
+            "createdAt": "1793761200",
+            "expiresAt": "1793804400"
           },
           {
-            "id": 1,
+            "id": "1",
             "coinType": "PREMIUM",
             "delta": 50,
             "kind": "GRANT",
             "reason": "test",
             "source": "test:1",
-            "createdAt": 1793761200,
+            "createdAt": "1793761200",
             "expiresAt": null
           }
         ],
@@ -112,7 +112,7 @@
           {
             "coinType": "FREE",
             "amount": 100,
-            "expiresAt": 1793804400
+            "expiresAt": "1793804400"
           }
         ],
         "expiredFreeCoins": 0,
@@ -148,21 +148,21 @@
         "lockedExchangePremiumBalance": 0,
         "ledger": [
           {
-            "id": 3,
+            "id": "3",
             "coinType": "FREE",
             "delta": 100,
             "kind": "INITIAL_GRANT",
             "reason": "FREE daily generation coin grant",
             "source": "generation_page_access",
-            "createdAt": 1793761200,
-            "expiresAt": 1793804400
+            "createdAt": "1793761200",
+            "expiresAt": "1793804400"
           }
         ],
         "expiringLots": [
           {
             "coinType": "FREE",
             "amount": 100,
-            "expiresAt": 1793804400
+            "expiresAt": "1793804400"
           }
         ],
         "expiredFreeCoins": 0,
@@ -322,70 +322,70 @@
       "data": {
         "items": [
           {
-            "id": 7,
+            "id": "7",
             "userId": "100",
             "coinType": "FREE",
             "delta": 10,
             "kind": "GRANT",
             "reason": "bulk",
             "source": "bulk:1",
-            "createdAt": 1793761200,
-            "expiresAt": 1793804400,
+            "createdAt": "1793761200",
+            "expiresAt": "1793804400",
             "runningFreeBalance": 180,
             "runningPremiumBalance": 50,
             "runningTotalBalance": 230
           },
           {
-            "id": 6,
+            "id": "6",
             "userId": "100",
             "coinType": "FREE",
             "delta": -30,
             "kind": "CONSUME",
             "reason": "image-generation:txt2img",
             "source": "task:a",
-            "createdAt": 1793761200,
+            "createdAt": "1793761200",
             "expiresAt": null,
             "runningFreeBalance": 170,
             "runningPremiumBalance": 50,
             "runningTotalBalance": 220
           },
           {
-            "id": 5,
+            "id": "5",
             "userId": "100",
             "coinType": "FREE",
             "delta": 100,
             "kind": "INITIAL_GRANT",
             "reason": "FREE daily generation coin grant",
             "source": "consume",
-            "createdAt": 1793761200,
-            "expiresAt": 1793804400,
+            "createdAt": "1793761200",
+            "expiresAt": "1793804400",
             "runningFreeBalance": 200,
             "runningPremiumBalance": 50,
             "runningTotalBalance": 250
           },
           {
-            "id": 2,
+            "id": "2",
             "userId": "100",
             "coinType": "FREE",
             "delta": 100,
             "kind": "GRANT",
             "reason": "test",
             "source": "test:1",
-            "createdAt": 1793761200,
-            "expiresAt": 1793804400,
+            "createdAt": "1793761200",
+            "expiresAt": "1793804400",
             "runningFreeBalance": 100,
             "runningPremiumBalance": 50,
             "runningTotalBalance": 150
           },
           {
-            "id": 1,
+            "id": "1",
             "userId": "100",
             "coinType": "PREMIUM",
             "delta": 50,
             "kind": "GRANT",
             "reason": "test",
             "source": "test:1",
-            "createdAt": 1793761200,
+            "createdAt": "1793761200",
             "expiresAt": null,
             "runningFreeBalance": 0,
             "runningPremiumBalance": 50,
@@ -411,32 +411,32 @@
         },
         "expiringLots": [
           {
-            "id": 2,
+            "id": "2",
             "coinType": "FREE",
             "amount": 70,
-            "expiresAt": 1793804400,
-            "createdAt": 1793761200
+            "expiresAt": "1793804400",
+            "createdAt": "1793761200"
           },
           {
-            "id": 5,
+            "id": "5",
             "coinType": "FREE",
             "amount": 100,
-            "expiresAt": 1793804400,
-            "createdAt": 1793761200
+            "expiresAt": "1793804400",
+            "createdAt": "1793761200"
           },
           {
-            "id": 6,
+            "id": "6",
             "coinType": "FREE",
             "amount": 10,
-            "expiresAt": 1793804400,
-            "createdAt": 1793761200
+            "expiresAt": "1793804400",
+            "createdAt": "1793761200"
           },
           {
-            "id": 1,
+            "id": "1",
             "coinType": "PREMIUM",
             "amount": 50,
             "expiresAt": null,
-            "createdAt": 1793761200
+            "createdAt": "1793761200"
           }
         ]
       }
@@ -516,10 +516,10 @@
         "weekStartDate": "2026-11-02",
         "items": [
           {
-            "rank": 1,
+            "rank": "1",
             "userId": "103",
             "coinAmount": 20,
-            "ptAmount": 110,
+            "ptAmount": "110",
             "freePtAmount": 10,
             "premiumPtAmount": 100,
             "transferCount": 2
@@ -542,10 +542,10 @@
         "weekStartDate": "2026-11-02",
         "items": [
           {
-            "rank": 1,
+            "rank": "1",
             "userId": "100",
             "coinAmount": 20,
-            "ptAmount": 110,
+            "ptAmount": "110",
             "freePtAmount": 10,
             "premiumPtAmount": 100,
             "transferCount": 2
@@ -568,20 +568,20 @@
         "weekStartDate": "",
         "items": [
           {
-            "rank": 1,
+            "rank": "1",
             "userId": "__anonymous__",
             "coinAmount": 10,
-            "ptAmount": 100,
+            "ptAmount": "100",
             "freePtAmount": 0,
             "premiumPtAmount": 100,
             "transferCount": 1,
             "isAnonymous": true
           },
           {
-            "rank": 2,
+            "rank": "2",
             "userId": "100",
             "coinAmount": 10,
-            "ptAmount": 10,
+            "ptAmount": "10",
             "freePtAmount": 10,
             "premiumPtAmount": 0,
             "transferCount": 1,
@@ -606,10 +606,10 @@
         "periodKey": "2026-11-02",
         "items": [
           {
-            "rank": 1,
+            "rank": "1",
             "userId": "103",
             "coinAmount": 20,
-            "ptAmount": 110,
+            "ptAmount": "110",
             "freePtAmount": 10,
             "premiumPtAmount": 100,
             "transferCount": 2
@@ -633,10 +633,10 @@
         "periodKey": "2026-11",
         "items": [
           {
-            "rank": 1,
+            "rank": "1",
             "userId": "100",
             "coinAmount": 20,
-            "ptAmount": 110,
+            "ptAmount": "110",
             "freePtAmount": 10,
             "premiumPtAmount": 100,
             "transferCount": 2
@@ -656,7 +656,8 @@
       "error": null,
       "data": {
         "weekStartDates": [
-          "2026-11-02"
+          "2026-11-02",
+          "2026-11-02T00:00:00.000Z"
         ]
       }
     }
@@ -684,9 +685,9 @@
             },
             "coinType": "PREMIUM",
             "coinAmount": 10,
-            "ptAmount": 100,
+            "ptAmount": "100",
             "isAnonymous": true,
-            "createdAt": 1793761200
+            "createdAt": "1793761200"
           },
           {
             "senderUser": {
@@ -703,9 +704,9 @@
             },
             "coinType": "FREE",
             "coinAmount": 10,
-            "ptAmount": 10,
+            "ptAmount": "10",
             "isAnonymous": false,
-            "createdAt": 1793761200
+            "createdAt": "1793761200"
           }
         ]
       }
@@ -720,26 +721,27 @@
       "data": {
         "userId": "103",
         "weekStartDate": "2026-11-02",
-        "cumulativeSentPt": 0,
-        "cumulativeReceivedPt": 110,
-        "cumulativeSentCoins": 0,
-        "cumulativeReceivedCoins": 20,
+        "cumulativeSentPt": "0",
+        "cumulativeReceivedPt": "110",
+        "cumulativeSentCoins": "0",
+        "cumulativeReceivedCoins": "20",
         "cumulativeReceivedFreeCoins": 10,
         "cumulativeReceivedPremiumCoins": 10,
-        "cumulativeReceivedFreePt": 10,
-        "cumulativeReceivedPremiumPt": 100,
+        "cumulativeReceivedFreePt": "10",
+        "cumulativeReceivedPremiumPt": "100",
         "weeklySentPt": 0,
-        "weeklyReceivedPt": 110,
+        "weeklyReceivedPt": "110",
         "weeklySentCoinAmount": 0,
         "weeklyReceivedCoinAmount": 20,
         "weeklySentTransferCount": 0,
         "weeklyReceivedTransferCount": 2,
         "weeklySentRank": null,
-        "weeklyReceivedRank": 1,
+        "weeklyReceivedRank": "1",
         "cumulativeSentRank": null,
-        "cumulativeReceivedRank": 1,
+        "cumulativeReceivedRank": "1",
         "availableWeekStartDates": [
-          "2026-11-02"
+          "2026-11-02",
+          "2026-11-02T00:00:00.000Z"
         ],
         "recentReceivedTransfers": [
           {
@@ -747,16 +749,16 @@
             "isAnonymous": true,
             "coinType": "PREMIUM",
             "coinAmount": 10,
-            "ptAmount": 100,
-            "createdAt": 1793761200
+            "ptAmount": "100",
+            "createdAt": "1793761200"
           },
           {
             "senderUserId": "100",
             "isAnonymous": false,
             "coinType": "FREE",
             "coinAmount": 10,
-            "ptAmount": 10,
-            "createdAt": 1793761200
+            "ptAmount": "10",
+            "createdAt": "1793761200"
           }
         ]
       }
@@ -785,10 +787,10 @@
         "weekStartDate": "2026-11-02",
         "items": [
           {
-            "rank": 1,
+            "rank": "1",
             "userId": "103",
             "coinAmount": 20,
-            "ptAmount": 110,
+            "ptAmount": "110",
             "freePtAmount": 10,
             "premiumPtAmount": 100,
             "transferCount": 2
@@ -886,15 +888,15 @@
     "body": {
       "error": null,
       "data": {
-        "id": 1,
+        "id": "1",
         "nanoid": "sub-200",
         "user_id": "200",
         "type": "STANDARD",
         "status": "active",
         "is_disabled": false,
-        "created_at": 1793760200,
-        "current_period_start": 1793760200,
-        "current_period_end": 4102444800,
+        "created_at": "<created_at>",
+        "current_period_start": "1793760200",
+        "current_period_end": "4102444800",
         "trial_start": null,
         "trial_end": null,
         "stripe_subscription_id": "sub_test_200",
@@ -913,15 +915,15 @@
     "body": {
       "error": null,
       "data": {
-        "id": 1,
+        "id": "1",
         "nanoid": "sub-200",
         "user_id": "200",
         "type": "STANDARD",
         "status": "active",
         "is_disabled": false,
-        "created_at": 1793760200,
-        "current_period_start": 1793760200,
-        "current_period_end": 4102444800,
+        "created_at": "<created_at>",
+        "current_period_start": "1793760200",
+        "current_period_end": "4102444800",
         "trial_start": null,
         "trial_end": null,
         "stripe_subscription_id": "sub_test_200",
@@ -983,13 +985,13 @@
         "balance": 100,
         "ledger": [
           {
-            "id": 1,
+            "id": "1",
             "delta": 100,
             "kind": "GRANT",
             "reason": "test",
             "stripeEventId": null,
             "stripeSessionId": null,
-            "createdAt": 1793761200
+            "createdAt": "1793761200"
           }
         ]
       }
@@ -1005,22 +1007,22 @@
         "balance": 90,
         "ledger": [
           {
-            "id": 2,
+            "id": "2",
             "delta": -10,
             "kind": "CONSUME",
             "reason": "test",
             "stripeEventId": null,
             "stripeSessionId": null,
-            "createdAt": 1793761200
+            "createdAt": "1793761200"
           },
           {
-            "id": 1,
+            "id": "1",
             "delta": 100,
             "kind": "GRANT",
             "reason": "test",
             "stripeEventId": null,
             "stripeSessionId": null,
-            "createdAt": 1793761200
+            "createdAt": "1793761200"
           }
         ]
       }
@@ -1062,7 +1064,7 @@
     "body": {
       "error": null,
       "data": {
-        "id": 1,
+        "id": "1",
         "userId": 400,
         "request_content": "{}",
         "request_time": "2026-11-04T03:00:00.000Z",
@@ -1101,7 +1103,7 @@
     "body": {
       "error": null,
       "data": {
-        "id": 1,
+        "id": "1",
         "userId": 400,
         "request_content": "{}",
         "request_time": "2026-11-04T03:00:00.000Z",
@@ -1163,7 +1165,7 @@
       "error": null,
       "data": [
         {
-          "id": 1,
+          "id": "1",
           "userId": 400,
           "request_content": "{}",
           "request_time": "2026-11-04T03:00:00.000Z",
@@ -1203,7 +1205,7 @@
     "body": {
       "error": null,
       "data": {
-        "id": 1,
+        "id": "1",
         "userId": 400,
         "request_content": "{}",
         "request_time": "2026-11-04T03:00:00.000Z",

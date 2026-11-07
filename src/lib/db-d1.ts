@@ -65,29 +65,44 @@ export const toSqliteParam = (value: unknown) => {
   return value
 }
 
-// Postgres で boolean だった列（D1 では 0 / 1）。応答の形を変えないよう、読んだときに true / false に戻す。
-// 別名（camelCase）で読んでいる箇所もあるので両方
-const BOOLEAN_COLUMNS = new Set(
-  [
-    "is_anonymous", "show_nickname", "celebrate", "expiry_dm", "in_guild", "is_achievement_visible",
-    "is_deleted", "is_reserved", "is_protected", "is_generated", "is_disabled", "staff_unread", "user_unread", "is_stripe",
-  ].flatMap((name) => [name, name.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]),
-)
-// 生成の表の日時の列。Neon の driver は Date で返していた（JSON にすると ISO 形式の UTC）ので同じ形にする
-const TIMESTAMP_COLUMNS = new Set(
-  ["request_time", "generation_time", "request_to_sd_time", "created_at", "updated_at"].flatMap((name) => [
-    name,
-    name.replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
-  ]),
-)
+// ---- Neon の driver と同じ型で返す（応答の JSON を移行前と同じにする）----
+// Neon（@neondatabase/serverless）は列の型ごとに次の形で返していた。D1 は型を返さないので列名で合わせる。
+//   boolean → true / false（D1 は 0 / 1）
+//   bigint（int8）→ 文字列（id・UNIX 秒の時刻・累計など。COUNT・SUM・ROW_NUMBER の結果も int8）
+//   date → Date（JSON にすると "2026-11-02T00:00:00.000Z"）
+//   timestamp → Date（生成の表。D1 には「YYYY-MM-DD HH:MM:SS.ffffff」の文字列で入っている）
+// 別名（camelCase）で読んでいる箇所もあるので両方を登録する
+const withCamel = (names: string[]) =>
+  new Set(names.flatMap((name) => [name, name.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]))
+const BOOLEAN_COLUMNS = withCamel([
+  "is_anonymous", "show_nickname", "celebrate", "expiry_dm", "in_guild", "is_achievement_visible",
+  "is_deleted", "is_reserved", "is_protected", "is_generated", "is_disabled", "staff_unread", "user_unread", "is_stripe",
+])
+// Neon の表で bigint だった列（pg_dump から）と、int8 を返していた集計の別名
+const INT8_COLUMNS = withCamel([
+  "id", "created_at", "updated_at", "expires_at", "resolved_at", "pt_amount", "last_used_at", "applied_at", "verified_at",
+  "use_count", "trial_start", "trial_end", "token_expires_at", "ticket_id", "synced_at", "sync_requested_at", "started_at",
+  "size_bytes", "sent_pt_total", "sent_coin_total", "sent_at", "refunded_at", "recommended_settings_auto_at",
+  "received_pt_total", "received_coin_total", "processed_at", "lot_id", "finished_at", "escalated_at", "delivered_at",
+  "current_task_id", "current_period_start", "current_period_end", "celebrated_until", "approved_at",
+  "rank",
+])
+const DATE_COLUMNS = withCamel(["week_start_date"])
+const TIMESTAMP_COLUMNS = withCamel(["request_time", "generation_time", "request_to_sd_time", "created_at", "updated_at"])
 const TIMESTAMP_TEXT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/
-const restoreBooleans = (rows: unknown[]) => {
+const DATE_TEXT = /^\d{4}-\d{2}-\d{2}$/
+
+export const toNeonTypes = (rows: unknown[]) => {
   for (const row of rows as Record<string, unknown>[]) {
     for (const key in row) {
       const value = row[key]
+      if (value === null) continue
       if (BOOLEAN_COLUMNS.has(key) && (value === 0 || value === 1)) row[key] = value === 1
-      else if (TIMESTAMP_COLUMNS.has(key) && typeof value === "string" && TIMESTAMP_TEXT.test(value)) {
+      else if (typeof value === "number" && INT8_COLUMNS.has(key) && Number.isInteger(value)) row[key] = String(value)
+      else if (typeof value === "string" && TIMESTAMP_COLUMNS.has(key) && TIMESTAMP_TEXT.test(value)) {
         row[key] = new Date(`${value.replace(" ", "T").slice(0, 23)}Z`)
+      } else if (typeof value === "string" && DATE_COLUMNS.has(key) && DATE_TEXT.test(value)) {
+        row[key] = new Date(`${value}T00:00:00.000Z`)
       }
     }
   }
@@ -144,7 +159,7 @@ export const createD1Client = (d1: D1Like) => {
     dialect: "sqlite" as const,
     async query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
       const result = await withSql(text, () => prepare(text, params).all())
-      return restoreBooleans(result.results ?? []) as T[]
+      return toNeonTypes(result.results ?? []) as T[]
     },
     async queryOne<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T | null> {
       const rows = await client.query<T>(text, params)
@@ -171,7 +186,7 @@ export const createD1Client = (d1: D1Like) => {
         d1.batch(statements.map((s) => prepare(s.text, s.params ?? []))),
       )
       return results.map((r) => ({
-        rows: restoreBooleans(r.results ?? []) as Record<string, unknown>[],
+        rows: toNeonTypes(r.results ?? []) as Record<string, unknown>[],
         changes: r.meta?.changes ?? 0,
         lastRowId: r.meta?.last_row_id ?? null,
       }))
