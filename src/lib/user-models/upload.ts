@@ -39,7 +39,7 @@ export const cleanupStaleUploads = async (deps: UserModelDeps, userId: string) =
     `WITH stale AS (
         SELECT id, r2_key, upload_id FROM user_models
          WHERE user_id = $1 AND status = 'UPLOADING'
-           AND created_at < CASE WHEN import_status IS NULL THEN $2::bigint ELSE $4::bigint END
+           AND created_at < CASE WHEN import_status IS NULL THEN $2 ELSE $4 END
          FOR UPDATE
       ),
       upd AS (
@@ -95,7 +95,7 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
         SELECT id FROM user_models WHERE sha256 = $3 AND status = 'UPLOADING' LIMIT 1
       ),
       used AS (
-        SELECT COUNT(*)::int AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED'
+        SELECT COUNT(*) AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED'
       ),
       ins AS (
         INSERT INTO user_models(
@@ -107,7 +107,7 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
                CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END, $16,
                CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17,
                $20, $21, $22, $23,
-               CASE WHEN $20::text IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
+               CASE WHEN $20 IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
                $24
          WHERE (SELECT n FROM used) < $18
            AND NOT EXISTS (SELECT 1 FROM mine)

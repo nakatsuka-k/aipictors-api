@@ -34,7 +34,7 @@ export var fetchCoinSummary = async (db, userId, options) => {
   ) : [],
     options?.includeExpiringLots ? db.query(
     `SELECT coin_type AS "coinType",
-                SUM(remaining)::INTEGER AS amount,
+                SUM(remaining) AS amount,
                 expires_at AS "expiresAt"
            FROM coin_lots
           WHERE user_id = $1
@@ -51,12 +51,12 @@ export var fetchCoinSummary = async (db, userId, options) => {
               SUM(
                 CASE
                   WHEN coin_type = 'PREMIUM' AND source_kind = 'SUPPORT'
-                    THEN GREATEST(remaining - locked_amount, 0)
+                    THEN max(remaining - locked_amount, 0)
                   ELSE 0
                 END
               ),
               0
-            )::INTEGER AS exchangeable_premium_balance,
+            ) AS exchangeable_premium_balance,
             COALESCE(
               SUM(
                 CASE
@@ -66,14 +66,14 @@ export var fetchCoinSummary = async (db, userId, options) => {
                 END
               ),
               0
-            )::INTEGER AS locked_exchange_premium_balance
+            ) AS locked_exchange_premium_balance
        FROM coin_lots
       WHERE user_id = $1`,
     [userId]
   ),
     // 受け取った感謝コインのキャンペーン（サイトのお礼の表示は、実際に受け取った人にだけ出す）
     db.query(
-    `SELECT DISTINCT substring(source FROM 8) AS campaign
+    `SELECT DISTINCT substr(source, 8) AS campaign
        FROM coin_ledger
       WHERE user_id = $1
         AND source LIKE 'thanks:%'`,
@@ -131,15 +131,15 @@ export var getAdminCoinHistory = async (props) => {
                   PARTITION BY user_id
                   ORDER BY created_at ASC, id ASC
                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                )::INTEGER AS "runningFreeBalance",
+                ) AS "runningFreeBalance",
               SUM(CASE WHEN coin_type = 'PREMIUM' THEN delta ELSE 0 END)
                 OVER (
                   PARTITION BY user_id
                   ORDER BY created_at ASC, id ASC
                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                )::INTEGER AS "runningPremiumBalance"
+                ) AS "runningPremiumBalance"
          FROM coin_ledger
-        WHERE ($1::text IS NULL OR user_id = $1)
+        WHERE ($1 IS NULL OR user_id = $1)
      )
      SELECT id,
             "userId",
@@ -152,35 +152,35 @@ export var getAdminCoinHistory = async (props) => {
             "expiresAt",
             "runningFreeBalance",
             "runningPremiumBalance",
-            ("runningFreeBalance" + "runningPremiumBalance")::INTEGER AS "runningTotalBalance"
+            ("runningFreeBalance" + "runningPremiumBalance") AS "runningTotalBalance"
        FROM ranked
-      WHERE ($2::bigint IS NULL OR "createdAt" >= $2)
-        AND ($3::bigint IS NULL OR "createdAt" <= $3)
+      WHERE ($2 IS NULL OR "createdAt" >= $2)
+        AND ($3 IS NULL OR "createdAt" <= $3)
       ORDER BY "createdAt" DESC, id DESC
       LIMIT $4
      OFFSET $5`,
     [userId, from, to, limit, offset]
   );
   const countRow = await props.db.queryOne(
-    `SELECT COUNT(*)::INTEGER AS count
+    `SELECT COUNT(*) AS count
        FROM coin_ledger
-      WHERE ($1::text IS NULL OR user_id = $1)
-        AND ($2::bigint IS NULL OR created_at >= $2)
-        AND ($3::bigint IS NULL OR created_at <= $3)`,
+      WHERE ($1 IS NULL OR user_id = $1)
+        AND ($2 IS NULL OR created_at >= $2)
+        AND ($3 IS NULL OR created_at <= $3)`,
     [userId, from, to]
   );
   const summary = await props.db.queryOne(
-    `SELECT COUNT(DISTINCT user_id)::INTEGER AS matched_user_count,
-            COALESCE(SUM(CASE WHEN coin_type = 'FREE' AND kind IN ('INITIAL_GRANT', 'GRANT') AND delta > 0 THEN delta ELSE 0 END), 0)::INTEGER AS free_granted_total,
-            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' AND kind IN ('INITIAL_GRANT', 'GRANT') AND delta > 0 THEN delta ELSE 0 END), 0)::INTEGER AS premium_granted_total,
-            COALESCE(SUM(CASE WHEN coin_type = 'FREE' AND kind = 'CONSUME' AND delta < 0 THEN -delta ELSE 0 END), 0)::INTEGER AS free_consumed_total,
-            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' AND kind = 'CONSUME' AND delta < 0 THEN -delta ELSE 0 END), 0)::INTEGER AS premium_consumed_total,
-            COALESCE(SUM(CASE WHEN coin_type = 'FREE' AND kind = 'EXPIRE' AND delta < 0 THEN -delta ELSE 0 END), 0)::INTEGER AS free_expired_total,
-            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' AND kind = 'EXPIRE' AND delta < 0 THEN -delta ELSE 0 END), 0)::INTEGER AS premium_expired_total
+    `SELECT COUNT(DISTINCT user_id) AS matched_user_count,
+            COALESCE(SUM(CASE WHEN coin_type = 'FREE' AND kind IN ('INITIAL_GRANT', 'GRANT') AND delta > 0 THEN delta ELSE 0 END), 0) AS free_granted_total,
+            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' AND kind IN ('INITIAL_GRANT', 'GRANT') AND delta > 0 THEN delta ELSE 0 END), 0) AS premium_granted_total,
+            COALESCE(SUM(CASE WHEN coin_type = 'FREE' AND kind = 'CONSUME' AND delta < 0 THEN -delta ELSE 0 END), 0) AS free_consumed_total,
+            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' AND kind = 'CONSUME' AND delta < 0 THEN -delta ELSE 0 END), 0) AS premium_consumed_total,
+            COALESCE(SUM(CASE WHEN coin_type = 'FREE' AND kind = 'EXPIRE' AND delta < 0 THEN -delta ELSE 0 END), 0) AS free_expired_total,
+            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' AND kind = 'EXPIRE' AND delta < 0 THEN -delta ELSE 0 END), 0) AS premium_expired_total
        FROM coin_ledger
-      WHERE ($1::text IS NULL OR user_id = $1)
-        AND ($2::bigint IS NULL OR created_at >= $2)
-        AND ($3::bigint IS NULL OR created_at <= $3)`,
+      WHERE ($1 IS NULL OR user_id = $1)
+        AND ($2 IS NULL OR created_at >= $2)
+        AND ($3 IS NULL OR created_at <= $3)`,
     [userId, from, to]
   );
   const currentBalance = userId ? await props.db.queryOne(
@@ -267,8 +267,8 @@ export var ensureInitialCoinGrant = async (props) => {
 
 export var getConsumedCoinBreakdownBySource = async (props) => {
   const row = await props.db.queryOne(
-    `SELECT COALESCE(SUM(CASE WHEN coin_type = 'FREE' THEN -delta ELSE 0 END), 0)::INTEGER AS free_consumed,
-            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' THEN -delta ELSE 0 END), 0)::INTEGER AS premium_consumed
+    `SELECT COALESCE(SUM(CASE WHEN coin_type = 'FREE' THEN -delta ELSE 0 END), 0) AS free_consumed,
+            COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' THEN -delta ELSE 0 END), 0) AS premium_consumed
        FROM coin_ledger
       WHERE user_id = $1
         AND source = $2

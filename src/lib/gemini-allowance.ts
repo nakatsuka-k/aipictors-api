@@ -40,7 +40,7 @@ export var getGeminiAllowance = async (props) => {
   const weeklyLimit = geminiWeeklyAllowanceByPlan[planType] ?? 0;
   const weekStart = getJstWeekStart(now);
   const row = await props.db.queryOne(
-    `SELECT COALESCE(SUM(-delta), 0)::INTEGER AS used
+    `SELECT COALESCE(SUM(-delta), 0) AS used
        FROM coin_ledger
       WHERE user_id = $1
         AND coin_type = 'FREE'

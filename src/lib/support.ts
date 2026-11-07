@@ -99,13 +99,13 @@ export var getLatestTicket = async (db, userId) => {
 };
 
 export var getTicket = async (db, ticketId) => {
-  const row = await db.queryOne("SELECT * FROM support_tickets WHERE id = $1::bigint", [ticketId]);
+  const row = await db.queryOne("SELECT * FROM support_tickets WHERE id = $1", [ticketId]);
   return toTicket(row);
 };
 
 export var getTicketMessages = async (db, ticketId) => {
   const rows = await db.query(
-    "SELECT * FROM support_messages WHERE ticket_id = $1::bigint ORDER BY id ASC LIMIT 300",
+    "SELECT * FROM support_messages WHERE ticket_id = $1 ORDER BY id ASC LIMIT 300",
     [ticketId]
   );
   return rows.map(toMessage);
@@ -124,7 +124,7 @@ export var createTicket = async (db, props) => {
 export var addMessage = async (db, props) => {
   const row = await db.queryOne(
     `INSERT INTO support_messages(ticket_id, user_id, role, body, staff_user_id, model, input_tokens, output_tokens, created_at)
-     VALUES ($1::bigint, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
     [
       props.ticketId,
       props.userId,
@@ -142,7 +142,7 @@ export var addMessage = async (db, props) => {
 
 export var countAiRepliesToday = async (db, userId) => {
   const row = await db.queryOne(
-    `SELECT count(*)::INTEGER AS n FROM support_messages
+    `SELECT count(*) AS n FROM support_messages
       WHERE user_id = $1 AND role = 'ai' AND created_at > $2`,
     [userId, getNow() - 86400]
   );
@@ -152,7 +152,7 @@ export var countAiRepliesToday = async (db, userId) => {
 /**
  * AI に渡すその人のアカウントの状況（本人の情報だけ）
  */
-export var getAccountContext = async (db, userId) => {
+export var getAccountContext = async (db, userId, genlogDb = db) => {
   const now = getNow();
   const subscriptions = await db.query(
     `SELECT type, status, is_disabled, created_at, current_period_end, stripe_subscription_id IS NOT NULL AND stripe_subscription_id <> '' AS is_stripe
@@ -170,9 +170,9 @@ export var getAccountContext = async (db, userId) => {
   );
   let tasks = [];
   try {
-    tasks = await db.query(
-      `SELECT status, left(coalesce(error, ''), 160) AS error, request_time, count, cost, is_canceled
-         FROM generated_queues WHERE user_id = $1::bigint ORDER BY id DESC LIMIT 10`,
+    tasks = await genlogDb.query(
+      `SELECT status, substr(coalesce(error, ''), 1, 160) AS error, request_time, count, cost, is_canceled
+         FROM generated_queues WHERE user_id = $1 ORDER BY id DESC LIMIT 10`,
       [userId]
     );
   } catch {

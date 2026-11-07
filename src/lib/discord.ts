@@ -295,7 +295,7 @@ const ensureAchievementRole = async (env, db, achievement) => {
 /** 誰も選んでいない実績のロールを、古いものから消して limit 個以内にする */
 export const removeUnusedAchievementRoles = async (env, db, limit) => {
   const counted = await db.queryOne(
-    "SELECT COUNT(*)::INTEGER AS count FROM discord_roles WHERE role_key LIKE 'achievement:%'",
+    "SELECT COUNT(*) AS count FROM discord_roles WHERE role_key LIKE 'achievement:%'",
   )
   const overflow = (counted?.count ?? 0) - limit
   if (overflow <= 0) return 0
@@ -844,8 +844,8 @@ export const sendCoinExpiryDms = async (env, db, now = getNow()) => {
   const dateKey = new Date((now + 9 * 3600) * 1000).toISOString().slice(0, 10)
   const rows = await db.query(
     `SELECT l.user_id, l.discord_user_id,
-            SUM(CASE WHEN c.coin_type = 'FREE' THEN c.remaining ELSE 0 END)::INTEGER AS free_coins,
-            SUM(CASE WHEN c.coin_type = 'PREMIUM' THEN c.remaining ELSE 0 END)::INTEGER AS premium_coins,
+            SUM(CASE WHEN c.coin_type = 'FREE' THEN c.remaining ELSE 0 END) AS free_coins,
+            SUM(CASE WHEN c.coin_type = 'PREMIUM' THEN c.remaining ELSE 0 END) AS premium_coins,
             MIN(c.expires_at) AS expires_at
        FROM discord_links l
        JOIN coin_lots c ON c.user_id = l.user_id

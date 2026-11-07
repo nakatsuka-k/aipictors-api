@@ -685,7 +685,7 @@ export const importStepPart = async (deps: UserModelImportDeps, input: ImportPar
     console.warn(JSON.stringify({ event: "user_models.import_warning", id: row.id, warnings }))
   }
   await deps.db.execute(
-    `UPDATE user_models SET import_parts_done = GREATEST(import_parts_done, $2), updated_at = $3
+    `UPDATE user_models SET import_parts_done = max(import_parts_done, $2), updated_at = $3
       WHERE id = $1 AND status = 'UPLOADING'`,
     [row.id, input.partNumber, deps.now],
   )

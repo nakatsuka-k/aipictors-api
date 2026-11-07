@@ -1,59 +1,13 @@
-// aipictors-api の日次コイン処理を本物の Postgres で検証する（同時実行を含む）
-import EmbeddedPostgres from "embedded-postgres"
-import pg from "pg"
+// aipictors-api の日次コイン処理を D1（Miniflare）で検証する（同時実行を含む）
 import assert from "node:assert/strict"
+import { createTestD1 } from "./d1.mts"
 
 const API = process.env.API_SRC ?? new URL("../src", import.meta.url).pathname
-const { schemaStatements } = await import(`${API}/lib/db.ts`)
 const coins = await import(`${API}/lib/coins.ts`)
 const daily = await import(`${API}/lib/daily-coins.ts`)
 
-const dir = `/tmp/coin-test-pg-${process.pid}`
-const epg = new EmbeddedPostgres({ databaseDir: dir, user: "postgres", password: "pw", port: 54329, persistent: false })
-await epg.initialise()
-await epg.start()
-await epg.createDatabase("t")
-const pool = new pg.Pool({ connectionString: "postgres://postgres:pw@127.0.0.1:54329/t", max: 40 })
-pool.on("error", () => {}) // 終了時の Postgres 停止で切れる接続のエラーは無視する
-pg.types.setTypeParser(20, (v) => Number(v)) // BIGINT を number に（neon と同じ扱い）
-
-const db = {
-  async query(text: string, params: unknown[] = []) {
-    return (await pool.query(text, params)).rows
-  },
-  async queryOne(text: string, params: unknown[] = []) {
-    return (await pool.query(text, params)).rows[0] ?? null
-  },
-  async execute(text: string, params: unknown[] = []) {
-    await pool.query(text, params)
-  },
-  async executeResult(text: string, params: unknown[] = []) {
-    return { rowCount: (await pool.query(text, params)).rowCount ?? 0 }
-  },
-  async lockedQuery(keys: string[], text: string, params: unknown[] = []) {
-    const c = await pool.connect()
-    try {
-      await c.query("BEGIN ISOLATION LEVEL READ COMMITTED")
-      await c.query(
-        `SELECT pg_advisory_xact_lock(h)
-           FROM (SELECT DISTINCT hashtextextended(k, 0) AS h FROM unnest($1::text[]) AS k ORDER BY h) AS ordered`,
-        [[...new Set(keys)]],
-      )
-      const r = await c.query(text, params)
-      await c.query("COMMIT")
-      return r.rows
-    } catch (e) {
-      await c.query("ROLLBACK")
-      throw e
-    } finally {
-      c.release()
-    }
-  },
-  async lockedQueryOne(keys: string[], text: string, params: unknown[] = []) {
-    return (await this.lockedQuery(keys, text, params))[0] ?? null
-  },
-}
-for (const s of schemaStatements) await db.execute(s)
+const d1 = await createTestD1()
+const db = d1.db
 
 // 時刻を固定して進める
 let fakeNow = Date.parse("2026-10-27T03:00:00+09:00")
@@ -66,7 +20,7 @@ const balance = async (u: string) => (await coins.getCoinSummary(db, u, {})).tot
 const addSub = (u: string, type: string, status: string, endOffsetSec: number) =>
   db.execute(
     `INSERT INTO subscriptions(nanoid, user_id, type, status, is_disabled, created_at, current_period_start, current_period_end, stripe_subscription_id)
-     VALUES ($1, $2, $3, $4, FALSE, $5, $5, $6, $1)`,
+     VALUES ($1, $2, $3, $4, 0, $5, $5, $6, $1)`,
     [`sub_${u}_${type}_${status}`, u, type, status, sec() - 30 * 86400, sec() + endOffsetSec],
   )
 
@@ -303,6 +257,5 @@ await t("Gemini の枠: 月曜 0 時（日本時間）に戻り、プランご�
 })
 
 console.log(`\n${passed} passed`)
-await pool.end()
-await epg.stop()
+await d1.dispose()
 process.exit(0)

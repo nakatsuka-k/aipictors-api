@@ -17,10 +17,10 @@ export var transferSupportCoins = async (props) => {
   const isAnonymous = props.isAnonymous === true;
   if (props.source) {
     const existingTransfer = await props.db.queryOne(
-      `SELECT COALESCE(SUM(coin_amount), 0)::INTEGER AS transferred_amount,
-              COALESCE(SUM(pt_amount), 0)::INTEGER AS sender_pt_added,
-              COALESCE(SUM(pt_amount), 0)::INTEGER AS recipient_pt_added,
-              MIN(week_start_date)::text AS week_start_date,
+      `SELECT COALESCE(SUM(coin_amount), 0) AS transferred_amount,
+              COALESCE(SUM(pt_amount), 0) AS sender_pt_added,
+              COALESCE(SUM(pt_amount), 0) AS recipient_pt_added,
+              MIN(week_start_date) AS week_start_date,
               BOOL_OR(is_anonymous) AS is_anonymous
          FROM coin_support_transfers
         WHERE source = $1
@@ -56,14 +56,14 @@ export var transferSupportCoins = async (props) => {
           week_start_date,
           created_at
         )
-        SELECT $6::TEXT, $1, $2, $4, $3, $8, $9::DATE, $7
-         WHERE $6::TEXT IS NOT NULL
+        SELECT $6, $1, $2, $4, $3, $8, $9, $7
+         WHERE $6 IS NOT NULL
         ON CONFLICT (source) DO NOTHING
         RETURNING source
       ),
       request_gate AS (
         SELECT TRUE AS allowed
-         WHERE $6::TEXT IS NULL
+         WHERE $6 IS NULL
         UNION ALL
         SELECT TRUE AS allowed
           FROM request_claim
@@ -87,12 +87,12 @@ export var transferSupportCoins = async (props) => {
       ),
       updates AS (
         SELECT id,
-               LEAST(remaining, GREATEST($3 - (cumulative - remaining), 0))::INTEGER AS spend
+               min(remaining, max($3 - (cumulative - remaining), 0)) AS spend
           FROM candidate_lots
-         WHERE GREATEST($3 - (cumulative - remaining), 0) > 0
+         WHERE max($3 - (cumulative - remaining), 0) > 0
       ),
       spent_sum AS (
-        SELECT COALESCE(SUM(spend), 0)::INTEGER AS spent
+        SELECT COALESCE(SUM(spend), 0) AS spent
           FROM updates
       ),
       applied_lots AS (
@@ -106,12 +106,12 @@ export var transferSupportCoins = async (props) => {
         RETURNING updates.spend
       ),
       applied_sum AS (
-        SELECT COALESCE(SUM(spend), 0)::INTEGER AS spent
+        SELECT COALESCE(SUM(spend), 0) AS spent
           FROM applied_lots
       ),
       updated_balance AS (
         UPDATE coin_balances
-           SET ${balanceColumn} = GREATEST(coin_balances.${balanceColumn} - (SELECT spent FROM applied_sum), 0),
+           SET ${balanceColumn} = max(coin_balances.${balanceColumn} - (SELECT spent FROM applied_sum), 0),
                updated_at = $7
          WHERE user_id = $1
            AND (SELECT spent FROM applied_sum) = $3
@@ -271,10 +271,10 @@ export var transferSupportCoins = async (props) => {
   if (!result || result.transferred_amount !== amount || result.sender_pt_added !== ptAmount || result.recipient_pt_added !== ptAmount || result.week_start_date !== weekStartDate) {
     if (props.source) {
       const existingTransfer = await props.db.queryOne(
-        `SELECT COALESCE(SUM(coin_amount), 0)::INTEGER AS transferred_amount,
-                COALESCE(SUM(pt_amount), 0)::INTEGER AS sender_pt_added,
-                COALESCE(SUM(pt_amount), 0)::INTEGER AS recipient_pt_added,
-                MIN(week_start_date)::text AS week_start_date,
+        `SELECT COALESCE(SUM(coin_amount), 0) AS transferred_amount,
+                COALESCE(SUM(pt_amount), 0) AS sender_pt_added,
+                COALESCE(SUM(pt_amount), 0) AS recipient_pt_added,
+                MIN(week_start_date) AS week_start_date,
                 BOOL_OR(is_anonymous) AS is_anonymous
            FROM coin_support_transfers
           WHERE source = $1
@@ -328,14 +328,14 @@ export var revertSupportTransferBySource = async (props) => {
            AND source = $3
       ),
       free_totals AS (
-        SELECT COALESCE(SUM(coin_amount), 0)::INTEGER AS coin_amount,
-               COALESCE(SUM(pt_amount), 0)::BIGINT AS pt_amount
+        SELECT COALESCE(SUM(coin_amount), 0) AS coin_amount,
+               COALESCE(SUM(pt_amount), 0) AS pt_amount
           FROM target
          WHERE coin_type = 'FREE'
       ),
       premium_totals AS (
-        SELECT COALESCE(SUM(coin_amount), 0)::INTEGER AS coin_amount,
-               COALESCE(SUM(pt_amount), 0)::BIGINT AS pt_amount
+        SELECT COALESCE(SUM(coin_amount), 0) AS coin_amount,
+               COALESCE(SUM(pt_amount), 0) AS pt_amount
           FROM target
          WHERE coin_type = 'PREMIUM'
       ),
@@ -354,7 +354,7 @@ export var revertSupportTransferBySource = async (props) => {
       ),
       recipient_balance AS (
         UPDATE coin_balances
-           SET premium_balance = GREATEST(
+           SET premium_balance = max(
                  coin_balances.premium_balance - (SELECT coin_amount FROM premium_totals),
                  0
                ),
@@ -457,16 +457,16 @@ export var revertSupportTransferBySource = async (props) => {
       ),
       sender_weekly AS (
         UPDATE coin_support_weekly_sent_points
-           SET coin_amount = GREATEST(coin_support_weekly_sent_points.coin_amount - src.coin_amount, 0),
-               pt_amount = GREATEST(coin_support_weekly_sent_points.pt_amount - src.pt_amount, 0),
-               transfer_count = GREATEST(coin_support_weekly_sent_points.transfer_count - src.transfer_count, 0),
+           SET coin_amount = max(coin_support_weekly_sent_points.coin_amount - src.coin_amount, 0),
+               pt_amount = max(coin_support_weekly_sent_points.pt_amount - src.pt_amount, 0),
+               transfer_count = max(coin_support_weekly_sent_points.transfer_count - src.transfer_count, 0),
                updated_at = $4
           FROM (
             SELECT week_start_date,
                    sender_user_id AS user_id,
-                   SUM(coin_amount)::INTEGER AS coin_amount,
-                   SUM(pt_amount)::BIGINT AS pt_amount,
-                   COUNT(*)::INTEGER AS transfer_count
+                   SUM(coin_amount) AS coin_amount,
+                   SUM(pt_amount) AS pt_amount,
+                   COUNT(*) AS transfer_count
               FROM target
              GROUP BY week_start_date, sender_user_id
           ) AS src
@@ -475,16 +475,16 @@ export var revertSupportTransferBySource = async (props) => {
       ),
       recipient_weekly AS (
         UPDATE coin_support_weekly_received_points
-           SET coin_amount = GREATEST(coin_support_weekly_received_points.coin_amount - src.coin_amount, 0),
-               pt_amount = GREATEST(coin_support_weekly_received_points.pt_amount - src.pt_amount, 0),
-               transfer_count = GREATEST(coin_support_weekly_received_points.transfer_count - src.transfer_count, 0),
+           SET coin_amount = max(coin_support_weekly_received_points.coin_amount - src.coin_amount, 0),
+               pt_amount = max(coin_support_weekly_received_points.pt_amount - src.pt_amount, 0),
+               transfer_count = max(coin_support_weekly_received_points.transfer_count - src.transfer_count, 0),
                updated_at = $4
           FROM (
             SELECT week_start_date,
                    recipient_user_id AS user_id,
-                   SUM(coin_amount)::INTEGER AS coin_amount,
-                   SUM(pt_amount)::BIGINT AS pt_amount,
-                   COUNT(*)::INTEGER AS transfer_count
+                   SUM(coin_amount) AS coin_amount,
+                   SUM(pt_amount) AS pt_amount,
+                   COUNT(*) AS transfer_count
               FROM target
              GROUP BY week_start_date, recipient_user_id
           ) AS src
@@ -493,13 +493,13 @@ export var revertSupportTransferBySource = async (props) => {
       ),
       sender_totals AS (
         UPDATE coin_support_totals
-           SET sent_pt_total = GREATEST(coin_support_totals.sent_pt_total - src.pt_amount, 0),
-               sent_coin_total = GREATEST(coin_support_totals.sent_coin_total - src.coin_amount, 0),
+           SET sent_pt_total = max(coin_support_totals.sent_pt_total - src.pt_amount, 0),
+               sent_coin_total = max(coin_support_totals.sent_coin_total - src.coin_amount, 0),
                updated_at = $4
           FROM (
             SELECT sender_user_id AS user_id,
-                   SUM(coin_amount)::BIGINT AS coin_amount,
-                   SUM(pt_amount)::BIGINT AS pt_amount
+                   SUM(coin_amount) AS coin_amount,
+                   SUM(pt_amount) AS pt_amount
               FROM target
              GROUP BY sender_user_id
           ) AS src
@@ -507,13 +507,13 @@ export var revertSupportTransferBySource = async (props) => {
       ),
       recipient_totals AS (
         UPDATE coin_support_totals
-           SET received_pt_total = GREATEST(coin_support_totals.received_pt_total - src.pt_amount, 0),
-               received_coin_total = GREATEST(coin_support_totals.received_coin_total - src.coin_amount, 0),
+           SET received_pt_total = max(coin_support_totals.received_pt_total - src.pt_amount, 0),
+               received_coin_total = max(coin_support_totals.received_coin_total - src.coin_amount, 0),
                updated_at = $4
           FROM (
             SELECT recipient_user_id AS user_id,
-                   SUM(coin_amount)::BIGINT AS coin_amount,
-                   SUM(pt_amount)::BIGINT AS pt_amount
+                   SUM(coin_amount) AS coin_amount,
+                   SUM(pt_amount) AS pt_amount
               FROM target
              GROUP BY recipient_user_id
           ) AS src
@@ -526,7 +526,7 @@ export var revertSupportTransferBySource = async (props) => {
       )
       SELECT (SELECT coin_amount FROM free_totals) AS free_amount,
              (SELECT coin_amount FROM premium_totals) AS premium_amount,
-             (SELECT COUNT(*)::INTEGER FROM deleted) AS target_count`,
+             (SELECT COUNT(*) FROM deleted) AS target_count`,
     [props.senderUserId, props.recipientUserId, props.source, now]
   );
   return {

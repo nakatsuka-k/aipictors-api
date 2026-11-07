@@ -59,12 +59,12 @@ export const listUserModels = async (db: Db, query: ListUserModelsQuery) => {
   const limit = Math.max(1, Math.min(100, Number.parseInt(String(query.limit ?? "30"), 10) || 30))
   const order = query.sort === "new" ? "created_at DESC, id DESC" : "use_count DESC, created_at DESC, id DESC"
   const where = `status = 'READY'
-      AND ($1::text IS NULL OR kind = $1)
-      AND ($2::text IS NULL OR base_model = $2)
-      AND ($3::text[] IS NULL OR rating = ANY($3::text[]))
-      AND ($4::text IS NULL OR name ILIKE $4 OR trigger_words ILIKE $4 OR description ILIKE $4 OR tags ILIKE $4)
-      AND ($5::text IS NULL OR user_id = $5)
-      AND ($6::text IS NULL OR tags::jsonb @> jsonb_build_array($6::jsonb))`
+      AND ($1 IS NULL OR kind = $1)
+      AND ($2 IS NULL OR base_model = $2)
+      AND ($3 IS NULL OR rating IN (SELECT value FROM json_each($3)))
+      AND ($4 IS NULL OR name LIKE $4 OR trigger_words LIKE $4 OR description LIKE $4 OR tags LIKE $4)
+      AND ($5 IS NULL OR user_id = $5)
+      AND ($6 IS NULL OR tags::jsonb @> jsonb_build_array($6))`
   const params = [kind, baseModel, ratings, q, query.userId || null, tag]
   const [rows, count] = await Promise.all([
     db.query<UserModelRow>(`SELECT * FROM user_models WHERE ${where} ORDER BY ${order} LIMIT $7 OFFSET $8`, [

@@ -95,7 +95,7 @@ subscriptionRoutes.get("/unpaid/:userId", async (c) => {
   const rows = await db.query(
     `SELECT type, stripe_subscription_id FROM subscriptions
       WHERE user_id = $1 AND is_disabled = FALSE AND stripe_subscription_id <> ''
-        AND current_period_end > EXTRACT(EPOCH FROM NOW())::bigint - 60 * 86400
+        AND current_period_end > unixepoch() - 60 * 86400
       ORDER BY current_period_end DESC LIMIT 3`,
     [c.req.param("userId")]
   );

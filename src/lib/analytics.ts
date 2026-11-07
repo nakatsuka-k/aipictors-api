@@ -1,4 +1,5 @@
 // @ts-nocheck -- 周りのファイルに合わせて型は付けていない
+import { getGenlogDb } from "./db"
 
 /**
  * 分析ページ用の日別の数字（日本時間の 1 日ごとに 1 行）
@@ -9,13 +10,8 @@ var ZONE_ID = "e24f556403c24f96875f6466349b048f";
 var JST_OFFSET_SECONDS = 9 * 3600;
 var PLAN_TYPES = ["LITE", "STANDARD", "PREMIUM"];
 
-export var ensureAnalyticsTables = async (db) => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS analytics_daily (
-    day DATE PRIMARY KEY,
-    metrics JSONB NOT NULL,
-    updated_at BIGINT NOT NULL
-  )`);
-};
+// 表は migrations/gen で作る（D1）
+export var ensureAnalyticsTables = async (_db) => {};
 
 /** "2026-11-05" → その日の 00:00 JST と翌日 00:00 JST（UNIX 秒） */
 export var toJstDayRange = (day) => {
@@ -87,7 +83,7 @@ var collectGenerations = async (db, day) => {
   const row = await db.queryOne(
     `SELECT count(*) AS results, count(DISTINCT user_id) AS users
     FROM image_generation_results
-    WHERE generation_time >= $1::date AND generation_time < $1::date + 1`,
+    WHERE generation_time >= $1 AND generation_time < date($1, '+1 day')`,
     [day]
   );
   return { results: toNumber(row?.results), users: toNumber(row?.users) };
@@ -225,13 +221,13 @@ export var collectAnalyticsDay = async (env, db, day) => {
   const [subscriptions, coins, generations, stripe, cloudflare] = await Promise.all([
     safe("subscriptions", () => collectSubscriptions(db, range)),
     safe("coins", () => collectCoinSales(db, range)),
-    safe("generations", () => collectGenerations(db, day)),
+    safe("generations", async () => collectGenerations(await getGenlogDb(env), day)),
     safe("stripe", () => collectStripe(env.STRIPE_SECRET_KEY, range)),
     safe("cloudflare", () => collectCloudflare(env.CF_ANALYTICS_TOKEN, day, range)),
   ]);
   const metrics = { subscriptions, coins, generations, stripe, cloudflare, errors };
   await db.execute(
-    `INSERT INTO analytics_daily (day, metrics, updated_at) VALUES ($1::date, $2::jsonb, $3)
+    `INSERT INTO analytics_daily (day, metrics, updated_at) VALUES ($1, $2, $3)
     ON CONFLICT (day) DO UPDATE SET metrics = EXCLUDED.metrics, updated_at = EXCLUDED.updated_at`,
     [day, JSON.stringify(metrics), Math.floor(Date.now() / 1000)]
   );
@@ -242,13 +238,13 @@ export var collectAnalyticsDay = async (env, db, day) => {
 export var listAnalyticsDays = async (db, days) => {
   await ensureAnalyticsTables(db);
   const rows = await db.query(
-    `SELECT to_char(day, 'YYYY-MM-DD') AS day, metrics, updated_at
+    `SELECT day, metrics, updated_at
     FROM analytics_daily
-    WHERE day >= (now() AT TIME ZONE 'Asia/Tokyo')::date - $1::int
+    WHERE day >= date('now', '+9 hours', '-' || $1 || ' days')
     ORDER BY day ASC`,
     [days]
   );
-  return rows.map((row) => ({ day: row.day, updatedAt: toNumber(row.updated_at), ...row.metrics }));
+  return rows.map((row) => ({ day: row.day, updatedAt: toNumber(row.updated_at), ...(typeof row.metrics === "string" ? JSON.parse(row.metrics) : row.metrics) }));
 };
 
 /** 今の契約数（その場で数える。日別の表の最新日より新しい） */

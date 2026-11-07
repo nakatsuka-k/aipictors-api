@@ -82,6 +82,17 @@ export const guard = (condition = "changes() > 0"): Statement => ({
 export const guardCleanup: Statement = { text: "DELETE FROM d1_guard" }
 export const isGuardFailure = (error: unknown) => String((error as Error)?.message ?? error).includes("d1_guard_failed")
 
+// エラーに SQL の先頭を付ける（引数の値は付けない）
+const withSql = async <T>(sql: string, run: () => Promise<T>): Promise<T> => {
+  try {
+    return await run()
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error))
+    err.message = `${err.message} [sql: ${sql.replace(/\s+/g, " ").slice(0, 160)}]`
+    throw err
+  }
+}
+
 export const createD1Client = (d1: D1Like) => {
   const prepare = (text: string, params: unknown[] = []) => {
     const { sql, count } = compile(text)
@@ -93,7 +104,7 @@ export const createD1Client = (d1: D1Like) => {
   const client = {
     dialect: "sqlite" as const,
     async query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
-      const result = await prepare(text, params).all()
+      const result = await withSql(text, () => prepare(text, params).all())
       return (result.results ?? []) as T[]
     },
     async queryOne<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T | null> {
@@ -101,10 +112,10 @@ export const createD1Client = (d1: D1Like) => {
       return rows[0] ?? null
     },
     async execute(text: string, params: unknown[] = []) {
-      await prepare(text, params).run()
+      await withSql(text, () => prepare(text, params).run())
     },
     async executeResult(text: string, params: unknown[] = []) {
-      const result = await prepare(text, params).run()
+      const result = await withSql(text, () => prepare(text, params).run())
       return { rowCount: result.meta?.changes ?? 0, lastRowId: result.meta?.last_row_id ?? null }
     },
     // D1 では 1 文が原子的で、書き込みは 1 本ずつ順に実行されるのでロックは要らない
@@ -117,7 +128,9 @@ export const createD1Client = (d1: D1Like) => {
     // まとめて 1 つのトランザクションで実行する（途中で失敗したらすべて取り消し）
     async batch(statements: Statement[]): Promise<BatchResult[]> {
       if (statements.length === 0) return []
-      const results = await d1.batch(statements.map((s) => prepare(s.text, s.params ?? [])))
+      const results = await withSql(statements.map((s) => s.text).join(" ; "), () =>
+        d1.batch(statements.map((s) => prepare(s.text, s.params ?? []))),
+      )
       return results.map((r) => ({
         rows: (r.results ?? []) as Record<string, unknown>[],
         changes: r.meta?.changes ?? 0,

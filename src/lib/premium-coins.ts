@@ -12,8 +12,8 @@ export var findExistingPremiumCoinPurchase = async (props) => {
     `SELECT id, lot_id, expires_at, total_coins
        FROM premium_coin_purchases
       WHERE stripe_event_id = $1
-         OR ($2::text IS NOT NULL AND stripe_session_id = $2)
-         OR ($3::text IS NOT NULL AND stripe_payment_intent_id = $3)
+         OR ($2 IS NOT NULL AND stripe_session_id = $2)
+         OR ($3 IS NOT NULL AND stripe_payment_intent_id = $3)
       ORDER BY created_at DESC
       LIMIT 1`,
     [props.stripeEventId, props.stripeSessionId, props.stripePaymentIntentId]
@@ -146,8 +146,8 @@ export var refundPremiumCoinPurchase = async (props) => {
   const purchase = await props.db.queryOne(
     `SELECT id, total_coins, refunded_at
        FROM premium_coin_purchases
-      WHERE ($1::text IS NOT NULL AND stripe_payment_intent_id = $1)
-         OR ($2::text IS NOT NULL AND stripe_charge_id = $2)
+      WHERE ($1 IS NOT NULL AND stripe_payment_intent_id = $1)
+         OR ($2 IS NOT NULL AND stripe_charge_id = $2)
       ORDER BY created_at DESC
       LIMIT 1`,
     [props.stripePaymentIntentId, props.stripeChargeId]
@@ -175,8 +175,8 @@ export var refundPremiumCoinPurchase = async (props) => {
            AND refunded_at IS NULL
       ),
       refundable AS (
-        SELECT LEAST(COALESCE(coin_lots.remaining, 0), COALESCE(purchase.total_coins, 0))::INTEGER AS deducted,
-               COALESCE(purchase.total_coins, 0)::INTEGER AS total_coins
+        SELECT min(COALESCE(coin_lots.remaining, 0), COALESCE(purchase.total_coins, 0)) AS deducted,
+               COALESCE(purchase.total_coins, 0) AS total_coins
           FROM purchase
           LEFT JOIN coin_lots ON coin_lots.id = purchase.lot_id
       ),
@@ -196,7 +196,7 @@ export var refundPremiumCoinPurchase = async (props) => {
       ),
       updated_balance AS (
         UPDATE coin_balances
-           SET premium_balance = GREATEST(
+           SET premium_balance = max(
                  coin_balances.premium_balance - (SELECT deducted FROM refundable),
                  0
                ),

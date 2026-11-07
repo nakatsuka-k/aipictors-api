@@ -1,7 +1,7 @@
 // @ts-nocheck -- 周りのファイルに合わせて型は付けていない
 import { Hono as Hono2 } from "hono"
 import { requireInternalAuth } from "../lib/auth"
-import { getDb, getNow } from "../lib/db"
+import { getDb, getGenlogDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 import {
   SUPPORT_AI_DAILY_LIMIT,
@@ -40,7 +40,7 @@ var markEscalated = async (db, ticketId, props) => {
         SET status = 'waiting_staff', staff_unread = TRUE,
             escalated_at = COALESCE(escalated_at, $2), updated_at = $2,
             category = COALESCE($3, category), summary = COALESCE($4, summary)
-      WHERE id = $1::bigint`,
+      WHERE id = $1`,
     [ticketId, getNow(), props.category ?? null, props.summary ?? null]
   );
 };
@@ -58,7 +58,7 @@ supportRoutes.post("/thread", async (c) => {
     return json({ error: null, data: { ticket: null, messages: [] } });
   }
   if (ticket.userUnread) {
-    await db.execute("UPDATE support_tickets SET user_unread = FALSE WHERE id = $1::bigint", [ticket.id]);
+    await db.execute("UPDATE support_tickets SET user_unread = FALSE WHERE id = $1", [ticket.id]);
   }
   const messages = await getTicketMessages(db, ticket.id);
   const history = await db.query(
@@ -85,7 +85,7 @@ supportRoutes.post("/unread", async (c) => {
   if (!userId) return json({ error: "userId is required" }, 400);
   const db = await loadDb(c);
   const row = await db.queryOne(
-    "SELECT count(*)::INTEGER AS n FROM support_tickets WHERE user_id = $1 AND user_unread = TRUE",
+    "SELECT count(*) AS n FROM support_tickets WHERE user_id = $1 AND user_unread = TRUE",
     [userId]
   );
   return json({ error: null, data: { unread: row?.n ?? 0 } });
@@ -114,15 +114,15 @@ supportRoutes.post("/messages", async (c) => {
       contactEmail: body.contactEmail ?? null
     });
   } else if (body.contactEmail && !ticket.contactEmail) {
-    await db.execute("UPDATE support_tickets SET contact_email = $2 WHERE id = $1::bigint", [ticket.id, body.contactEmail]);
+    await db.execute("UPDATE support_tickets SET contact_email = $2 WHERE id = $1", [ticket.id, body.contactEmail]);
   }
   const userMessage = await addMessage(db, { ticketId: ticket.id, userId, role: "user", body: text });
-  await db.execute("UPDATE support_tickets SET updated_at = $2 WHERE id = $1::bigint", [ticket.id, getNow()]);
+  await db.execute("UPDATE support_tickets SET updated_at = $2 WHERE id = $1", [ticket.id, getNow()]);
   const created = [userMessage];
 
   // 以前「スタッフ対応中」になったお問い合わせも、AI が答える（有人の対応はない）
   if (ticket.status === "waiting_staff" || ticket.status === "staff_replied") {
-    await db.execute("UPDATE support_tickets SET status = 'ai', staff_unread = FALSE WHERE id = $1::bigint", [ticket.id]);
+    await db.execute("UPDATE support_tickets SET status = 'ai', staff_unread = FALSE WHERE id = $1", [ticket.id]);
   }
 
   const used = await countAiRepliesToday(db, userId);
@@ -139,7 +139,7 @@ supportRoutes.post("/messages", async (c) => {
 
   try {
     const history = await getTicketMessages(db, ticket.id);
-    const accountContext = await getAccountContext(db, userId);
+    const accountContext = await getAccountContext(db, userId, await getGenlogDb(c.env));
     const result = await generateSupportAnswer(c.env, {
       userId,
       userName: body.userName ?? ticket.userName,
@@ -158,13 +158,13 @@ supportRoutes.post("/messages", async (c) => {
     });
     created.push(aiMessage);
     await db.execute(
-      `UPDATE support_tickets SET category = COALESCE($2, category), summary = COALESCE(summary, $3), updated_at = $4 WHERE id = $1::bigint`,
+      `UPDATE support_tickets SET category = COALESCE($2, category), summary = COALESCE(summary, $3), updated_at = $4 WHERE id = $1`,
       [ticket.id, result.category, result.summary, getNow()]
     );
     // Discord を案内したお問い合わせは、管理画面で見られるように印だけ付ける（状態は変えない）
     if (result.escalate) {
       await db.execute(
-        "UPDATE support_tickets SET escalated_at = COALESCE(escalated_at, $2) WHERE id = $1::bigint",
+        "UPDATE support_tickets SET escalated_at = COALESCE(escalated_at, $2) WHERE id = $1",
         [ticket.id, getNow()]
       );
     }
@@ -194,7 +194,7 @@ supportRoutes.post("/escalate", async (c) => {
   if (!ticket || ticket.userId !== userId) return json({ error: "Not found" }, 404);
   const created = [await addMessage(db, { ticketId, userId, role: "system", body: DISCORD_NOTICE })];
   await db.execute(
-    "UPDATE support_tickets SET escalated_at = COALESCE(escalated_at, $2) WHERE id = $1::bigint",
+    "UPDATE support_tickets SET escalated_at = COALESCE(escalated_at, $2) WHERE id = $1",
     [ticketId, getNow()]
   );
   return json({ error: null, data: { ticket: await getTicket(db, ticketId), messages: created } });
@@ -210,7 +210,7 @@ supportRoutes.post("/feedback", async (c) => {
   if (!userId || !messageId) return json({ error: "userId and messageId are required" }, 400);
   const db = await loadDb(c);
   await db.execute(
-    "UPDATE support_messages SET helpful = $3 WHERE id = $1::bigint AND user_id = $2 AND role = 'ai'",
+    "UPDATE support_messages SET helpful = $3 WHERE id = $1 AND user_id = $2 AND role = 'ai'",
     [messageId, userId, body.helpful === true ? 1 : -1]
   );
   return json({ error: null, data: { ok: true } });
@@ -226,7 +226,7 @@ supportRoutes.post("/resolve", async (c) => {
   if (!userId || !ticketId) return json({ error: "userId and ticketId are required" }, 400);
   const db = await loadDb(c);
   await db.execute(
-    "UPDATE support_tickets SET status = 'resolved', resolved_at = $3, updated_at = $3, staff_unread = FALSE WHERE id = $1::bigint AND user_id = $2",
+    "UPDATE support_tickets SET status = 'resolved', resolved_at = $3, updated_at = $3, staff_unread = FALSE WHERE id = $1 AND user_id = $2",
     [ticketId, userId, getNow()]
   );
   return json({ error: null, data: { ticket: await getTicket(db, ticketId) } });
@@ -241,19 +241,19 @@ supportRoutes.post("/admin/tickets", async (c) => {
   const db = await loadDb(c);
   const rows = await db.query(
     `SELECT t.*, (SELECT body FROM support_messages m WHERE m.ticket_id = t.id AND m.role = 'user' ORDER BY m.id DESC LIMIT 1) AS last_user_message,
-            (SELECT count(*)::INTEGER FROM support_messages m WHERE m.ticket_id = t.id) AS message_count
+            (SELECT count(*) FROM support_messages m WHERE m.ticket_id = t.id) AS message_count
        FROM support_tickets t
       WHERE ($1 = 'all' OR t.status = $1)
       ORDER BY t.updated_at DESC LIMIT 100`,
     [status]
   );
-  const counts = await db.query("SELECT status, count(*)::INTEGER AS n FROM support_tickets GROUP BY status");
+  const counts = await db.query("SELECT status, count(*) AS n FROM support_tickets GROUP BY status");
   const stats = await db.queryOne(
-    `SELECT count(*) FILTER (WHERE role = 'ai')::INTEGER AS ai_replies,
-            count(*) FILTER (WHERE role = 'ai' AND helpful = 1)::INTEGER AS helpful,
-            count(*) FILTER (WHERE role = 'ai' AND helpful = -1)::INTEGER AS not_helpful,
-            COALESCE(sum(input_tokens), 0)::BIGINT AS input_tokens,
-            COALESCE(sum(output_tokens), 0)::BIGINT AS output_tokens
+    `SELECT count(*) FILTER (WHERE role = 'ai') AS ai_replies,
+            count(*) FILTER (WHERE role = 'ai' AND helpful = 1) AS helpful,
+            count(*) FILTER (WHERE role = 'ai' AND helpful = -1) AS not_helpful,
+            COALESCE(sum(input_tokens), 0) AS input_tokens,
+            COALESCE(sum(output_tokens), 0) AS output_tokens
        FROM support_messages WHERE created_at > $1`,
     [getNow() - 30 * 86400]
   );
@@ -297,10 +297,10 @@ supportRoutes.post("/admin/ticket", async (c) => {
   const ticket = await getTicket(db, ticketId);
   if (!ticket) return json({ error: "Not found" }, 404);
   if (ticket.staffUnread) {
-    await db.execute("UPDATE support_tickets SET staff_unread = FALSE WHERE id = $1::bigint", [ticketId]);
+    await db.execute("UPDATE support_tickets SET staff_unread = FALSE WHERE id = $1", [ticketId]);
   }
   const messages = await getTicketMessages(db, ticketId);
-  const accountContext = await getAccountContext(db, ticket.userId);
+  const accountContext = await getAccountContext(db, ticket.userId, await getGenlogDb(c.env));
   return json({ error: null, data: { ticket, messages, accountContext } });
 });
 
@@ -327,7 +327,7 @@ supportRoutes.post("/admin/reply", async (c) => {
       staffUserId: body.staffUserId ? String(body.staffUserId) : null
     });
     await db.execute(
-      "UPDATE support_tickets SET status = $2, user_unread = TRUE, staff_unread = FALSE, updated_at = $3 WHERE id = $1::bigint",
+      "UPDATE support_tickets SET status = $2, user_unread = TRUE, staff_unread = FALSE, updated_at = $3 WHERE id = $1",
       [ticketId, nextStatus ?? "staff_replied", getNow()]
     );
     emailed = await sendStaffReplyEmail(c.env, { email: ticket.contactEmail, body: text }).catch(() => false);
@@ -335,7 +335,7 @@ supportRoutes.post("/admin/reply", async (c) => {
     await db.execute(
       `UPDATE support_tickets SET status = $2, staff_unread = FALSE, updated_at = $3,
               resolved_at = CASE WHEN $2 = 'resolved' THEN $3 ELSE resolved_at END
-        WHERE id = $1::bigint`,
+        WHERE id = $1`,
       [ticketId, nextStatus, getNow()]
     );
   }

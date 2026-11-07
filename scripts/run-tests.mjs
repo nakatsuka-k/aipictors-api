@@ -6,7 +6,7 @@ import { join } from "node:path"
 const root = new URL("..", import.meta.url).pathname
 const only = process.argv.slice(2)
 const files = readdirSync(join(root, "test"))
-  .filter((name) => name.endsWith(".mts"))
+  .filter((name) => name.endsWith(".mts") && name !== "d1.mts")
   .filter((name) => only.length === 0 || only.some((word) => name.includes(word)))
   .sort()
 

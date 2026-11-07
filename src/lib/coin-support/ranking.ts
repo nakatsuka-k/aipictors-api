@@ -20,11 +20,11 @@ export var getSupportWeeklyRanking = async (props) => {
                   WHEN is_anonymous THEN '${ANONYMOUS_SUPPORT_USER_ID}'
                   ELSE sender_user_id
                 END AS "userId",
-                SUM(coin_amount)::INTEGER AS "coinAmount",
-                SUM(pt_amount)::INTEGER AS "ptAmount",
-                SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END)::INTEGER AS "freePtAmount",
-                SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END)::INTEGER AS "premiumPtAmount",
-                COUNT(*)::INTEGER AS "transferCount",
+                SUM(coin_amount) AS "coinAmount",
+                SUM(pt_amount) AS "ptAmount",
+                SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END) AS "freePtAmount",
+                SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END) AS "premiumPtAmount",
+                COUNT(*) AS "transferCount",
                 BOOL_OR(is_anonymous) AS "isAnonymous"
            FROM coin_support_transfers
           WHERE recipient_user_id = $1
@@ -62,7 +62,7 @@ export var getSupportWeeklyRanking = async (props) => {
       [props.recipientUserId, limit, offset, CONTRIBUTION_RANKING_EXCLUDED_USER_ID]
     ),
     props.db.queryOne(
-      `SELECT COUNT(*)::INTEGER AS count
+      `SELECT COUNT(*) AS count
          FROM (
            SELECT CASE
                     WHEN is_anonymous THEN '${ANONYMOUS_SUPPORT_USER_ID}'
@@ -93,14 +93,14 @@ export var getSupportWeeklyRanking = async (props) => {
   props.db.query(
     `WITH grouped AS (
        SELECT ${userColumn} AS "userId",
-              SUM(coin_amount)::INTEGER AS "coinAmount",
-              SUM(pt_amount)::INTEGER AS "ptAmount",
-              SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END)::INTEGER AS "freePtAmount",
-              SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END)::INTEGER AS "premiumPtAmount",
-              COUNT(*)::INTEGER AS "transferCount"
+              SUM(coin_amount) AS "coinAmount",
+              SUM(pt_amount) AS "ptAmount",
+              SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END) AS "freePtAmount",
+              SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END) AS "premiumPtAmount",
+              COUNT(*) AS "transferCount"
          FROM coin_support_transfers
         WHERE week_start_date = $1
-         AND ($4::TEXT IS NULL OR ${userColumn} <> $4)
+         AND ($4 IS NULL OR ${userColumn} <> $4)
         GROUP BY ${userColumn}
      ),
      ranked AS (
@@ -129,12 +129,12 @@ export var getSupportWeeklyRanking = async (props) => {
     [weekStartDate, limit, offset, excludeContributionUserId]
   ),
   props.db.queryOne(
-    `SELECT COUNT(*)::INTEGER AS count
+    `SELECT COUNT(*) AS count
        FROM (
          SELECT ${userColumn}
            FROM coin_support_transfers
           WHERE week_start_date = $1
-            AND ($2::TEXT IS NULL OR ${userColumn} <> $2)
+            AND ($2 IS NULL OR ${userColumn} <> $2)
           GROUP BY ${userColumn}
        ) AS grouped`,
     [weekStartDate, excludeContributionUserId]
@@ -158,7 +158,7 @@ export var getSupportPeriodRanking = async (props) => {
   const getPeriodFilter = () => {
     if (props.period === "weekly") {
       return {
-        whereSql: "week_start_date = $1::date",
+        whereSql: "week_start_date = $1",
         params: [props.periodKey]
       };
     }
@@ -179,14 +179,14 @@ export var getSupportPeriodRanking = async (props) => {
   props.db.query(
     `WITH grouped AS (
        SELECT ${userColumn} AS "userId",
-              SUM(coin_amount)::INTEGER AS "coinAmount",
-              SUM(pt_amount)::INTEGER AS "ptAmount",
-              SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END)::INTEGER AS "freePtAmount",
-              SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END)::INTEGER AS "premiumPtAmount",
-              COUNT(*)::INTEGER AS "transferCount"
+              SUM(coin_amount) AS "coinAmount",
+              SUM(pt_amount) AS "ptAmount",
+              SUM(CASE WHEN coin_type = 'FREE' THEN pt_amount ELSE 0 END) AS "freePtAmount",
+              SUM(CASE WHEN coin_type = 'PREMIUM' THEN pt_amount ELSE 0 END) AS "premiumPtAmount",
+              COUNT(*) AS "transferCount"
          FROM coin_support_transfers
         WHERE ${whereSql}
-         AND ($2::TEXT IS NULL OR ${userColumn} <> $2)
+         AND ($2 IS NULL OR ${userColumn} <> $2)
         GROUP BY ${userColumn}
      ),
      ranked AS (
@@ -215,12 +215,12 @@ export var getSupportPeriodRanking = async (props) => {
     [...params, excludeContributionUserId, limit, offset]
   ),
   props.db.queryOne(
-    `SELECT COUNT(*)::INTEGER AS count
+    `SELECT COUNT(*) AS count
        FROM (
          SELECT ${userColumn}
            FROM coin_support_transfers
           WHERE ${whereSql}
-            AND ($2::TEXT IS NULL OR ${userColumn} <> $2)
+            AND ($2 IS NULL OR ${userColumn} <> $2)
           GROUP BY ${userColumn}
        ) AS grouped`,
     [...params, excludeContributionUserId]
@@ -327,8 +327,8 @@ export var getSupportSummary = async (props) => {
     getSupportAvailableWeekStartDates(props.db),
     props.db.query(
     `SELECT coin_type,
-            COALESCE(SUM(coin_amount), 0)::INTEGER AS coin_amount,
-            COALESCE(SUM(pt_amount), 0)::INTEGER AS pt_amount
+            COALESCE(SUM(coin_amount), 0) AS coin_amount,
+            COALESCE(SUM(pt_amount), 0) AS pt_amount
        FROM coin_support_transfers
       WHERE recipient_user_id = $1
       GROUP BY coin_type`,
@@ -357,7 +357,7 @@ export var getSupportSummary = async (props) => {
   const [cumulativeSentRank, cumulativeReceivedRank] = await Promise.all([
     sentPtTotal > 0 && props.userId !== CONTRIBUTION_RANKING_EXCLUDED_USER_ID
       ? props.db.queryOne(
-          `SELECT COUNT(*)::INTEGER + 1 AS rank
+          `SELECT COUNT(*) + 1 AS rank
              FROM coin_support_totals
             WHERE sent_pt_total > $1
               AND user_id <> $2`,
@@ -366,7 +366,7 @@ export var getSupportSummary = async (props) => {
       : null,
     receivedPtTotal > 0
       ? props.db.queryOne(
-          `SELECT COUNT(*)::INTEGER + 1 AS rank
+          `SELECT COUNT(*) + 1 AS rank
              FROM coin_support_totals
             WHERE received_pt_total > $1`,
           [receivedPtTotal]

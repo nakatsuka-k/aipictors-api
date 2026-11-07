@@ -67,8 +67,8 @@ campaignRoutes.post("/thanks-coins", async (c) => {
        FROM subscriptions
       WHERE is_disabled = FALSE
         AND type IN ('LITE', 'STANDARD', 'PREMIUM')
-        AND current_period_end > EXTRACT(EPOCH FROM NOW())::bigint
-        AND user_id = ANY($1::text[])
+        AND current_period_end > unixepoch()
+        AND user_id IN (SELECT value FROM json_each($1))
       ORDER BY user_id,
                CASE type WHEN 'PREMIUM' THEN 3 WHEN 'STANDARD' THEN 2 ELSE 1 END DESC`,
     [onlyUserIds]
@@ -100,11 +100,11 @@ campaignRoutes.post("/send-email", async (c) => {
   await ensureTables(db);
   const userIds = recipients.map((r) => String(r.userId));
   const optouts = new Set(
-    (await db.query("SELECT user_id FROM email_optouts WHERE user_id = ANY($1::text[])", [userIds])).map((r) => r.user_id)
+    (await db.query("SELECT user_id FROM email_optouts WHERE user_id IN (SELECT value FROM json_each($1))", [userIds])).map((r) => r.user_id)
   );
   const sent = new Set(
     (await db.query(
-      "SELECT user_id FROM email_campaign_sends WHERE campaign = $1 AND user_id = ANY($2::text[])",
+      "SELECT user_id FROM email_campaign_sends WHERE campaign = $1 AND user_id IN (SELECT value FROM json_each($2))",
       [campaign, userIds]
     )).map((r) => r.user_id)
   );
@@ -193,7 +193,7 @@ campaignRoutes.post("/cancel-reasons", async (c) => {
   await ensureRetentionTables(db);
   const since = getNow() - days * 86400;
   const summary = await db.query(
-    `SELECT reason, count(*)::INTEGER AS n, round(avg(months), 1) AS avg_months
+    `SELECT reason, count(*) AS n, round(avg(months), 1) AS avg_months
        FROM subscription_cancel_reasons WHERE created_at > $1 GROUP BY reason ORDER BY n DESC`,
     [since]
   );

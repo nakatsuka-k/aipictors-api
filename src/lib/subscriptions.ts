@@ -1,7 +1,7 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 export var getCurrentSubscription = async (db, userId) => db.queryOne(
   `SELECT * FROM subscriptions
-      WHERE user_id = $1 AND is_disabled = FALSE AND current_period_end > EXTRACT(EPOCH FROM NOW())::bigint
+      WHERE user_id = $1 AND is_disabled = FALSE AND current_period_end > unixepoch()
       ORDER BY current_period_end DESC LIMIT 1`,
   [userId]
 );

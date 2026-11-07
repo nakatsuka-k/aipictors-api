@@ -146,7 +146,7 @@ export var listActiveReservedImageGenerationTasksForUser = async (db, userId) =>
 };
 export var countActiveReservedImageGenerationTasksForUser = async (db, userId) => {
   const result = await db.queryOne(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(*) AS count
        FROM generated_reservation_queues
       WHERE user_id = $1
         AND is_deleted = FALSE
@@ -244,7 +244,7 @@ export var listImageGenerationTasksForUser = async (db, args) => {
   }
   if (args.where?.uuids && args.where.uuids.length > 0) {
     params.push(args.where.uuids);
-    conditions.push(`uuid = ANY($${params.length}::text[])`);
+    conditions.push(`uuid IN (SELECT value FROM json_each($${params.length}))`);
   }
   params.push(args.take);
   params.push(args.skip);
@@ -289,7 +289,7 @@ export var listImageGenerationResultsForUser = async (db, args) => {
   }
   if (args.where?.nanoids && args.where.nanoids.length > 0) {
     params.push(args.where.nanoids);
-    conditions.push(`nanoid = ANY($${params.length}::text[])`);
+    conditions.push(`nanoid IN (SELECT value FROM json_each($${params.length}))`);
   }
   params.push(args.take);
   params.push(args.skip);
@@ -346,7 +346,7 @@ export var markImageGenerationTaskErrored = async (db, nanoid, generationTime, e
         SET status = 'error',
             generation_time = $2,
             error = $3,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE nanoid = $1
     RETURNING ${generatedQueueColumns}`,
     [nanoid, generationTime, error ?? null]
@@ -358,7 +358,7 @@ export var markImageGenerationTaskGenerated = async (db, nanoid, imageUrl, gener
         SET image_url = $2,
             status = 'generated',
             generation_time = $3,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE nanoid = $1
     RETURNING ${generatedQueueColumns}`,
     [nanoid, imageUrl, generationTime]
@@ -371,7 +371,7 @@ export var updateImageGenerationTaskById = async (db, id, input) => {
             priority = $3,
             rating = $4,
             is_deleted = $5,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE id = $1
     RETURNING ${generatedQueueColumns}`,
     [id, input.status, input.priority, input.rating, input.isDeleted]
@@ -381,7 +381,7 @@ export var softDeleteImageGenerationResult = async (db, nanoid, userId) => {
   return db.queryOne(
     `UPDATE image_generation_results
         SET is_deleted = TRUE,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE nanoid = $1 AND user_id = $2
     RETURNING ${imageGenerationResultColumns}`,
     [nanoid, userId]
@@ -391,7 +391,7 @@ export var updateImageGenerationResultRating = async (db, nanoid, userId, rating
   return db.queryOne(
     `UPDATE image_generation_results
         SET rating = $3,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE nanoid = $1 AND user_id = $2 AND is_deleted = FALSE
     RETURNING ${imageGenerationResultColumns}`,
     [nanoid, userId, rating]
@@ -399,7 +399,7 @@ export var updateImageGenerationResultRating = async (db, nanoid, userId, rating
 };
 export var countProtectedImageGenerationResultsForUser = async (db, userId) => {
   const result = await db.queryOne(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(*) AS count
        FROM image_generation_results
       WHERE user_id = $1 AND is_deleted = FALSE AND is_protected = TRUE`,
     [userId]
@@ -410,7 +410,7 @@ export var updateImageGenerationResultProtected = async (db, nanoid, userId, isP
   return db.queryOne(
     `UPDATE image_generation_results
         SET is_protected = $3,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE nanoid = $1 AND user_id = $2 AND is_deleted = FALSE
     RETURNING ${imageGenerationResultColumns}`,
     [nanoid, userId, isProtected]
@@ -435,7 +435,7 @@ export var cancelImageGenerationTask = async (db, id) => {
         SET is_canceled = 1,
             status = 'canceled',
             is_deleted = TRUE,
-            updated_at = NOW()
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE id = $1
     RETURNING ${generatedQueueColumns}`,
     [id]
@@ -495,7 +495,7 @@ export var createImageGenerationResult = async (db, input) => {
 };
 export var countImageGenerationResultsForUserSince = async (db, userId, since, options = {}) => {
   const result = await db.queryOne(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(*) AS count
        FROM image_generation_results
       WHERE user_id = $1
         AND generation_time >= $2
@@ -507,10 +507,10 @@ export var countImageGenerationResultsForUserSince = async (db, userId, since, o
 };
 export var countImageGenerationTasksForUserByStatuses = async (db, userId, statuses) => {
   const result = await db.queryOne(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(*) AS count
        FROM generated_queues
       WHERE user_id = $1
-        AND status = ANY($2::generated_queue_status[])`,
+        AND status IN (SELECT value FROM json_each($2))`,
     [userId, statuses]
   );
   return Number(result?.count ?? 0);
@@ -524,7 +524,7 @@ export var buildTaskQuery = (input) => {
   }
   if (input.statuses && input.statuses.length > 0) {
     params.push(input.statuses);
-    conditions.push(`status = ANY($${params.length}::generated_queue_status[])`);
+    conditions.push(`status IN (SELECT value FROM json_each($${params.length}))`);
   }
   if (input.priority !== null && input.priority !== void 0) {
     params.push(input.priority);
@@ -544,7 +544,7 @@ export var buildTaskQuery = (input) => {
   }
   if (input.types && input.types.length > 0) {
     params.push(input.types);
-    conditions.push(`type::text = ANY($${params.length}::text[])`);
+    conditions.push(`type IN (SELECT value FROM json_each($${params.length}))`);
   }
   return { params, whereSql: conditions.join(" AND ") };
 };
@@ -553,11 +553,11 @@ export var buildResultQuery = (input) => {
   const conditions = [`user_id = $${params.length}`];
   if (input.statuses && input.statuses.length > 0) {
     params.push(input.statuses);
-    conditions.push(`status = ANY($${params.length}::generated_queue_status[])`);
+    conditions.push(`status IN (SELECT value FROM json_each($${params.length}))`);
   }
   if (input.excludeStatuses && input.excludeStatuses.length > 0) {
     params.push(input.excludeStatuses);
-    conditions.push(`NOT (status = ANY($${params.length}::generated_queue_status[]))`);
+    conditions.push(`NOT (status IN (SELECT value FROM json_each($${params.length})))`);
   }
   if (input.isDeleted !== null && input.isDeleted !== void 0) {
     params.push(input.isDeleted);
@@ -576,7 +576,7 @@ export var buildResultQuery = (input) => {
 export var countImageGenerationTasks = async (db, input) => {
   const { params, whereSql } = buildTaskQuery(input);
   const result = await db.queryOne(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(*) AS count
        FROM generated_queues
       WHERE ${whereSql}`,
     params
@@ -597,7 +597,7 @@ export var getFirstImageGenerationTask = async (db, input) => {
 export var sumImageGenerationTaskCosts = async (db, input) => {
   const { params, whereSql } = buildTaskQuery(input);
   const result = await db.queryOne(
-    `SELECT COALESCE(SUM(cost), 0)::text AS total_cost
+    `SELECT COALESCE(SUM(cost), 0) AS total_cost
        FROM generated_queues
       WHERE ${whereSql}`,
     params
@@ -606,11 +606,11 @@ export var sumImageGenerationTaskCosts = async (db, input) => {
 };
 export var sumImageGenerationTaskCostsForUserSince = async (db, userId, since, statuses) => {
   const result = await db.queryOne(
-    `SELECT COALESCE(SUM(cost), 0)::text AS total_cost
+    `SELECT COALESCE(SUM(cost), 0) AS total_cost
        FROM generated_queues
       WHERE user_id = $1
         AND generation_time >= $2
-        AND status = ANY($3::generated_queue_status[])`,
+        AND status IN (SELECT value FROM json_each($3))`,
     [userId, since, statuses]
   );
   return Number(result?.total_cost ?? 0);
@@ -632,7 +632,7 @@ export var listImageGenerationResults = async (db, input) => {
 export var countImageGenerationResults = async (db, input) => {
   const { params, whereSql } = buildResultQuery(input);
   const result = await db.queryOne(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(*) AS count
        FROM image_generation_results
       WHERE ${whereSql}`,
     params
@@ -642,7 +642,7 @@ export var countImageGenerationResults = async (db, input) => {
 export var sumImageGenerationResultCosts = async (db, input) => {
   const { params, whereSql } = buildResultQuery(input);
   const result = await db.queryOne(
-    `SELECT COALESCE(SUM(cost), 0)::text AS total_cost
+    `SELECT COALESCE(SUM(cost), 0) AS total_cost
        FROM image_generation_results
       WHERE ${whereSql}`,
     params

@@ -2,7 +2,7 @@
 import { Hono as Hono2 } from "hono"
 import { array, boolean, nullable, number, object, optional, safeParse, string } from "valibot"
 import { requireInternalAuth } from "../lib/auth"
-import { getDb } from "../lib/db"
+import { getGenlogDb as getDb } from "../lib/db"
 import { cancelImageGenerationTask, countActiveReservedImageGenerationTasksForUser, countImageGenerationResults, countImageGenerationResultsForUserSince, countImageGenerationTasks, countImageGenerationTasksForUserByStatuses, countProtectedImageGenerationResultsForUser, createImageGenerationResult, createImageGenerationTask, createReservedImageGenerationTask, findCancelableImageGenerationTask, getFirstImageGenerationTask, getImageGenerationResultByNanoid, getImageGenerationResultByNanoidForUser, getImageGenerationTaskByNanoid, getImageGenerationTaskByNanoidForUser, getLatestReservedImageGenerationTaskForUser, getReservedImageGenerationTaskByNanoidForUser, listActiveReservedImageGenerationTasksForUser, listImageGenerationResults, listImageGenerationResultsForUser, listImageGenerationTasksForUser, markImageGenerationTaskErrored, markImageGenerationTaskGenerated, softDeleteAllReservedImageGenerationTasksForUser, softDeleteImageGenerationResult, softDeleteReservedImageGenerationTask, sumImageGenerationResultCosts, sumImageGenerationTaskCosts, sumImageGenerationTaskCostsForUserSince, updateImageGenerationResultProtected, updateImageGenerationResultRating, updateImageGenerationTaskById } from "../lib/image-generation"
 import { json } from "../lib/json"
 export var createTaskSchema = object({

@@ -1,7 +1,7 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 // コインの消費（生成など）
 import { grantDailyCoinsBatch, resolveCoinPlanType } from "../daily-coins"
-import { coinLockKey, getNow } from "../db"
+import { getNow } from "../db"
 import { getGeminiAllowance, isGeminiCoinReason } from "../gemini-allowance"
 import { expireAvailableCoins } from "./balance"
 import { createConsumeEvent } from "./format"
@@ -31,132 +31,91 @@ export var consumeCoins = async (props) => {
       maxFreeSpend = Math.min(amount, allowance.remaining);
     }
   }
-  const result = await props.db.lockedQueryOne(
-    [coinLockKey(props.userId)],
-    `WITH ensured AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
+  // D1: 1 つのトランザクション（batch）で実行する。使う量は「使う前のロット」から計算し、
+  // 足りるときだけ d1_guard に 1 行入れて、以降の文はその行があるときだけ書く（最後に消す）。
+  // プレミアムの使う量はフリーのロットから計算するので、プレミアムのロットを先に更新する。
+  const lotsSql = (coinType) => `SELECT id,
+               remaining,
+               SUM(remaining) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS cumulative
+          FROM coin_lots
+         WHERE user_id = $1
+           AND coin_type = '${coinType}'
+           AND remaining > 0`;
+  const freeUpdatesSql = `SELECT id,
+               min(remaining, max($6 - (cumulative - remaining), 0)) AS spend
+          FROM (${lotsSql("FREE")})
+         WHERE max($6 - (cumulative - remaining), 0) > 0`;
+  const freeTotalSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${freeUpdatesSql}))`;
+  const premiumUpdatesSql = `SELECT id,
+               min(remaining, max($2 - ${freeTotalSql} - (cumulative - remaining), 0)) AS spend
+          FROM (${lotsSql("PREMIUM")})
+         WHERE max($2 - ${freeTotalSql} - (cumulative - remaining), 0) > 0`;
+  const premiumTotalSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${premiumUpdatesSql}))`;
+  const okSql = `(${freeTotalSql} + ${premiumTotalSql}) >= $2`;
+  const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
+  const params = [
+    props.userId,
+    amount,
+    now,
+    props.reason ?? null,
+    props.source ?? null,
+    maxFreeSpend
+  ];
+  const results = await props.db.batch([
+    {
+      text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $3)
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      free_candidates AS (
-        SELECT id,
-               remaining,
-               SUM(remaining) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS cumulative
-          FROM coin_lots
-         WHERE user_id = $1
-           AND coin_type = 'FREE'
-           AND remaining > 0
-      ),
-      free_updates AS (
-        SELECT id,
-               LEAST(remaining, GREATEST($6::INTEGER - (cumulative - remaining), 0))::INTEGER AS spend
-          FROM free_candidates
-         WHERE GREATEST($6::INTEGER - (cumulative - remaining), 0) > 0
-      ),
-      free_total AS (
-        SELECT COALESCE(SUM(spend), 0)::INTEGER AS free_spend
-          FROM free_updates
-      ),
-      premium_candidates AS (
-        SELECT id,
-               remaining,
-               SUM(remaining) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS cumulative
-          FROM coin_lots
-         WHERE user_id = $1
-           AND coin_type = 'PREMIUM'
-           AND remaining > 0
-      ),
-      premium_updates AS (
-        SELECT id,
-               LEAST(
-                 remaining,
-                 GREATEST(
-                   $2 - (SELECT free_spend FROM free_total) - (cumulative - remaining),
-                   0
-                 )
-               )::INTEGER AS spend
-          FROM premium_candidates
-         WHERE GREATEST(
-                 $2 - (SELECT free_spend FROM free_total) - (cumulative - remaining),
-                 0
-               ) > 0
-      ),
-      premium_total AS (
-        SELECT COALESCE(SUM(spend), 0)::INTEGER AS premium_spend
-          FROM premium_updates
-      ),
-      totals AS (
-        SELECT free_total.free_spend,
-               premium_total.premium_spend,
-               (free_total.free_spend + premium_total.premium_spend)::INTEGER AS total_spend
-          FROM free_total
-          CROSS JOIN premium_total
-      ),
-      applied_free AS (
-        UPDATE coin_lots
-           SET remaining = coin_lots.remaining - free_updates.spend,
+        ON CONFLICT (user_id) DO NOTHING`,
+      params
+    },
+    {
+      text: `SELECT ${okSql} AS ok, ${freeTotalSql} AS free_spend, ${premiumTotalSql} AS premium_spend`,
+      params
+    },
+    { text: `INSERT INTO d1_guard(ok) SELECT 1 WHERE ${okSql}`, params },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $1, 'FREE', -${freeTotalSql}, 'CONSUME', $4, $5, $3, NULL
+         WHERE ${freeTotalSql} > 0 AND ${guarded}`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $1, 'PREMIUM', -${premiumTotalSql}, 'CONSUME', $4, $5, $3, NULL
+         WHERE ${premiumTotalSql} > 0 AND ${guarded}`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
+           SET remaining = coin_lots.remaining - updates.spend,
                updated_at = $3
-          FROM free_updates, totals
-         WHERE coin_lots.id = free_updates.id
-           AND totals.total_spend >= $2
-        RETURNING free_updates.spend
-      ),
-      applied_premium AS (
-        UPDATE coin_lots
-           SET remaining = coin_lots.remaining - premium_updates.spend,
+          FROM (${premiumUpdatesSql}) AS updates
+         WHERE coin_lots.id = updates.id
+           AND ${guarded}`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
+           SET remaining = coin_lots.remaining - updates.spend,
                updated_at = $3
-          FROM premium_updates, totals
-         WHERE coin_lots.id = premium_updates.id
-           AND totals.total_spend >= $2
-        RETURNING premium_updates.spend
-      ),
-      updated_balance AS (
-        UPDATE coin_balances
-           SET free_balance = (
-                 SELECT COALESCE(SUM(remaining), 0)::INTEGER
-                   FROM coin_lots
-                  WHERE user_id = $1
-                    AND coin_type = 'FREE'
-                    AND remaining > 0
-               ),
-               premium_balance = (
-                 SELECT COALESCE(SUM(remaining), 0)::INTEGER
-                   FROM coin_lots
-                  WHERE user_id = $1
-                    AND coin_type = 'PREMIUM'
-                    AND remaining > 0
-               ),
+          FROM (${freeUpdatesSql}) AS updates
+         WHERE coin_lots.id = updates.id
+           AND ${guarded}`,
+      params
+    },
+    {
+      text: `UPDATE coin_balances
+           SET free_balance = (SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE' AND remaining > 0),
+               premium_balance = (SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'PREMIUM' AND remaining > 0),
                updated_at = $3
          WHERE user_id = $1
-           AND (SELECT total_spend FROM totals) >= $2
-        RETURNING user_id
-      ),
-      free_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, 'FREE', -free_spend, 'CONSUME', $4, $5, $3, NULL
-          FROM totals
-         WHERE free_spend > 0
-           AND total_spend >= $2
-      ),
-      premium_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, 'PREMIUM', -premium_spend, 'CONSUME', $4, $5, $3, NULL
-          FROM totals
-         WHERE premium_spend > 0
-           AND total_spend >= $2
-      )
-      SELECT ((SELECT total_spend FROM totals) >= $2) AS ok,
-             (SELECT free_spend FROM totals) AS free_spend,
-             (SELECT premium_spend FROM totals) AS premium_spend`,
-    [
-      props.userId,
-      amount,
-      now,
-      props.reason ?? null,
-      props.source ?? null,
-      maxFreeSpend
-    ]
-  );
+           AND ${guarded}`,
+      params
+    },
+    { text: "DELETE FROM d1_guard" }
+  ]);
+  const row = results[1].rows[0];
+  const result = row ? { ok: Boolean(row.ok), free_spend: row.free_spend, premium_spend: row.premium_spend } : null;
   if (!result?.ok) {
     return { ok: false, code: "INSUFFICIENT_COINS" };
   }

@@ -1,6 +1,6 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 // コインの付与・減算・失効と残高の同期
-import { coinLockKey, getNow } from "../db"
+import { getNow } from "../db"
 import { createConsumeEvent, createExpireEvent, createGrantEvent, getJstExpirationAt } from "./format"
 import { fetchCoinSummary } from "./summary"
 export var grantCoins = async (props) => {
@@ -12,53 +12,58 @@ export var grantCoins = async (props) => {
   const expiresAt = props.expiresAt === void 0 ? getJstExpirationAt(props.now) : props.expiresAt;
   // プレミアムコインは日次失効させない（返却・管理付与で当日24:00期限になっていた）。期限を明示したときだけ使う
   const premiumExpiresAt = props.expiresAt === void 0 ? null : props.expiresAt;
-  await props.db.lockedQuery(
-    [coinLockKey(props.userId)],
-    `WITH ensured AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
+  // D1: 1 つのトランザクション（batch）で残高・ロット・台帳をまとめて書く
+  const params = [
+    props.userId,
+    freeCoins,
+    premiumCoins,
+    props.now,
+    props.kind,
+    props.reason ?? null,
+    props.source ?? null,
+    expiresAt,
+    premiumExpiresAt
+  ];
+  await props.db.batch([
+    {
+      text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $4)
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      updated_balance AS (
-        UPDATE coin_balances
+        ON CONFLICT (user_id) DO NOTHING`,
+      params
+    },
+    {
+      text: `UPDATE coin_balances
            SET free_balance = coin_balances.free_balance + $2,
                premium_balance = coin_balances.premium_balance + $3,
                updated_at = $4
-         WHERE user_id = $1
-      ),
-      free_lot AS (
-        INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
+         WHERE user_id = $1`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
         SELECT $1, 'FREE', $2, $8, $4, $4
-         WHERE $2 > 0
-      ),
-      premium_lot AS (
-        INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
+         WHERE $2 > 0`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
         SELECT $1, 'PREMIUM', $3, $9, $4, $4
-         WHERE $3 > 0
-      ),
-      free_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+         WHERE $3 > 0`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
         SELECT $1, 'FREE', $2, $5, $6, $7, $4, CASE WHEN $2 > 0 THEN $8 ELSE NULL END
-         WHERE $2 <> 0
-      ),
-      premium_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+         WHERE $2 <> 0`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
         SELECT $1, 'PREMIUM', $3, $5, $6, $7, $4, CASE WHEN $3 > 0 THEN $9 ELSE NULL END
-         WHERE $3 <> 0
-      )
-      SELECT 1`,
-    [
-      props.userId,
-      freeCoins,
-      premiumCoins,
-      props.now,
-      props.kind,
-      props.reason ?? null,
-      props.source ?? null,
-      expiresAt,
-      premiumExpiresAt
-    ]
-  );
+         WHERE $3 <> 0`,
+      params
+    }
+  ]);
   return {
     freeGranted: freeCoins,
     premiumGranted: premiumCoins
@@ -71,132 +76,110 @@ export var reduceCoinTypeBalance = async (props) => {
     return 0;
   }
   const balanceColumn = props.coinType === "FREE" ? "free_balance" : "premium_balance";
-  const result = await props.db.lockedQueryOne(
-    [coinLockKey(props.userId)],
-    `WITH ensured AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
+  // ロットを期限の近い順に使う。台帳・残高は「使う前のロット」から計算するので、ロットの更新を最後にする（同じトランザクション内）
+  const updatesSql = `SELECT id,
+               min(remaining, max($3 - (running_total - remaining), 0)) AS spend
+          FROM (
+            SELECT id,
+                   remaining,
+                   SUM(remaining) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS running_total
+              FROM coin_lots
+             WHERE user_id = $1
+               AND coin_type = $2
+               AND remaining > 0
+          )
+         WHERE running_total - remaining < $3`;
+  const spentSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${updatesSql}) WHERE spend > 0)`;
+  const params = [
+    props.userId,
+    props.coinType,
+    amount,
+    props.now,
+    props.kind,
+    props.reason ?? null,
+    props.source ?? null
+  ];
+  const results = await props.db.batch([
+    {
+      text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $4)
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      candidate_lots AS (
-        SELECT id,
-               remaining,
-               SUM(remaining) OVER (
-                 ORDER BY expires_at ASC NULLS LAST, id ASC
-               ) AS running_total
-          FROM coin_lots
-         WHERE user_id = $1
-           AND coin_type = $2
-           AND remaining > 0
-         ORDER BY expires_at ASC NULLS LAST, id ASC
-      ),
-      updates AS (
-        SELECT id,
-               LEAST(remaining, GREATEST($3 - (running_total - remaining), 0))::INTEGER AS spend
-          FROM candidate_lots
-         WHERE running_total - remaining < $3
-      ),
-      applied AS (
-        UPDATE coin_lots
+        ON CONFLICT (user_id) DO NOTHING`,
+      params
+    },
+    { text: `SELECT ${spentSql} AS spent`, params },
+    {
+      text: `UPDATE coin_balances
+           SET ${balanceColumn} = max(coin_balances.${balanceColumn} - ${spentSql}, 0),
+               updated_at = $4
+         WHERE user_id = $1`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $1, $2, -${spentSql}, $5, $6, $7, $4, NULL
+         WHERE ${spentSql} > 0`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
            SET remaining = coin_lots.remaining - updates.spend,
                updated_at = $4
-          FROM updates
+          FROM (${updatesSql}) AS updates
          WHERE coin_lots.id = updates.id
-           AND updates.spend > 0
-        RETURNING updates.spend
-      ),
-      spent_sum AS (
-        SELECT COALESCE(SUM(spend), 0)::INTEGER AS spent
-          FROM applied
-      ),
-      updated_balance AS (
-        UPDATE coin_balances
-           SET ${balanceColumn} = GREATEST(coin_balances.${balanceColumn} - (SELECT spent FROM spent_sum), 0),
-               updated_at = $4
-         WHERE user_id = $1
-      ),
-      ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1, $2, -(SELECT spent FROM spent_sum), $5, $6, $7, $4, NULL
-         WHERE (SELECT spent FROM spent_sum) > 0
-      )
-      SELECT spent
-        FROM spent_sum`,
-    [
-      props.userId,
-      props.coinType,
-      amount,
-      props.now,
-      props.kind,
-      props.reason ?? null,
-      props.source ?? null
-    ]
-  );
+           AND updates.spend > 0`,
+      params
+    }
+  ]);
+  const result = results[1].rows[0];
   return result?.spent ?? 0;
 };
 
 export var expireAvailableCoins = async (db, userId, now) => {
-  const result = await db.lockedQueryOne(
-    [coinLockKey(userId)],
-    `WITH expired AS (
-        SELECT id, coin_type, remaining
+  const expiredSql = `SELECT id, coin_type, remaining
           FROM coin_lots
          WHERE user_id = $1
            AND remaining > 0
            AND expires_at IS NOT NULL
-           AND expires_at <= $2
-      ),
-      updated_lots AS (
-        UPDATE coin_lots
-           SET remaining = 0,
-               updated_at = $2
-         WHERE id IN (SELECT id FROM expired)
-        RETURNING id
-      ),
-      sums AS (
-        SELECT COALESCE(SUM(CASE WHEN coin_type = 'FREE' THEN remaining ELSE 0 END), 0)::INTEGER AS expired_free,
-               COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' THEN remaining ELSE 0 END), 0)::INTEGER AS expired_premium
-          FROM expired
-      ),
-      updated_balance AS (
-        UPDATE coin_balances
-           SET free_balance = GREATEST(coin_balances.free_balance - (SELECT expired_free FROM sums), 0),
-               premium_balance = GREATEST(coin_balances.premium_balance - (SELECT expired_premium FROM sums), 0),
+           AND expires_at <= $2`;
+  const sumsSql = `SELECT COALESCE(SUM(CASE WHEN coin_type = 'FREE' THEN remaining ELSE 0 END), 0) AS expired_free,
+               COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' THEN remaining ELSE 0 END), 0) AS expired_premium
+          FROM (${expiredSql})`;
+  const params = [userId, now];
+  // 台帳・残高は失効前のロットから計算し、ロットの更新を最後にする（同じトランザクション内）
+  const results = await db.batch([
+    { text: sumsSql, params },
+    {
+      text: `UPDATE coin_balances
+           SET free_balance = max(coin_balances.free_balance - (SELECT expired_free FROM (${sumsSql})), 0),
+               premium_balance = max(coin_balances.premium_balance - (SELECT expired_premium FROM (${sumsSql})), 0),
                updated_at = $2
          WHERE user_id = $1
-           AND EXISTS (SELECT 1 FROM updated_lots)
-        RETURNING user_id
-      ),
-      free_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1,
-               'FREE',
-               -expired_free,
-               'EXPIRE',
-               'Daily coin expiration',
-               'expiration',
-               $2,
-               NULL
-          FROM sums
-         WHERE expired_free > 0
-      ),
-      premium_ledger AS (
-        INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $1,
-               'PREMIUM',
-               -expired_premium,
-               'EXPIRE',
-               'Daily coin expiration',
-               'expiration',
-               $2,
-               NULL
-          FROM sums
-         WHERE expired_premium > 0
-      )
-      SELECT expired_free, expired_premium
-        FROM sums`,
-    [userId, now]
-  );
+           AND EXISTS (${expiredSql})`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $1, 'FREE', -expired_free, 'EXPIRE', 'Daily coin expiration', 'expiration', $2, NULL
+          FROM (${sumsSql})
+         WHERE expired_free > 0`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $1, 'PREMIUM', -expired_premium, 'EXPIRE', 'Daily coin expiration', 'expiration', $2, NULL
+          FROM (${sumsSql})
+         WHERE expired_premium > 0`,
+      params
+    },
+    {
+      text: `UPDATE coin_lots
+           SET remaining = 0,
+               updated_at = $2
+         WHERE id IN (SELECT id FROM (${expiredSql}))`,
+      params
+    }
+  ]);
+  const result = results[0].rows[0];
   const expiredFreeCoins = result?.expired_free ?? 0;
   const expiredPremiumCoins = result?.expired_premium ?? 0;
   return {
@@ -207,31 +190,24 @@ export var expireAvailableCoins = async (db, userId, now) => {
 };
 
 export var syncCoinBalancesWithLots = async (db, userId, now) => {
-  return db.queryOne(
-    `WITH ensured AS (
-        INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
+  const results = await db.batch([
+    {
+      text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
         VALUES ($1, 0, 0, $2)
-        ON CONFLICT (user_id) DO NOTHING
-      ),
-      actual AS (
-        SELECT COALESCE(SUM(CASE WHEN coin_type = 'FREE' THEN remaining ELSE 0 END), 0)::INTEGER AS free_balance,
-               COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' THEN remaining ELSE 0 END), 0)::INTEGER AS premium_balance
-          FROM coin_lots
-         WHERE user_id = $1
-           AND remaining > 0
-      ),
-      updated AS (
-        UPDATE coin_balances
-           SET free_balance = (SELECT free_balance FROM actual),
-               premium_balance = (SELECT premium_balance FROM actual),
+        ON CONFLICT (user_id) DO NOTHING`,
+      params: [userId, now]
+    },
+    {
+      text: `UPDATE coin_balances
+           SET free_balance = (SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE' AND remaining > 0),
+               premium_balance = (SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'PREMIUM' AND remaining > 0),
                updated_at = $2
          WHERE user_id = $1
-        RETURNING free_balance, premium_balance
-      )
-      SELECT free_balance, premium_balance
-        FROM updated`,
-    [userId, now]
-  );
+        RETURNING free_balance, premium_balance`,
+      params: [userId, now]
+    }
+  ]);
+  return results[1].rows[0] ?? null;
 };
 
 export var applyCoinDelta = async (props) => {

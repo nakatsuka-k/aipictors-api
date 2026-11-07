@@ -18,7 +18,7 @@ export var listAmazonExchangeRequestsByUser = async (props) => {
     [props.userId]
   );
   const pendingCountRow = await props.db.queryOne(
-    `SELECT COUNT(*)::INTEGER AS count
+    `SELECT COUNT(*) AS count
        FROM amazon_exchange_requests
       WHERE user_id = $1
         AND status = 'PENDING'`,
@@ -36,15 +36,15 @@ export var createAmazonExchangeRequest = async (props) => {
   const requestId = crypto.randomUUID();
   const result = await props.db.queryOne(
     `WITH pending_count AS (
-        SELECT COUNT(*)::INTEGER AS pending_count
+        SELECT COUNT(*) AS pending_count
           FROM amazon_exchange_requests
          WHERE user_id = $1
            AND status = 'PENDING'
       ),
       candidate_lots AS (
         SELECT id,
-               GREATEST(remaining - locked_amount, 0) AS available,
-               SUM(GREATEST(remaining - locked_amount, 0)) OVER (
+               max(remaining - locked_amount, 0) AS available,
+               SUM(max(remaining - locked_amount, 0)) OVER (
                  ORDER BY expires_at ASC NULLS LAST, id ASC
                ) AS cumulative
           FROM coin_lots
@@ -55,12 +55,12 @@ export var createAmazonExchangeRequest = async (props) => {
       ),
       allocations AS (
         SELECT id,
-               LEAST(available, GREATEST($2 - (cumulative - available), 0))::INTEGER AS amount
+               min(available, max($2 - (cumulative - available), 0)) AS amount
           FROM candidate_lots
-         WHERE GREATEST($2 - (cumulative - available), 0) > 0
+         WHERE max($2 - (cumulative - available), 0) > 0
       ),
       allocation_sum AS (
-        SELECT COALESCE(SUM(amount), 0)::INTEGER AS locked_amount
+        SELECT COALESCE(SUM(amount), 0) AS locked_amount
           FROM allocations
       ),
       eligible AS (
@@ -100,7 +100,7 @@ export var createAmazonExchangeRequest = async (props) => {
                'PENDING',
                NULL,
                COALESCE(
-                 (SELECT jsonb_agg(jsonb_build_object('lotId', id, 'amount', amount))::text FROM allocations),
+                 (SELECT jsonb_agg(jsonb_build_object('lotId', id, 'amount', amount)) FROM allocations),
                  '[]'
                ),
                $5,
@@ -164,7 +164,7 @@ export var listAmazonExchangeRequestsForAdmin = async (props) => {
     [status, limit, offset]
   );
   const totalCountRow = await props.db.queryOne(
-    `SELECT COUNT(*)::INTEGER AS count
+    `SELECT COUNT(*) AS count
        FROM amazon_exchange_requests
       WHERE status = $1`,
     [status]
@@ -186,18 +186,18 @@ export var approveAmazonExchangeRequest = async (props) => {
            AND status = 'PENDING'
       ),
       allocations AS (
-        SELECT (entry->>'lotId')::BIGINT AS lot_id,
-               (entry->>'amount')::INTEGER AS amount
+        SELECT (entry->>'lotId') AS lot_id,
+               (entry->>'amount') AS amount
           FROM request_row,
                jsonb_array_elements(locked_lot_allocations_json::jsonb) AS entry
       ),
       allocation_totals AS (
-        SELECT COUNT(*)::INTEGER AS allocation_count,
-               COALESCE(SUM(amount), 0)::INTEGER AS coin_amount
+        SELECT COUNT(*) AS allocation_count,
+               COALESCE(SUM(amount), 0) AS coin_amount
           FROM allocations
       ),
       lot_check AS (
-        SELECT COUNT(*)::INTEGER AS matched_count,
+        SELECT COUNT(*) AS matched_count,
                COALESCE(BOOL_AND(coin_lots.locked_amount >= allocations.amount AND coin_lots.remaining >= allocations.amount), FALSE) AS valid
           FROM allocations
           JOIN coin_lots ON coin_lots.id = allocations.lot_id
@@ -225,7 +225,7 @@ export var approveAmazonExchangeRequest = async (props) => {
       ),
       updated_balance AS (
         UPDATE coin_balances
-           SET premium_balance = GREATEST(
+           SET premium_balance = max(
                  coin_balances.premium_balance - (SELECT coin_amount FROM allocation_totals),
                  0
                ),
