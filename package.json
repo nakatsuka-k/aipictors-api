@@ -20,6 +20,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
     "embedded-postgres": "^18.4.0-beta.17",
+    "miniflare": "^4.20260730.0",
     "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
