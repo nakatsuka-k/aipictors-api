@@ -586,6 +586,10 @@ export var publicCoinsRoutes = new Hono2();
 // 順位の集計は 1 回で今週の全件（数万行）を読むので、同じ条件は少しの間データセンターの中で使い回す
 var RANKING_CACHE_SECONDS = 900;
 var withRankingCache = async (c, build) => {
+  // 特定の人を推した一覧（プロフィールの累計）は件数が少なく、推した直後に反映されないと困るので使い回さない
+  if (c.req.query("recipientUserId")?.trim()) {
+    return json(await build());
+  }
   const cache = typeof caches === "undefined" ? null : caches.default;
   const key = new Request(`https://cache.internal/support-ranking${new URL(c.req.url).pathname}?${new URL(c.req.url).searchParams.toString()}`);
   const hit = await cache?.match(key).catch(() => void 0);
