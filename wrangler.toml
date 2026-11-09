@@ -39,6 +39,11 @@ BILLING_PORTAL_CONFIGURATION_ID = "bpc_1UWay5GjkGNUZhU2HQNasKRy"
 # ADMIN_API_TOKEN
 
 # ユーザーがアップロードしたモデル（LoRA / チェックポイント）。非公開バケット、Worker 経由でのみ読み書きする
+# 生成画像（保存期間を過ぎたものを消す: src/lib/generation-retention.ts）
+[[r2_buckets]]
+binding = "GENERATIVE_FILES"
+bucket_name = "generative-files"
+
 [[r2_buckets]]
 binding = "USER_MODELS"
 bucket_name = "aipictors-user-models"

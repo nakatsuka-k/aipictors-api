@@ -1,3 +1,4 @@
+import { runGenerationRetention } from "./lib/generation-retention"
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { app } from "./app"
 import { fillRecommendedSettings } from "./lib/user-model-recommendations";
@@ -14,6 +15,13 @@ const scheduled = async (controller, env, ctx) => {
       const db = await getDb(env);
       // 5 分ごと: おすすめ設定のないチェックポイントに自動で入れる
       if (controller?.cron === "*/5 * * * *") {
+        const retention = await runGenerationRetention(env).catch((error) => {
+          console.log(JSON.stringify({ event: "generation.retention.failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (retention && retention.expired > 0) {
+          console.log(JSON.stringify({ event: "generation.retention.done", ...retention }));
+        }
         // Discord 連携の反映（準備が済むまでは何もしない）
         if (env.DISCORD_BOT_TOKEN) {
           const discordResult = await runDiscordSyncBatch(env, db, 25).catch((error) => {
