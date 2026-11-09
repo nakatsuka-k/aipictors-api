@@ -395,11 +395,31 @@ imageGenerationRoutes.post("/results/query/list", async (c) => {
   });
   return json({ error: null, data });
 });
+// 生成枚数の多い人の件数は 1 回で数万行読むので、少しの間だけ使い回す（少ない人は毎回数える）
+var LARGE_RESULT_COUNT = 5e3;
+var LARGE_RESULT_COUNT_TTL_SECONDS = 30;
+var largeResultCountKey = (input) => new Request(`https://cache.internal/genlog-result-count/${encodeURIComponent(JSON.stringify(input))}`);
+var readLargeResultCount = async (input) => {
+  if (typeof caches === "undefined") return null;
+  const response = await caches.default.match(largeResultCountKey(input)).catch(() => void 0);
+  if (!response) return null;
+  const count = Number(await response.text());
+  return Number.isFinite(count) ? count : null;
+};
+var writeLargeResultCount = async (c, input, count) => {
+  if (typeof caches === "undefined" || count < LARGE_RESULT_COUNT) return;
+  const response = new Response(String(count), { headers: { "Cache-Control": `public, max-age=${LARGE_RESULT_COUNT_TTL_SECONDS}` } });
+  c.executionCtx.waitUntil(caches.default.put(largeResultCountKey(input), response).catch(() => void 0));
+};
 imageGenerationRoutes.post("/results/query/count", async (c) => {
   const body = await c.req.json();
   const parsed = safeParse(resultQuerySchema, body);
   if (!parsed.success) {
     return json({ error: "Invalid request body" }, 400);
+  }
+  const cached = await readLargeResultCount(parsed.output);
+  if (cached !== null) {
+    return json({ error: null, data: { count: cached } });
   }
   const db = await getDb(c.env);
   const count = await countImageGenerationResults(db, {
@@ -410,6 +430,7 @@ imageGenerationRoutes.post("/results/query/count", async (c) => {
     imageUrlPresent: parsed.output.imageUrlPresent ?? null,
     fromDate: parsed.output.fromDate ? new Date(parsed.output.fromDate) : null
   });
+  await writeLargeResultCount(c, parsed.output, count);
   return json({ error: null, data: { count } });
 });
 imageGenerationRoutes.post("/results/query/cost", async (c) => {

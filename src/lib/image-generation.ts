@@ -73,6 +73,11 @@ export var reservedImageGenerationTaskColumns = `
   nanoid,
   cost
 `;
+// SQLite は ORDER BY に合う (user_id, request_time) を選んで、その人の履歴を全部読むので索引を指定する（生成中の件数は少ない）
+var USER_STATUS_INDEXED_QUEUES = "generated_queues INDEXED BY idx_generated_queues_deleted_user_id_status_id";
+var ACTIVE_TASK_STATUSES = new Set(["wait", "generating"]);
+// 生成時刻は依頼時刻の少し後なので、依頼時刻の索引で範囲を絞る
+var REQUEST_TIME_MARGIN_MS = 2 * 24 * 60 * 60 * 1e3;
 export var getImageGenerationTaskByNanoid = async (db, nanoid) => {
   return db.queryOne(
     `SELECT ${generatedQueueColumns}
@@ -87,7 +92,7 @@ export var getImageGenerationTaskByNanoidForUser = async (db, nanoid, userId) =>
   return db.queryOne(
     `SELECT ${generatedQueueColumns}
        FROM generated_queues
-      WHERE nanoid = $1 AND is_deleted = FALSE AND user_id = $2
+      WHERE nanoid = $1 AND is_deleted = FALSE AND +user_id = $2
       ORDER BY id DESC
       LIMIT 1`,
     [nanoid, userId]
@@ -97,7 +102,7 @@ export var getImageGenerationResultByNanoidForUser = async (db, nanoid, userId) 
   return db.queryOne(
     `SELECT ${imageGenerationResultColumns}
        FROM image_generation_results
-      WHERE nanoid = $1 AND is_deleted = FALSE AND user_id = $2
+      WHERE nanoid = $1 AND is_deleted = FALSE AND +user_id = $2
       ORDER BY id DESC
       LIMIT 1`,
     [nanoid, userId]
@@ -250,7 +255,7 @@ export var listImageGenerationTasksForUser = async (db, args) => {
   params.push(args.skip);
   return db.query(
     `SELECT ${generatedQueueColumns}
-       FROM generated_queues
+       FROM ${USER_STATUS_INDEXED_QUEUES}
       WHERE ${conditions.join(" AND ")}
       ORDER BY request_time DESC, id DESC
       LIMIT $${params.length - 1}
@@ -382,7 +387,7 @@ export var softDeleteImageGenerationResult = async (db, nanoid, userId) => {
     `UPDATE image_generation_results
         SET is_deleted = TRUE,
             updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
-      WHERE nanoid = $1 AND user_id = $2
+      WHERE nanoid = $1 AND +user_id = $2
     RETURNING ${imageGenerationResultColumns}`,
     [nanoid, userId]
   );
@@ -392,7 +397,7 @@ export var updateImageGenerationResultRating = async (db, nanoid, userId, rating
     `UPDATE image_generation_results
         SET rating = $3,
             updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
-      WHERE nanoid = $1 AND user_id = $2 AND is_deleted = FALSE
+      WHERE nanoid = $1 AND +user_id = $2 AND is_deleted = FALSE
     RETURNING ${imageGenerationResultColumns}`,
     [nanoid, userId, rating]
   );
@@ -411,7 +416,7 @@ export var updateImageGenerationResultProtected = async (db, nanoid, userId, isP
     `UPDATE image_generation_results
         SET is_protected = $3,
             updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
-      WHERE nanoid = $1 AND user_id = $2 AND is_deleted = FALSE
+      WHERE nanoid = $1 AND +user_id = $2 AND is_deleted = FALSE
     RETURNING ${imageGenerationResultColumns}`,
     [nanoid, userId, isProtected]
   );
@@ -422,7 +427,7 @@ export var findCancelableImageGenerationTask = async (db, userId, nanoid) => {
        FROM generated_queues
       WHERE status IN ('wait', 'generating')
         AND is_deleted = FALSE
-        AND user_id = $1
+        AND +user_id = $1
         AND nanoid = $2
       ORDER BY id DESC
       LIMIT 1`,
@@ -498,18 +503,20 @@ export var countImageGenerationResultsForUserSince = async (db, userId, since, o
     `SELECT COUNT(*) AS count
        FROM image_generation_results
       WHERE user_id = $1
+        AND request_time >= $3
         AND generation_time >= $2
         AND status <> 'error'
         ${options.includeDeleted ? "" : "AND is_deleted = FALSE"}`,
-    [userId, since]
+    [userId, since, new Date(since.getTime() - REQUEST_TIME_MARGIN_MS)]
   );
   return Number(result?.count ?? 0);
 };
 export var countImageGenerationTasksForUserByStatuses = async (db, userId, statuses) => {
   const result = await db.queryOne(
     `SELECT COUNT(*) AS count
-       FROM generated_queues
+       FROM ${USER_STATUS_INDEXED_QUEUES}
       WHERE user_id = $1
+        AND is_deleted IN (0, 1)
         AND status IN (SELECT value FROM json_each($2))`,
     [userId, statuses]
   );
@@ -546,7 +553,19 @@ export var buildTaskQuery = (input) => {
     params.push(input.types);
     conditions.push(`type IN (SELECT value FROM json_each($${params.length}))`);
   }
-  return { params, whereSql: conditions.join(" AND ") };
+  const hasDateRange = Boolean(input.fromDate || input.requestTimeLte);
+  const canUseStatusIndex = input.userId !== null && input.userId !== void 0 && Boolean(input.statuses?.length) && !hasDateRange;
+  if (canUseStatusIndex && (input.isDeleted === null || input.isDeleted === void 0)) {
+    conditions.push(`is_deleted IN (0, 1)`);
+  }
+  const isActiveOnly = Boolean(input.statuses?.every((status) => ACTIVE_TASK_STATUSES.has(status)));
+  return {
+    params,
+    whereSql: conditions.join(" AND "),
+    // 集計は索引の絞り込みだけで済む。並べ替えのある取得は件数の少ない状態のときだけ
+    aggregateTable: canUseStatusIndex ? USER_STATUS_INDEXED_QUEUES : "generated_queues",
+    orderedTable: canUseStatusIndex && isActiveOnly ? USER_STATUS_INDEXED_QUEUES : "generated_queues"
+  };
 };
 export var buildResultQuery = (input) => {
   const params = [input.userId];
@@ -574,20 +593,20 @@ export var buildResultQuery = (input) => {
   return { params, whereSql: conditions.join(" AND ") };
 };
 export var countImageGenerationTasks = async (db, input) => {
-  const { params, whereSql } = buildTaskQuery(input);
+  const { params, whereSql, aggregateTable } = buildTaskQuery(input);
   const result = await db.queryOne(
     `SELECT COUNT(*) AS count
-       FROM generated_queues
+       FROM ${aggregateTable}
       WHERE ${whereSql}`,
     params
   );
   return Number(result?.count ?? 0);
 };
 export var getFirstImageGenerationTask = async (db, input) => {
-  const { params, whereSql } = buildTaskQuery(input);
+  const { params, whereSql, orderedTable } = buildTaskQuery(input);
   return db.queryOne(
     `SELECT ${generatedQueueColumns}
-       FROM generated_queues
+       FROM ${orderedTable}
       WHERE ${whereSql}
       ORDER BY request_time ASC, id ASC
       LIMIT 1`,
@@ -595,10 +614,10 @@ export var getFirstImageGenerationTask = async (db, input) => {
   );
 };
 export var sumImageGenerationTaskCosts = async (db, input) => {
-  const { params, whereSql } = buildTaskQuery(input);
+  const { params, whereSql, aggregateTable } = buildTaskQuery(input);
   const result = await db.queryOne(
     `SELECT COALESCE(SUM(cost), 0) AS total_cost
-       FROM generated_queues
+       FROM ${aggregateTable}
       WHERE ${whereSql}`,
     params
   );
