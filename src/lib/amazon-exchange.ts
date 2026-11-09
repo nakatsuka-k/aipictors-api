@@ -2,7 +2,8 @@
 import { getNow } from "./db"
 export var AMAZON_EXCHANGE_MAX_PENDING = 3;
 export var listAmazonExchangeRequestsByUser = async (props) => {
-  const requests = await props.db.query(
+  const [requests, pendingCountRow] = await Promise.all([
+    props.db.query(
     `SELECT id,
             user_id AS "userId",
             package_id AS "packageId",
@@ -16,14 +17,15 @@ export var listAmazonExchangeRequestsByUser = async (props) => {
       WHERE user_id = $1
       ORDER BY applied_at DESC, id DESC`,
     [props.userId]
-  );
-  const pendingCountRow = await props.db.queryOne(
+    ),
+    props.db.queryOne(
     `SELECT COUNT(*) AS count
        FROM amazon_exchange_requests
       WHERE user_id = $1
         AND status = 'PENDING'`,
     [props.userId]
-  );
+  ),
+  ]);
   const pendingCount = pendingCountRow?.count ?? 0;
   return {
     requests,
