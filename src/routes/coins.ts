@@ -330,18 +330,17 @@ coinsRoutes.get("/support/rankings", async (c) => {
   if (!Number.isFinite(offset) || offset < 0 || !Number.isFinite(limit) || limit <= 0) {
     return json({ error: "Invalid paging" }, 400);
   }
-  const ranking = await getSupportWeeklyRanking({
-    db,
-    kind,
-    weekStartDate,
-    offset,
-    limit,
-    recipientUserId
-  });
-  return json({
+  return withRankingCache(c, async () => ({
     error: null,
-    data: ranking
-  });
+    data: await getSupportWeeklyRanking({
+      db,
+      kind,
+      weekStartDate,
+      offset,
+      limit,
+      recipientUserId
+    })
+  }));
 });
 coinsRoutes.get("/support/rankings-period", async (c) => {
   const db = await getDb(c.env);
@@ -584,6 +583,21 @@ coinsRoutes.post("/grant-support", async (c) => {
   return json({ error: null, data: result });
 });
 export var publicCoinsRoutes = new Hono2();
+// 順位の集計は 1 回で今週の全件（数万行）を読むので、同じ条件は少しの間データセンターの中で使い回す
+var RANKING_CACHE_SECONDS = 180;
+var withRankingCache = async (c, build) => {
+  const cache = typeof caches === "undefined" ? null : caches.default;
+  const key = new Request(`https://cache.internal/support-ranking${new URL(c.req.url).pathname}?${new URL(c.req.url).searchParams.toString()}`);
+  const hit = await cache?.match(key).catch(() => void 0);
+  if (hit) {
+    return json(await hit.json());
+  }
+  const body = await build();
+  c.executionCtx.waitUntil(
+    cache?.put(key, new Response(JSON.stringify(body), { headers: { "Cache-Control": `public, max-age=${RANKING_CACHE_SECONDS}`, "Content-Type": "application/json" } })).catch(() => void 0) ?? Promise.resolve()
+  );
+  return json(body);
+};
 publicCoinsRoutes.get("/support/rankings/public", async (c) => {
   const db = await getDb(c.env);
   const kindRaw = c.req.query("kind")?.trim() ?? "received";
@@ -595,16 +609,15 @@ publicCoinsRoutes.get("/support/rankings/public", async (c) => {
   if (!Number.isFinite(limit) || limit <= 0) {
     return json({ error: "Invalid limit" }, 400);
   }
-  const ranking = await getSupportWeeklyRanking({
-    db,
-    kind,
-    weekStartDate,
-    offset: 0,
-    limit: Math.min(limit, 100),
-    recipientUserId
-  });
-  return json({
+  return withRankingCache(c, async () => ({
     error: null,
-    data: ranking
-  });
+    data: await getSupportWeeklyRanking({
+      db,
+      kind,
+      weekStartDate,
+      offset: 0,
+      limit: Math.min(limit, 100),
+      recipientUserId
+    })
+  }));
 });

@@ -63,7 +63,7 @@ export const jstEndOfDay = (unixSeconds: number) => {
 export const dailyGrantKeyPrefix = (unixSeconds: number) => `daily_generation_access:${jstDateKey(unixSeconds)}`
 export const dailyGrantKey = (unixSeconds: number) => `${dailyGrantKeyPrefix(unixSeconds)}:DAILY`
 
-const SUBSCRIPTION_PLAN_SQL = `
+const subscriptionPlanSql = (scoped: boolean) => `
   SELECT user_id, type FROM (
   SELECT user_id, type,
          ROW_NUMBER() OVER (
@@ -79,14 +79,14 @@ const SUBSCRIPTION_PLAN_SQL = `
        current_period_end > $2
        OR (status <> 'cancellation_requested' AND current_period_end + $3 > $2)
      )
-     AND ($1 IS NULL OR user_id IN (SELECT value FROM json_each($1)))
+     ${scoped ? 'AND user_id IN (SELECT value FROM json_each($1))' : ''}
   ) WHERE rn = 1
    ORDER BY user_id`
 
 // サーバ側の契約情報からプランを決める。呼び出し元が渡したプランとの高い方を使う
 // （呼び出し元の一時的な取得失敗で FREE 扱いになり、プラン分とは別に無料分が付く問題を防ぐ）
 export const resolveCoinPlanType = async (db: Db, userId: string, callerPlan: unknown, now: number) => {
-  const row = await db.queryOne<{ type: string }>(SUBSCRIPTION_PLAN_SQL, [[userId], now, RENEWAL_GRACE_SECONDS])
+  const row = await db.queryOne<{ type: string }>(subscriptionPlanSql(true), [[userId], now, RENEWAL_GRACE_SECONDS])
   return higherPlan(toPlanType(callerPlan), toPlanType(row?.type))
 }
 
@@ -293,7 +293,7 @@ export const runDailyCoinJob = async (db: Db, now: number) => {
     }
   }
 
-  const subscribers = await db.query<{ user_id: string; type: string }>(SUBSCRIPTION_PLAN_SQL, [
+  const subscribers = await db.query<{ user_id: string; type: string }>(subscriptionPlanSql(false), [
     null,
     now,
     RENEWAL_GRACE_SECONDS,
