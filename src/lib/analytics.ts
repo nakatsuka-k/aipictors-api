@@ -173,7 +173,7 @@ var collectCloudflare = async (token, day, range) => {
         countries: httpRequestsAdaptiveGroups(limit: 15, filter: { datetime_geq: $s, datetime_lt: $e, requestSource: "eyeball", edgeResponseContentTypeName: "html", edgeResponseStatus: 200 }, orderBy: [count_DESC]) {
           count dimensions { clientCountryName }
         }
-        pv: httpRequestsAdaptiveGroups(limit: 200, filter: { datetime_geq: $s, datetime_lt: $e, clientRequestPath: "/api/pv", edgeResponseStatus: 204 }, orderBy: [count_DESC]) {
+        pv: httpRequestsAdaptiveGroups(limit: 200, filter: { datetime_geq: $s, datetime_lt: $e, clientRequestPath: "/api/pv", edgeResponseStatus_in: [200, 204] }, orderBy: [count_DESC]) {
           count dimensions { clientRequestQuery }
         }
       } }
