@@ -182,6 +182,10 @@ export const loadAchievementState = async (env, userId) => {
     throw new Error(`achievement query failed: ${response.status}`)
   }
   const summary = json.data.achievementSummary
+  // API の一時的な失敗で null になったのを「非公開」と扱うと、持っているロールを外してしまう
+  if (json.errors?.length && !summary) {
+    throw new Error(`achievement query failed: ${json.errors[0]?.message ?? "unknown"}`)
+  }
   return {
     login: json.data.user?.login ?? null,
     name: json.data.user?.name ?? null,
