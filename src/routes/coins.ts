@@ -584,7 +584,7 @@ coinsRoutes.post("/grant-support", async (c) => {
 });
 export var publicCoinsRoutes = new Hono2();
 // 順位の集計は 1 回で今週の全件（数万行）を読むので、同じ条件は少しの間データセンターの中で使い回す
-var RANKING_CACHE_SECONDS = 180;
+var RANKING_CACHE_SECONDS = 300;
 var withRankingCache = async (c, build) => {
   const cache = typeof caches === "undefined" ? null : caches.default;
   const key = new Request(`https://cache.internal/support-ranking${new URL(c.req.url).pathname}?${new URL(c.req.url).searchParams.toString()}`);
