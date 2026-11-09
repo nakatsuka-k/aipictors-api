@@ -1,6 +1,12 @@
 // @ts-nocheck
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { isExpired, RETENTION_ENFORCE_FROM, toGenerativeFileKey } from "./generation-retention";
+
+const expect = (value) => ({
+  toBe: (expected) => assert.strictEqual(value, expected),
+  toBeNull: () => assert.strictEqual(value, null),
+});
 
 const uuid = "300001c9-1635-2967-4f9f-9a87089bb81a";
 const now = Date.parse("2027-06-01T00:00:00Z");
