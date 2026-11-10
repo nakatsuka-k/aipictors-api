@@ -146,6 +146,11 @@ export var expireAvailableCoins = async (db, userId, now) => {
                COALESCE(SUM(CASE WHEN coin_type = 'PREMIUM' THEN remaining ELSE 0 END), 0) AS expired_premium
           FROM (${expiredSql})`;
   const params = [userId, now];
+  // ほとんどの呼び出しは失効するロットがないので、書き込みの 4 文を投げない
+  const hasExpired = await db.queryOne(`${expiredSql} LIMIT 1`, params);
+  if (!hasExpired) {
+    return { expiredFreeCoins: 0, expiredPremiumCoins: 0, events: [] };
+  }
   // 台帳・残高は失効前のロットから計算し、ロットの更新を最後にする（同じトランザクション内）
   const results = await db.batch([
     { text: sumsSql, params },

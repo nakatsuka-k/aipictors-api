@@ -397,7 +397,7 @@ imageGenerationRoutes.post("/results/query/list", async (c) => {
 });
 // 生成枚数の多い人の件数は 1 回で数万行読むので、少しの間だけ使い回す（少ない人は毎回数える）
 var LARGE_RESULT_COUNT = 1e3;
-var LARGE_RESULT_COUNT_TTL_SECONDS = 1800;
+var LARGE_RESULT_COUNT_TTL_SECONDS = 10800;
 var largeResultCountKey = (input) => new Request(`https://cache.internal/genlog-result-count/${encodeURIComponent(JSON.stringify(input))}`);
 var readLargeResultCount = async (input) => {
   if (typeof caches === "undefined") return null;
