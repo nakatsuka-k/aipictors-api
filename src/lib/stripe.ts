@@ -1,5 +1,5 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
-import { getPricingSettings } from "./pricing"
+import { getPlanAmount, getPricingSettings } from "./pricing"
 export var encoder = new TextEncoder();
 export var toHex2 = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 export var signPayload = async (secret, payload) => {
@@ -101,7 +101,8 @@ export var createPointCheckout = async (props) => {
 };
 export var createSubscriptionCheckout = async (props) => {
   const pricing = await getPricingSettings(props.db);
-  const amount = pricing.subscriptionPlans[props.passType];
+  const interval = props.interval === "year" ? "year" : "month";
+  const amount = getPlanAmount(pricing, props.passType, interval);
   const nanoid = crypto.randomUUID();
   const params = new URLSearchParams();
   params.set("mode", "subscription");
@@ -111,8 +112,11 @@ export var createSubscriptionCheckout = async (props) => {
   params.set("line_items[0][quantity]", "1");
   params.set("line_items[0][price_data][currency]", "jpy");
   params.set("line_items[0][price_data][unit_amount]", String(amount));
-  params.set("line_items[0][price_data][recurring][interval]", "month");
-  params.set("line_items[0][price_data][product_data][name]", `Aipictors ${props.passType}`);
+  params.set("line_items[0][price_data][recurring][interval]", interval);
+  params.set(
+    "line_items[0][price_data][product_data][name]",
+    interval === "year" ? `Aipictors ${props.passType} (年払い)` : `Aipictors ${props.passType}`
+  );
   params.set("metadata[kind]", "subscription");
   params.set("metadata[user_id]", props.userId);
   params.set("metadata[pass_type]", props.passType);
@@ -121,6 +125,8 @@ export var createSubscriptionCheckout = async (props) => {
   params.set("subscription_data[metadata][user_id]", props.userId);
   params.set("subscription_data[metadata][pass_type]", props.passType);
   params.set("subscription_data[metadata][subscription_nanoid]", nanoid);
+  params.set("metadata[interval]", interval);
+  params.set("subscription_data[metadata][interval]", interval);
   // はじめてプランに入る人は初月半額（Stripe のクーポン）。クーポンが使えないときは通常の決済にする
   if (props.couponId) {
     const withCoupon = new URLSearchParams(params);

@@ -1045,6 +1045,11 @@
           "LITE": 480,
           "STANDARD": 1980,
           "PREMIUM": 3980
+        },
+        "yearlySubscriptionPlans": {
+          "LITE": 4800,
+          "STANDARD": 19800,
+          "PREMIUM": 39800
         }
       }
     }

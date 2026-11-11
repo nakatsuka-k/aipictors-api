@@ -5,8 +5,9 @@ import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
 import { getArray, getNumber, getRecord, getString } from "../lib/record-fields"
-import { getPricingSettings } from "../lib/pricing"
+import { getPlanAmount, getPricingSettings } from "../lib/pricing"
 import { saveCancelReason } from "../lib/retention"
+import { getActivePause, pauseSubscription, toPauseResponse, unpauseSubscription } from "../lib/subscription-pause"
 import { sendSubscriptionCancellationEmail } from "../lib/subscription-cancellation-email"
 import {
   disableSubscriptionByStripeId,
@@ -22,6 +23,7 @@ import {
   getPreviewProrationAmount,
   getStripe,
   getStripeCustomerEmail,
+  getSubscriptionInterval,
   getSubscriptionItemId,
   isInvoicePaid,
   postStripeForm2,
@@ -64,8 +66,63 @@ export var changePlanSchema = object({
   passType: union([literal("LITE"), literal("STANDARD"), literal("PREMIUM")]),
   prorationDate: optional(number())
 });
+export var pauseSchema = object({
+  userId: string(),
+  reason: optional(nullable(string()))
+});
 export var subscriptionRoutes = new Hono2();
 subscriptionRoutes.use("*", requireInternalAuth);
+// 1 か月休止（lib/subscription-pause.ts）
+subscriptionRoutes.get("/pause/:userId", async (c) => {
+  const db = await getDb(c.env);
+  return json({ error: null, data: toPauseResponse(await getActivePause(db, c.req.param("userId"))) });
+});
+subscriptionRoutes.post("/pause-current", async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: "STRIPE_SECRET_KEY is not configured" }, 500);
+  }
+  const parsed = safeParse(pauseSchema, await c.req.json());
+  if (!parsed.success) {
+    return json({ error: "Invalid body" }, 400);
+  }
+  const db = await getDb(c.env);
+  const current = await getCurrentSubscription(db, parsed.output.userId);
+  if (!current) {
+    return json({ error: "No active subscription found" }, 404);
+  }
+  if (parsed.output.reason) {
+    await saveCancelReason(db, {
+      userId: parsed.output.userId,
+      current,
+      reason: parsed.output.reason,
+      note: "pause"
+    }).catch((error) => console.error("[subscriptions.pause-current] failed to save reason", error));
+  }
+  const result = await pauseSubscription(c.env.STRIPE_SECRET_KEY, db, {
+    userId: parsed.output.userId,
+    current,
+    reason: parsed.output.reason ?? null
+  });
+  if (result.error) {
+    return json({ error: result.error }, result.status ?? 500);
+  }
+  return json({ error: null, data: toPauseResponse(result.data) });
+});
+subscriptionRoutes.post("/unpause-current", async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: "STRIPE_SECRET_KEY is not configured" }, 500);
+  }
+  const parsed = safeParse(pauseSchema, await c.req.json());
+  if (!parsed.success) {
+    return json({ error: "Invalid body" }, 400);
+  }
+  const db = await getDb(c.env);
+  const result = await unpauseSubscription(c.env.STRIPE_SECRET_KEY, db, parsed.output.userId);
+  if (result.error) {
+    return json({ error: result.error }, result.status ?? 500);
+  }
+  return json({ error: null, data: null });
+});
 subscriptionRoutes.get("/current/:userId", async (c) => {
   const db = await getDb(c.env);
   const current = await getCurrentSubscription(db, c.req.param("userId"));
@@ -380,9 +437,9 @@ subscriptionRoutes.post("/change-plan", async (c) => {
     return json({ error: "Stripe subscription id is missing" }, 409);
   }
   const pricing = await getPricingSettings(db);
-  const nextAmount = pricing.subscriptionPlans[parsed.output.passType];
   const currentType = getString(current, "type");
   if (currentType === parsed.output.passType) {
+    const nextAmount = pricing.subscriptionPlans[parsed.output.passType];
     return json({
       error: null,
       data: {
@@ -405,6 +462,9 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   if (!stripeSubscriptionItemId) {
     return json({ error: "Stripe subscription item is missing" }, 409);
   }
+  // 年払いの人は年払いのまま変える
+  const interval = getSubscriptionInterval(stripeSubscription);
+  const nextAmount = getPlanAmount(pricing, parsed.output.passType, interval);
   const subscriptionNanoid = getString(current, "nanoid");
   const prorationDate = typeof parsed.output.prorationDate === "number" && Number.isFinite(parsed.output.prorationDate) ? parsed.output.prorationDate : void 0;
   const form = new URLSearchParams();
@@ -414,7 +474,7 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   form.set("expand[]", "latest_invoice");
   form.set("expand[]", "latest_invoice.payment_intent");
   form.set("items[0][id]", stripeSubscriptionItemId);
-  setPlanPriceData(form, parsed.output.passType, nextAmount);
+  setPlanPriceData(form, parsed.output.passType, nextAmount, interval);
   form.set("metadata[pass_type]", parsed.output.passType);
   form.set("metadata[user_id]", parsed.output.userId);
   if (subscriptionNanoid) {
@@ -450,6 +510,7 @@ subscriptionRoutes.post("/change-plan", async (c) => {
       data: {
         passType: parsed.output.passType,
         renewalAmountJpy: nextAmount,
+        interval,
         chargedNowAmountJpy,
         status: updatedStatus,
         requiresAction: true,
@@ -485,6 +546,7 @@ subscriptionRoutes.post("/change-plan", async (c) => {
     data: {
       passType: parsed.output.passType,
       renewalAmountJpy: nextAmount,
+      interval,
       chargedNowAmountJpy,
       status: updatedStatus,
       requiresAction: false,
@@ -511,9 +573,9 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
     return json({ error: "Stripe subscription id is missing" }, 409);
   }
   const pricing = await getPricingSettings(db);
-  const nextAmount = pricing.subscriptionPlans[parsed.output.passType];
   const currentType = getString(current, "type");
   if (currentType === parsed.output.passType) {
+    const nextAmount = pricing.subscriptionPlans[parsed.output.passType];
     return json({
       error: null,
       data: {
@@ -536,13 +598,15 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
   if (!stripeSubscriptionItemId) {
     return json({ error: "Stripe subscription item is missing" }, 409);
   }
+  const interval = getSubscriptionInterval(stripeSubscription);
+  const nextAmount = getPlanAmount(pricing, parsed.output.passType, interval);
   const prorationDate = Math.floor(Date.now() / 1e3);
   const form = new URLSearchParams();
   form.set("subscription", stripeSubscriptionId);
   form.set("subscription_details[proration_behavior]", "always_invoice");
   form.set("subscription_details[proration_date]", String(prorationDate));
   form.set("subscription_details[items][0][id]", stripeSubscriptionItemId);
-  setPreviewPlanPriceData(form, parsed.output.passType, nextAmount);
+  setPreviewPlanPriceData(form, parsed.output.passType, nextAmount, interval);
   const previewInvoice = await postStripeForm2(
     c.env.STRIPE_SECRET_KEY,
     "/invoices/create_preview",
@@ -557,6 +621,7 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
     data: {
       passType: parsed.output.passType,
       renewalAmountJpy: nextAmount,
+      interval,
       chargedNowAmountJpy: getPreviewProrationAmount(previewInvoice),
       prorationDate
     }

@@ -17,9 +17,18 @@ export var getPricingSettings = async (db) => {
       LITE: parseNumber(map.get("subscription.plan.LITE.amount_jpy"), 480),
       STANDARD: parseNumber(map.get("subscription.plan.STANDARD.amount_jpy"), 1980),
       PREMIUM: parseNumber(map.get("subscription.plan.PREMIUM.amount_jpy"), 3980)
+    },
+    // 年払い（月額の 10 か月分 = 2 か月分お得）
+    yearlySubscriptionPlans: {
+      LITE: parseNumber(map.get("subscription.plan.LITE.yearly_amount_jpy"), 4800),
+      STANDARD: parseNumber(map.get("subscription.plan.STANDARD.yearly_amount_jpy"), 19800),
+      PREMIUM: parseNumber(map.get("subscription.plan.PREMIUM.yearly_amount_jpy"), 39800)
     }
   };
 };
+/** 月払い・年払いに合わせた金額 */
+export var getPlanAmount = (pricing, passType, interval) =>
+  interval === "year" ? pricing.yearlySubscriptionPlans[passType] : pricing.subscriptionPlans[passType];
 export var upsertPricingSettings = async (db, input) => {
   const now = Math.floor(Date.now() / 1e3);
   const entries = [

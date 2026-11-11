@@ -55,17 +55,23 @@ export var isInvoicePaid = (invoice) => {
   return amountDue === 0 || amountRemaining === 0;
 };
 
-export var setPlanPriceData = (form, passType, amountJpy) => {
+/** 契約の支払い間隔（年払いなら "year"）。プラン変更で月払いに戻さないために使う */
+export var getSubscriptionInterval = (stripeSubscription) => {
+  const [firstItem] = stripeSubscription?.items?.data ?? [];
+  return firstItem?.price?.recurring?.interval === "year" ? "year" : "month";
+};
+
+export var setPlanPriceData = (form, passType, amountJpy, interval = "month") => {
   form.set("items[0][price_data][currency]", "jpy");
   form.set("items[0][price_data][unit_amount]", String(amountJpy));
-  form.set("items[0][price_data][recurring][interval]", "month");
+  form.set("items[0][price_data][recurring][interval]", interval);
   form.set("items[0][price_data][product]", stripeProductIdByPassType[passType]);
 };
 
-export var setPreviewPlanPriceData = (form, passType, amountJpy) => {
+export var setPreviewPlanPriceData = (form, passType, amountJpy, interval = "month") => {
   form.set("subscription_details[items][0][price_data][currency]", "jpy");
   form.set("subscription_details[items][0][price_data][unit_amount]", String(amountJpy));
-  form.set("subscription_details[items][0][price_data][recurring][interval]", "month");
+  form.set("subscription_details[items][0][price_data][recurring][interval]", interval);
   form.set(
     "subscription_details[items][0][price_data][product]",
     stripeProductIdByPassType[passType]

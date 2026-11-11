@@ -16,7 +16,9 @@ export var pointCheckoutSchema = object({
 export var subscriptionCheckoutSchema = object({
   userId: string(),
   passType: union([literal("LITE"), literal("STANDARD"), literal("PREMIUM")]),
-  origin: string()
+  origin: string(),
+  // 省略時は月払い
+  interval: optional(union([literal("month"), literal("year")]))
 });
 export var premiumCoinCheckoutSchema = object({
   userId: string(),
@@ -65,13 +67,16 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
   }
   try {
     const db = await getDb(c.env);
-    // 今プランに入っていない人（はじめての人・以前入っていた人）は初月半額のクーポンを付ける
-    const isFirstSubscription = c.env.FIRST_MONTH_COUPON_ID ? !await getCurrentSubscription(db, parsed.output.userId) : false;
+    const interval = parsed.output.interval ?? "month";
+    // 今プランに入っていない人（はじめての人・以前入っていた人）は初月半額のクーポンを付ける。
+    // 年払いはもともと 2 か月分安いので付けない（クーポンは 1 回目の請求の半額なので、年額が半分になってしまう）
+    const isFirstSubscription = c.env.FIRST_MONTH_COUPON_ID && interval === "month" ? !await getCurrentSubscription(db, parsed.output.userId) : false;
     const response = await createSubscriptionCheckout({
       secretKey: c.env.STRIPE_SECRET_KEY,
       origin: parsed.output.origin,
       userId: parsed.output.userId,
       passType: parsed.output.passType,
+      interval,
       couponId: isFirstSubscription ? c.env.FIRST_MONTH_COUPON_ID : null,
       db
     });
@@ -94,6 +99,22 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
     console.error("Checkout error:", error);
     return json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
   }
+});
+// コイン購入の上乗せの判定に使う（はじめての購入か、今のプラン）。量の計算はフロント（lib/premium-coins.ts）
+stripeRoutes.get("/checkout/premium-coins/offer/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  const db = await getDb(c.env);
+  const [purchase, current] = await Promise.all([
+    db.queryOne("SELECT id FROM premium_coin_purchases WHERE user_id = $1 LIMIT 1", [userId]),
+    getCurrentSubscription(db, userId)
+  ]);
+  return json({
+    error: null,
+    data: {
+      isFirstPurchase: purchase === null,
+      passType: current ? getString(current, "type") : null
+    }
+  });
 });
 stripeRoutes.post("/checkout/premium-coins", async (c) => {
   if (!c.env.STRIPE_SECRET_KEY) {

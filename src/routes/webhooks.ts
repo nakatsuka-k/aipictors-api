@@ -8,6 +8,7 @@ import { createPremiumCoinPurchase, refundPremiumCoinPurchase } from "../lib/pre
 import { getNumber, getString } from "../lib/record-fields"
 import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
+import { cancelPausedSubscriptionsOnNewSubscription } from "../lib/subscription-pause"
 export var getStringByKeys = (record, keys) => {
   for (const key of keys) {
     const value = getString(record, key);
@@ -286,6 +287,10 @@ webhookRoutes.post("/stripe", async (c) => {
         stripePriceId,
         stripeProductId
       });
+      // 休止中の人が新しく入り直したら、休止中の古い契約を止める（再開時の二重請求を防ぐ）
+      if (getString(object2, "billing_reason") === "subscription_create") {
+        await cancelPausedSubscriptionsOnNewSubscription(c.env.STRIPE_SECRET_KEY, db, userId, subscriptionId);
+      }
       // 更新（2か月目以降）のたびに継続ボーナスのプレミアムコインを付ける
       if (getString(object2, "billing_reason") === "subscription_cycle") {
         try {
