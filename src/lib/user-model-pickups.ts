@@ -228,10 +228,10 @@ export const upsertPickupEvent = async (
   const description = [
     `今週のピックアップは、みんなのモデル「${model.name}」です。${credit ? `（${credit}）` : ""}`,
     "このモデルで生成して、そのまま投稿してみましょう。いいねの数で今週のランキングを決めます。",
-    `モデルのページ: /models/u/${model.id}`,
+    `モデルのページ: ${SITE_URL}/models/u/${model.id}`,
   ].join("\n")
   const guide = [
-    `1. モデルのページの「このモデルで生成」から生成します（/models/u/${model.id}）`,
+    `1. モデルのページの「このモデルで生成」から生成します（${SITE_URL}/models/u/${model.id}）`,
     "2. 生成結果の「投稿」から投稿すると、このお題が自動で選ばれます",
     `3. ほかの方法で投稿するときは、タグ「${tag}」を付けてください`,
     "※ このモデルで作った作品だけ参加できます。全年齢・R15 の作品が対象です",
