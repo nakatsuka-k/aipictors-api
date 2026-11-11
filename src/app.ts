@@ -14,6 +14,7 @@ import { stripeRoutes } from "./routes/stripe"
 import { subscriptionRoutes } from "./routes/subscriptions"
 import { supportRoutes } from "./routes/support"
 import { userModelsRoutes } from "./routes/user-models"
+import { userModelPickupRoutes } from "./routes/user-model-pickups"
 import { webhookRoutes } from "./routes/webhooks"
 export const app = new Hono2();
 app.get("/healthz", (c) => {
@@ -26,6 +27,7 @@ app.route("/internal/d1", d1ProxyRoutes);
 app.route("/internal/points", pointsRoutes);
 app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);
+app.route("/internal/user-model-pickups", userModelPickupRoutes);
 app.route("/admin", adminRoutes);
 app.route("/internal/campaigns", campaignRoutes);
 app.route("/internal/analytics", analyticsRoutes);

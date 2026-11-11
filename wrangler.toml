@@ -16,6 +16,17 @@ database_name = "aipictors-gen"
 database_id = "a6298c09-482c-428c-961b-1bec7980c8ba"
 migrations_dir = "migrations/gen"
 
+# aipictors-system の D1（ピックアップモデルのお題の枠を core に、登録者へのお知らせを activity に書く。週に数行だけ）
+[[d1_databases]]
+binding = "SYSTEM_CORE"
+database_name = "aipictors-core-staging"
+database_id = "4d5b92b8-a19d-44e1-985b-ac95e712b7b5"
+
+[[d1_databases]]
+binding = "SYSTEM_ACTIVITY"
+database_name = "aipictors-activity-staging"
+database_id = "563616b8-984f-43fa-a16e-20e3b8e15cfb"
+
 # 生成の依頼・結果・予約（大きいので別の DB）
 [[d1_databases]]
 binding = "GENLOG"

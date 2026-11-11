@@ -8,6 +8,9 @@ import { getDb, getNow } from "./lib/db"
 import { collectAnalyticsDay, jstDayBefore } from "./lib/analytics"
 import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
 import { getStripeCustomerEmail } from "./routes/subscriptions"
+import { runWeeklyPickup } from "./lib/user-model-pickups"
+import { pickupDepsFromEnv } from "./routes/user-model-pickups"
+import { runUserEventDigest } from "./lib/user-event-digest"
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
 const scheduled = async (controller, env, ctx) => {
   ctx.waitUntil(
@@ -45,6 +48,14 @@ const scheduled = async (controller, env, ctx) => {
       }
       // 10:00 JST: 解約予約中であと 2〜3 日で終わる人へのお知らせ
       if (controller?.cron === "0 1 * * *") {
+        // ユーザー主催のお題の主催者へ前日の参加数（お題ごとに 1 日 1 件）
+        if (env.SYSTEM_CORE && env.SYSTEM_ACTIVITY) {
+          const digest = await runUserEventDigest({ core: env.SYSTEM_CORE, activity: env.SYSTEM_ACTIVITY }, getNow()).catch((error) => {
+            console.log(JSON.stringify({ event: "user_events.digest.failed", message: String(error?.message ?? error) }));
+            return null;
+          });
+          if (digest) console.log(JSON.stringify({ event: "user_events.digest.done", ...digest }));
+        }
         const result = await sendCancelReminders(env, db, getStripeCustomerEmail);
         console.log(JSON.stringify({ event: "retention.cancel_reminders.done", ...result }));
         if (env.DISCORD_BOT_TOKEN) {
@@ -56,6 +67,12 @@ const scheduled = async (controller, env, ctx) => {
         }
         return;
       }
+      // 00:00 / 00:30 JST: 今週のピックアップモデル（週の最初の回で選ぶ。決まっていれば枠とお知らせの取りこぼしだけ見る）
+      const pickup = await runWeeklyPickup(await pickupDepsFromEnv(env)).catch((error) => {
+        console.log(JSON.stringify({ event: "user_models.pickup.failed", message: String(error?.message ?? error) }));
+        return null;
+      });
+      if (pickup && pickup.action !== "kept") console.log(JSON.stringify({ event: "user_models.pickup.done", ...pickup }));
       const result = await runDailyCoinJob(db, getNow());
       console.log(JSON.stringify({ event: "coins.daily_job.done", ...result }));
       // 00:30 JST: 前日の分析用の数字を保存する（00:00 の回は日付が変わった直後なので 00:30 だけ）
