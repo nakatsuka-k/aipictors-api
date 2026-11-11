@@ -195,7 +195,10 @@ export var expireAvailableCoins = async (db, userId, now) => {
   };
 };
 
+// 残高を開くたびに呼ばれる（1 日 8 万回）。ロットの合計と同じなら書かない（以前は毎回 UPDATE していた）
 export var syncCoinBalancesWithLots = async (db, userId, now) => {
+  const freeSql = `(SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE' AND remaining > 0)`;
+  const premiumSql = `(SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'PREMIUM' AND remaining > 0)`;
   const results = await db.batch([
     {
       text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at)
@@ -205,15 +208,19 @@ export var syncCoinBalancesWithLots = async (db, userId, now) => {
     },
     {
       text: `UPDATE coin_balances
-           SET free_balance = (SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'FREE' AND remaining > 0),
-               premium_balance = (SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $1 AND coin_type = 'PREMIUM' AND remaining > 0),
+           SET free_balance = ${freeSql},
+               premium_balance = ${premiumSql},
                updated_at = $2
          WHERE user_id = $1
-        RETURNING free_balance, premium_balance`,
+           AND (free_balance IS NOT ${freeSql} OR premium_balance IS NOT ${premiumSql})`,
       params: [userId, now]
+    },
+    {
+      text: `SELECT free_balance, premium_balance FROM coin_balances WHERE user_id = $1`,
+      params: [userId]
     }
   ]);
-  return results[1].rows[0] ?? null;
+  return results[2].rows[0] ?? null;
 };
 
 export var applyCoinDelta = async (props) => {
