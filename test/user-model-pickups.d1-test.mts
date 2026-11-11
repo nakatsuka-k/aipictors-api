@@ -88,7 +88,7 @@ const candidates = await p.listPickupCandidates(deps)
 const byId = Object.fromEntries(candidates.map((c: any) => [c.modelId, c]))
 assert.equal(candidates[0].modelId, "aaaaaaaaaaaa")
 assert.equal(byId.bbbbbbbbbbbb.excludedReason, "R18")
-assert.equal(byId.cccccccccccc.excludedReason, "ライセンス（他サービス不可）")
+assert.equal(byId.cccccccccccc.excludedReason, "取り込み（作者が別）")
 assert.equal(byId.eeeeeeeeeeee.excludedReason, "利用が少ない")
 assert.equal(byId.dddddddddddd.excludedReason, null)
 

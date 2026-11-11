@@ -1,9 +1,9 @@
 // 週替わりのピックアップモデル（みんなのモデルの看板）
 //
 // - 週は月曜 00:00 JST 始まり。5 分ごとの cron が、その週の分が無ければ直近 7 日の生成から自動で選ぶ（runWeeklyPickup）
-// - 選び方: 使った人の数を一番重く、生成回数・新しさ・LoRA（自作が多い）・自分でアップロードしたモデル・作例の数を足す。
-//   R18 / R18G、サムネイルなし、取り込み元のライセンスが他サービスでの利用を許していないもの、直近 8 週に選んだモデル、
-//   直近 4 週に選んだ登録者のモデルは選ばない
+// - 選び方: 使った人の数・生成回数・LoRA（自作が多い）・新しさ・作例の数。自動で選ぶのは全年齢・自分でアップロードしたモデルだけ。
+//   サムネイルなし、取り込み元のライセンスが他サービスでの利用を許していないもの、直近 8 週に選んだモデル、
+//   直近 4 週に選んだ登録者のモデルは選ばない（運営の差し替えではどれでも選べる）
 // - 運営は管理画面から差し替えられる（source = ADMIN。その週は cron で上書きしない）
 // - 選んだら: aipictors-system の D1 に「その週のお題（ユーザー企画の枠、主催は公式）」を作り、登録者にお知らせを送り、
 //   X 投稿の下書き（文面と添付する画像の URL）を作る。X への投稿はしない
@@ -136,15 +136,18 @@ export const rankPickupCandidates = (props: {
       const uploaded = !model.sourceUrl
       const samples = model.sampleImageUrls.length
       const score =
-        usage.users * 10 +
-        Math.sqrt(usage.generations) * 3 +
-        (model.kind === "LORA" ? 6 : 0) +
-        (uploaded ? 8 : 0) +
+        usage.users * 6 +
+        Math.sqrt(usage.generations) * 2 +
+        (model.kind === "LORA" ? 25 : 0) +
+        (uploaded ? 5 : 0) +
         (ageDays <= 30 ? 10 : ageDays <= 60 ? 4 : 0) +
         Math.min(samples, 4) +
         Math.log10(1 + model.useCount)
       let excludedReason: string | null = null
+      // 自動で選ぶのは全年齢だけ（ホームと X に出すため）。取り込んだモデルは作者が別の人なので選ばない（運営の差し替えでは選べる）
       if (model.rating === "R18" || model.rating === "R18G") excludedReason = "R18"
+      else if (model.rating !== "G") excludedReason = "全年齢でない"
+      else if (!uploaded) excludedReason = "取り込み（作者が別）"
       else if (!model.thumbnailUrl) excludedReason = "サムネイルなし"
       else if (model.sourceLicenseAllowsOtherServices === false) excludedReason = "ライセンス（他サービス不可）"
       else if (recentModels.has(row.id)) excludedReason = `直近${RECENT_MODEL_WEEKS}週に選んだ`
