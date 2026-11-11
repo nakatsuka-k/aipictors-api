@@ -103,7 +103,12 @@ webhookRoutes.post("/stripe/premium-coins", async (c) => {
     return json({ error: null, data: { deduplicated: true } });
   }
   const object2 = event.data.object;
-  if (event.type === "checkout.session.completed") {
+  // コンビニ払いなど後から支払う方法では、checkout.session.completed の時点ではまだ払われていない（payment_status = unpaid）。
+  // 支払われたとき（completed で paid、または後で届く async_payment_succeeded）だけコインやパスを付ける
+  const isPaidCheckout =
+    (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") &&
+    getString(object2, "payment_status") === "paid";
+  if (isPaidCheckout) {
     const metadata = object2.metadata ?? {};
     const kind = getString(metadata, "kind");
     // 自動更新なしのプラン（PayPay などの 1 回払い）。決済後の画面からも反映するが、画面を閉じた人のためにここでも反映する
