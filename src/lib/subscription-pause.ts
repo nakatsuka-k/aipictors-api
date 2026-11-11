@@ -30,8 +30,8 @@ var getStripePeriodEnd = (stripeSubscription) => {
 
 export var pauseSubscription = async (secretKey, db, props) => {
   const stripeSubscriptionId = getString(props.current, "stripe_subscription_id")
-  if (!stripeSubscriptionId) {
-    return { error: "Stripe の契約ではないため休止できません", status: 409 }
+  if (!stripeSubscriptionId || !stripeSubscriptionId.startsWith("sub_")) {
+    return { error: "自動更新の契約ではないため休止できません", status: 409 }
   }
   if (getString(props.current, "status") === "cancellation_requested") {
     return { error: "解約予約中は休止できません。先に解約を取り消してください", status: 409 }

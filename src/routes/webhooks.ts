@@ -9,6 +9,7 @@ import { getNumber, getString } from "../lib/record-fields"
 import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
 import { cancelPausedSubscriptionsOnNewSubscription } from "../lib/subscription-pause"
+import { applyPrepaidPassFromSession } from "../lib/prepaid-pass"
 export var getStringByKeys = (record, keys) => {
   for (const key of keys) {
     const value = getString(record, key);
@@ -105,6 +106,13 @@ webhookRoutes.post("/stripe/premium-coins", async (c) => {
   if (event.type === "checkout.session.completed") {
     const metadata = object2.metadata ?? {};
     const kind = getString(metadata, "kind");
+    // 自動更新なしのプラン（PayPay などの 1 回払い）。決済後の画面からも反映するが、画面を閉じた人のためにここでも反映する
+    if (kind === "prepaid_pass") {
+      const result = await applyPrepaidPassFromSession(db, object2);
+      if (result.error) {
+        console.error("[webhooks.premium-coins] prepaid pass not applied", { eventId: event.id, error: result.error });
+      }
+    }
     if (kind === "premium_coins") {
       const userId = getString(metadata, "user_id");
       const coins = Number.parseInt(getString(metadata, "coins") ?? "", 10);

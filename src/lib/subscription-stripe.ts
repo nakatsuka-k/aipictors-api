@@ -215,7 +215,7 @@ export var cancelOtherActiveSubscriptions = async (secretKey, db, userId, except
       `SELECT stripe_subscription_id FROM subscriptions
         WHERE user_id = $1 AND is_disabled = FALSE
           AND status NOT IN ('canceled', 'cancellation_requested')
-          AND stripe_subscription_id IS NOT NULL AND stripe_subscription_id <> $2`,
+          AND stripe_subscription_id LIKE 'sub_%' AND stripe_subscription_id <> $2`,
       [userId, exceptStripeSubscriptionId]
     );
     for (const row of rows ?? []) {

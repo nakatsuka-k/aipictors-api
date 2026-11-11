@@ -7,6 +7,7 @@ import { json } from "../lib/json"
 import { getArray, getNumber, getRecord, getString } from "../lib/record-fields"
 import { getPlanAmount, getPricingSettings } from "../lib/pricing"
 import { saveCancelReason } from "../lib/retention"
+import { isPrepaidSubscriptionId, isStripeSubscriptionId } from "../lib/prepaid-pass"
 import { getActivePause, pauseSubscription, toPauseResponse, unpauseSubscription } from "../lib/subscription-pause"
 import { sendSubscriptionCancellationEmail } from "../lib/subscription-cancellation-email"
 import {
@@ -130,7 +131,8 @@ subscriptionRoutes.get("/current/:userId", async (c) => {
     return json({ error: null, data: null });
   }
   const stripeSubscriptionId = getString(current, "stripe_subscription_id");
-  if (!stripeSubscriptionId || !c.env.STRIPE_SECRET_KEY || !claimCurrentSubscriptionCheck(current)) {
+  // Stripe の自動更新の契約だけ Stripe に確かめる（自動更新なしのパス・アプリのストアは対象外）
+  if (!isStripeSubscriptionId(stripeSubscriptionId) || !c.env.STRIPE_SECRET_KEY || !claimCurrentSubscriptionCheck(current)) {
     return json({ error: null, data: current });
   }
   // 解約予定のときだけ、応答を待たせて確かめる（取り消しがすぐ見えるように）
@@ -151,7 +153,7 @@ subscriptionRoutes.get("/unpaid/:userId", async (c) => {
   const db = await getDb(c.env);
   const rows = await db.query(
     `SELECT type, stripe_subscription_id FROM subscriptions
-      WHERE user_id = $1 AND is_disabled = FALSE AND stripe_subscription_id <> ''
+      WHERE user_id = $1 AND is_disabled = FALSE AND stripe_subscription_id LIKE 'sub_%'
         AND current_period_end > unixepoch() - 60 * 86400
       ORDER BY current_period_end DESC LIMIT 3`,
     [c.req.param("userId")]
@@ -200,7 +202,7 @@ subscriptionRoutes.post("/billing-portal/:userId", async (c) => {
   const db = await getDb(c.env);
   const rows = await db.query(
     `SELECT stripe_subscription_id FROM subscriptions
-      WHERE user_id = $1 AND stripe_subscription_id <> ''
+      WHERE user_id = $1 AND stripe_subscription_id LIKE 'sub_%'
       ORDER BY is_disabled ASC, current_period_end DESC LIMIT 3`,
     [c.req.param("userId")]
   );
@@ -302,6 +304,9 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
   };
   if (!current) {
     return json({ error: "No active subscription found" }, 404);
+  }
+  if (isPrepaidSubscriptionId(getString(current, "stripe_subscription_id"))) {
+    return json({ error: "自動更新なしのパスは解約の手続きは不要です（期限が来ると自動で終わります）" }, 409);
   }
   if (parsed.output.reason) {
     await saveCancelReason(db, {
@@ -435,6 +440,9 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {
     return json({ error: "Stripe subscription id is missing" }, 409);
+  }
+  if (isPrepaidSubscriptionId(stripeSubscriptionId)) {
+    return json({ error: "自動更新なしのパスはプランを変更できません。期限が切れてから新しく購入してください" }, 409);
   }
   const pricing = await getPricingSettings(db);
   const currentType = getString(current, "type");
@@ -571,6 +579,9 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
   const stripeSubscriptionId = getString(current, "stripe_subscription_id");
   if (!stripeSubscriptionId) {
     return json({ error: "Stripe subscription id is missing" }, 409);
+  }
+  if (isPrepaidSubscriptionId(stripeSubscriptionId)) {
+    return json({ error: "自動更新なしのパスはプランを変更できません。期限が切れてから新しく購入してください" }, 409);
   }
   const pricing = await getPricingSettings(db);
   const currentType = getString(current, "type");

@@ -7,6 +7,7 @@ import { getDb } from "../lib/db"
 import { json } from "../lib/json"
 import { getString } from "../lib/record-fields"
 import { createPremiumCoinPurchase } from "../lib/premium-coins"
+import { applyPrepaidPassFromSession, checkPrepaidPassAvailability, createPrepaidPassCheckout, getActivePrepaidSubscription } from "../lib/prepaid-pass"
 import { createPointCheckout, createPremiumCoinCheckout, createSubscriptionCheckout, fetchStripeCheckoutSession } from "../lib/stripe"
 export var pointCheckoutSchema = object({
   userId: string(),
@@ -99,6 +100,66 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
     console.error("Checkout error:", error);
     return json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
   }
+});
+export var prepaidPassCheckoutSchema = object({
+  userId: string(),
+  passType: union([literal("LITE"), literal("STANDARD"), literal("PREMIUM")]),
+  interval: union([literal("month"), literal("year")]),
+  origin: string()
+});
+// 自動更新なしのプラン（PayPay などの 1 回払い。lib/prepaid-pass.ts）
+stripeRoutes.post("/checkout/prepaid-pass", async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: "STRIPE_SECRET_KEY is not configured" }, 500);
+  }
+  const parsed = safeParse(prepaidPassCheckoutSchema, await c.req.json());
+  if (!parsed.success) {
+    return json({ error: "Invalid body" }, 400);
+  }
+  const db = await getDb(c.env);
+  const reason = await checkPrepaidPassAvailability(db, parsed.output.userId, parsed.output.passType);
+  if (reason) {
+    return json({ error: reason }, 409);
+  }
+  const response = await createPrepaidPassCheckout({
+    secretKey: c.env.STRIPE_SECRET_KEY,
+    db,
+    ...parsed.output
+  });
+  if (!response.url) {
+    return json({ error: response.error?.message ?? "Failed to create checkout session" }, 502);
+  }
+  return json({ error: null, data: { url: response.url } });
+});
+stripeRoutes.post("/checkout/prepaid-pass/confirm", async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return json({ error: "STRIPE_SECRET_KEY is not configured" }, 500);
+  }
+  const parsed = safeParse(premiumCoinConfirmSchema, await c.req.json());
+  if (!parsed.success) {
+    return json({ error: "Invalid body" }, 400);
+  }
+  const session = await fetchStripeCheckoutSession({
+    secretKey: c.env.STRIPE_SECRET_KEY,
+    sessionId: parsed.output.sessionId
+  });
+  if (getString(session.metadata ?? {}, "user_id") !== parsed.output.userId) {
+    return json({ error: "Checkout session does not belong to this user" }, 403);
+  }
+  const db = await getDb(c.env);
+  const result = await applyPrepaidPassFromSession(db, session);
+  if (result.error) {
+    return json({ error: result.error }, result.status ?? 400);
+  }
+  return json({ error: null, data: result.data });
+});
+stripeRoutes.get("/checkout/prepaid-pass/status/:userId", async (c) => {
+  const db = await getDb(c.env);
+  const row = await getActivePrepaidSubscription(db, c.req.param("userId"));
+  return json({
+    error: null,
+    data: row ? { passType: getString(row, "type"), periodEnd: Number(row.current_period_end) } : null
+  });
 });
 // コイン購入の上乗せの判定に使う（はじめての購入か、今のプラン）。量の計算はフロント（lib/premium-coins.ts）
 stripeRoutes.get("/checkout/premium-coins/offer/:userId", async (c) => {

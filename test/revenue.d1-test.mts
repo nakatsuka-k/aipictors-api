@@ -206,4 +206,76 @@ await test("コイン購入の判定: はじめて・プラン", async () => {
   assert.deepEqual(free.body.data, { isFirstPurchase: true, passType: null })
 })
 
+await test("パス: 決済画面は 1 回払い・月額/年額・metadata kind=prepaid_pass", async () => {
+  const res = await call("POST", "/stripe/checkout/prepaid-pass", { userId: "9100", passType: "STANDARD", interval: "year", origin: "https://www.test" })
+  assert.equal(res.status, 200, JSON.stringify(res.body))
+  const body = calls[0].body
+  assert.equal(body.get("mode"), "payment")
+  assert.equal(body.get("line_items[0][price_data][unit_amount]"), "19800")
+  assert.equal(body.get("metadata[kind]"), "prepaid_pass")
+  assert.equal(body.get("metadata[interval]"), "year")
+  assert.equal(body.get("line_items[0][price_data][recurring][interval]"), null)
+})
+
+await test("パス: 自動更新の契約に入っている人は買えない", async () => {
+  const userId = await insertSubscription("LITE")
+  const res = await call("POST", "/stripe/checkout/prepaid-pass", { userId, passType: "LITE", interval: "month", origin: "https://www.test" })
+  assert.equal(res.status, 409)
+  assert.equal(calls.length, 0)
+})
+
+await test("パス: 反映で契約ができ、同じ決済は 1 回だけ、2 回目の購入は期間が延びる", async () => {
+  const { applyPrepaidPassFromSession } = await import(`${API}/lib/prepaid-pass.ts`)
+  const userId = "9200"
+  const session = (id: string, interval = "month") => ({
+    id,
+    payment_status: "paid",
+    amount_total: 1980,
+    payment_intent: `pi_${id}`,
+    metadata: { kind: "prepaid_pass", user_id: userId, pass_type: "STANDARD", interval, price_yen: "1980" },
+  })
+  const first = await applyPrepaidPassFromSession(db, session("cs_a"))
+  assert.equal(first.data.created, true)
+  const row = await db.queryOne("SELECT * FROM subscriptions WHERE user_id = $1", [userId])
+  assert.equal(row.stripe_subscription_id, "prepaid:cs_a")
+  assert.equal(row.type, "STANDARD")
+  const end1 = Number(row.current_period_end)
+  assert.ok(end1 - now > 27 * 86400 && end1 - now < 32 * 86400)
+  const again = await applyPrepaidPassFromSession(db, session("cs_a"))
+  assert.equal(again.data.created, false)
+  const second = await applyPrepaidPassFromSession(db, session("cs_b"))
+  assert.equal(second.data.created, true)
+  const rows = await db.query("SELECT * FROM subscriptions WHERE user_id = $1", [userId])
+  assert.equal(rows.length, 1)
+  assert.ok(Number(rows[0].current_period_end) - end1 > 27 * 86400)
+  // 現在の契約として返り、Stripe には問い合わせない
+  calls.length = 0
+  const current = await call("GET", `/internal/subscriptions/current/${userId}`)
+  assert.equal(current.body.data.type, "STANDARD")
+  assert.equal(calls.length, 0)
+  const status = await call("GET", `/stripe/checkout/prepaid-pass/status/${userId}`)
+  assert.equal(status.body.data.passType, "STANDARD")
+  // 別のプランのパスは期限まで買えない、同じプランは買える
+  const other = await call("POST", "/stripe/checkout/prepaid-pass", { userId, passType: "PREMIUM", interval: "month", origin: "https://www.test" })
+  assert.equal(other.status, 409)
+  const same = await call("POST", "/stripe/checkout/prepaid-pass", { userId, passType: "STANDARD", interval: "month", origin: "https://www.test" })
+  assert.equal(same.status, 200)
+  // 解約・プラン変更・休止はできない
+  assert.equal((await call("POST", "/internal/subscriptions/cancel-current", { userId })).status, 409)
+  assert.equal((await call("POST", "/internal/subscriptions/change-plan", { userId, passType: "PREMIUM" })).status, 409)
+  assert.equal((await call("POST", "/internal/subscriptions/pause-current", { userId })).status, 409)
+})
+
+await test("パス: 未払いの決済は反映しない", async () => {
+  const { applyPrepaidPassFromSession } = await import(`${API}/lib/prepaid-pass.ts`)
+  const res = await applyPrepaidPassFromSession(db, {
+    id: "cs_unpaid",
+    payment_status: "unpaid",
+    metadata: { kind: "prepaid_pass", user_id: "9300", pass_type: "LITE", interval: "month" },
+  })
+  assert.equal(res.data.reflected, false)
+  const row = await db.queryOne("SELECT * FROM subscriptions WHERE user_id = '9300'")
+  assert.equal(row, null)
+})
+
 process.exit(failed > 0 ? 1 : 0)
