@@ -35,6 +35,12 @@ const scheduled = async (controller, env, ctx) => {
             console.log(JSON.stringify({ event: "discord.sync.done", ...discordResult }));
           }
         }
+        // 今週のピックアップモデル（週が変わって最初の回で選ぶ。決まっていれば読むだけ。モデルが使えなくなっていたら選び直す）
+        const pickup = await runWeeklyPickup(await pickupDepsFromEnv(env)).catch((error) => {
+          console.log(JSON.stringify({ event: "user_models.pickup.failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (pickup && pickup.action !== "kept" && pickup.action !== "waiting") console.log(JSON.stringify({ event: "user_models.pickup.done", ...pickup }));
         const result = await fillRecommendedSettings({
           db,
           fetch: (input, init) => fetch(input, init),
@@ -67,12 +73,6 @@ const scheduled = async (controller, env, ctx) => {
         }
         return;
       }
-      // 00:00 / 00:30 JST: 今週のピックアップモデル（週の最初の回で選ぶ。決まっていれば枠とお知らせの取りこぼしだけ見る）
-      const pickup = await runWeeklyPickup(await pickupDepsFromEnv(env)).catch((error) => {
-        console.log(JSON.stringify({ event: "user_models.pickup.failed", message: String(error?.message ?? error) }));
-        return null;
-      });
-      if (pickup && pickup.action !== "kept") console.log(JSON.stringify({ event: "user_models.pickup.done", ...pickup }));
       const result = await runDailyCoinJob(db, getNow());
       console.log(JSON.stringify({ event: "coins.daily_job.done", ...result }));
       // 00:30 JST: 前日の分析用の数字を保存する（00:00 の回は日付が変わった直後なので 00:30 だけ）

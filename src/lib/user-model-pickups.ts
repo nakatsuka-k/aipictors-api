@@ -1,6 +1,6 @@
 // 週替わりのピックアップモデル（みんなのモデルの看板）
 //
-// - 週は月曜 00:00 JST 始まり。毎週月曜 00:00 JST の cron が直近 7 日の生成から自動で選ぶ（runWeeklyPickup）
+// - 週は月曜 00:00 JST 始まり。5 分ごとの cron が、その週の分が無ければ直近 7 日の生成から自動で選ぶ（runWeeklyPickup）
 // - 選び方: 使った人の数を一番重く、生成回数・新しさ・LoRA（自作が多い）・自分でアップロードしたモデル・作例の数を足す。
 //   R18 / R18G、サムネイルなし、取り込み元のライセンスが他サービスでの利用を許していないもの、直近 8 週に選んだモデル、
 //   直近 4 週に選んだ登録者のモデルは選ばない
@@ -454,10 +454,10 @@ export const listPickups = async (db: Db, limit = 12) => {
 }
 
 /**
- * cron（毎日 00:00 JST）から呼ぶ。今週の分がまだ無いときだけ自動で選ぶ（運営の差し替えは上書きしない）。
+ * cron（5 分ごと）から呼ぶ。今週の分がまだ無いときだけ自動で選ぶ（運営の差し替えは上書きしない）。
  * 選んだモデルが使えなくなっていたら選び直す
  */
-export const runWeeklyPickup = async (deps: PickupDeps) => {
+export const runWeeklyPickup = async (deps: PickupDeps, options: { force?: boolean } = {}) => {
   const weekStart = jstWeekStart(deps.now)
   const existing = await getPickup(deps.db, weekStart)
   if (existing?.model?.status === "READY") {
@@ -470,6 +470,8 @@ export const runWeeklyPickup = async (deps: PickupDeps) => {
     }
     return { weekStart, action: "kept", modelId: existing.modelId }
   }
+  // 選ぶときは生成の表を 7 日分読むので、選べなかったときに 5 分ごとに読み直さないよう毎時 00〜04 分の回だけ
+  if (!options.force && deps.now % 3600 >= 300) return { weekStart, action: "waiting", modelId: null }
   const candidates = await listPickupCandidates(deps, weekStart)
   const best = candidates.find((c) => c.excludedReason === null) ?? candidates.find((c) => c.excludedReason?.startsWith("利用") ?? false)
   if (!best) return { weekStart, action: "none", modelId: null }

@@ -40,6 +40,8 @@ await ACTIVITY.prepare(
 
 // 2026-11-18（水）12:00 JST
 const NOW = Math.floor(Date.parse("2026-11-18T03:00:00Z") / 1000)
+// 毎時 00〜04 分の回以外は選ばない
+assert.equal((await p.runWeeklyPickup({ db, genlog, system: { core: null, activity: null }, now: NOW + 600 })).action, "waiting")
 
 // ---- 週 ----
 assert.equal(p.jstWeekStart(NOW), "2026-11-16")
