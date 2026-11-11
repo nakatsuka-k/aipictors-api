@@ -172,3 +172,20 @@ export var applyPrepaidPassFromSession = async (db, session) => {
   })
   return { error: null, data: { reflected: true, ...result } }
 }
+
+// Stripe の PayPay が使える状態か（審査中は決済画面に出ない）。isolate ごとに 10 分使い回す
+var paypayAvailability = { value: false, checkedAt: 0 }
+export var isPaypayAvailable = async (secretKey, now = Date.now()) => {
+  if (!secretKey) return false
+  if (now - paypayAvailability.checkedAt < 10 * 60 * 1000) return paypayAvailability.value
+  try {
+    const response = await fetch("https://api.stripe.com/v1/account", {
+      headers: { Authorization: `Bearer ${secretKey}` }
+    })
+    const account = await response.json()
+    paypayAvailability = { value: account?.capabilities?.paypay_payments === "active", checkedAt: now }
+  } catch (_error) {
+    paypayAvailability = { value: false, checkedAt: now }
+  }
+  return paypayAvailability.value
+}

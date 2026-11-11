@@ -7,7 +7,7 @@ import { getDb } from "../lib/db"
 import { json } from "../lib/json"
 import { getString } from "../lib/record-fields"
 import { createPremiumCoinPurchase } from "../lib/premium-coins"
-import { applyPrepaidPassFromSession, checkPrepaidPassAvailability, createPrepaidPassCheckout, getActivePrepaidSubscription } from "../lib/prepaid-pass"
+import { applyPrepaidPassFromSession, checkPrepaidPassAvailability, createPrepaidPassCheckout, getActivePrepaidSubscription, isPaypayAvailable } from "../lib/prepaid-pass"
 import { createPointCheckout, createPremiumCoinCheckout, createSubscriptionCheckout, fetchStripeCheckoutSession } from "../lib/stripe"
 export var pointCheckoutSchema = object({
   userId: string(),
@@ -155,10 +155,16 @@ stripeRoutes.post("/checkout/prepaid-pass/confirm", async (c) => {
 });
 stripeRoutes.get("/checkout/prepaid-pass/status/:userId", async (c) => {
   const db = await getDb(c.env);
-  const row = await getActivePrepaidSubscription(db, c.req.param("userId"));
+  const [row, paypayAvailable] = await Promise.all([
+    getActivePrepaidSubscription(db, c.req.param("userId")),
+    isPaypayAvailable(c.env.STRIPE_SECRET_KEY)
+  ]);
   return json({
     error: null,
-    data: row ? { passType: getString(row, "type"), periodEnd: Number(row.current_period_end) } : null
+    data: {
+      pass: row ? { passType: getString(row, "type"), periodEnd: Number(row.current_period_end) } : null,
+      paypayAvailable
+    }
   });
 });
 // コイン購入の上乗せの判定に使う（はじめての購入か、今のプラン）。量の計算はフロント（lib/premium-coins.ts）

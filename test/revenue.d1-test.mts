@@ -24,6 +24,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET"
   const body = new URLSearchParams(typeof init?.body === "string" ? init.body : init?.body ? String(init.body) : "")
   calls.push({ method, url, body })
+  if (url.endsWith("/v1/account")) return Response.json({ capabilities: { paypay_payments: "pending" } })
   if (url.includes("/checkout/sessions")) return Response.json({ url: "https://checkout.stripe.test/s" })
   if (url.includes("/invoices/create_preview")) return Response.json({ amount_due: 1000, lines: { data: [] } })
   if (method === "DELETE") return Response.json({ id: "x", status: "canceled" })
@@ -254,7 +255,7 @@ await test("パス: 反映で契約ができ、同じ決済は 1 回だけ、2 �
   assert.equal(current.body.data.type, "STANDARD")
   assert.equal(calls.length, 0)
   const status = await call("GET", `/stripe/checkout/prepaid-pass/status/${userId}`)
-  assert.equal(status.body.data.passType, "STANDARD")
+  assert.equal(status.body.data.pass.passType, "STANDARD")
   // 別のプランのパスは期限まで買えない、同じプランは買える
   const other = await call("POST", "/stripe/checkout/prepaid-pass", { userId, passType: "PREMIUM", interval: "month", origin: "https://www.test" })
   assert.equal(other.status, 409)
