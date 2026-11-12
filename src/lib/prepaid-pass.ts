@@ -2,6 +2,7 @@
 import { getNow } from "./db"
 import { getPlanAmount, getPricingSettings } from "./pricing"
 import { getNumber, getString } from "./record-fields"
+import { grantReferralPaidReward } from "./referrals"
 import { postStripeForm } from "./stripe"
 import { getCurrentSubscription } from "./subscriptions"
 
@@ -146,6 +147,12 @@ export var applyPrepaidPass = async (db, props) => {
       now
     ]
   )
+  // 紹介特典: 紹介された人のはじめての支払いで、紹介した人にコインを付ける
+  if ((props.priceYen ?? 0) > 0) {
+    await grantReferralPaidReward({ db, userId: props.userId }).catch((error) => {
+      console.warn("[prepaid-pass] failed to grant referral paid reward", error instanceof Error ? error.message : String(error))
+    })
+  }
   return { created: true, periodEnd, passType: props.passType }
 }
 

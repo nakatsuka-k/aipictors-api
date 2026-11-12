@@ -4,7 +4,8 @@ import { app } from "./app"
 import { fillRecommendedSettings } from "./lib/user-model-recommendations";
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
-import { getDb, getNow } from "./lib/db"
+import { getDb, getGenlogDb, getNow } from "./lib/db"
+import { grantReferralActionRewards } from "./lib/referrals"
 import { collectAnalyticsDay, jstDayBefore } from "./lib/analytics"
 import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
 import { getStripeCustomerEmail } from "./routes/subscriptions"
@@ -35,6 +36,16 @@ const scheduled = async (controller, env, ctx) => {
             console.log(JSON.stringify({ event: "discord.sync.done", ...discordResult }));
           }
         }
+        // 紹介特典: 紹介された人のはじめての生成・投稿を確かめて、紹介した人にコインを付ける（確かめる紹介がなければ 1 文読むだけ）
+        const referral = await grantReferralActionRewards({
+          db,
+          genlog: env.GENLOG ? await getGenlogDb(env) : null,
+          core: env.SYSTEM_CORE ?? null,
+        }).catch((error) => {
+          console.log(JSON.stringify({ event: "referral.action_rewards.failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (referral && referral.granted > 0) console.log(JSON.stringify({ event: "referral.action_rewards.done", ...referral }));
         // 今週のピックアップモデル（週が変わって最初の回で選ぶ。決まっていれば読むだけ。モデルが使えなくなっていたら選び直す）
         const pickup = await runWeeklyPickup(await pickupDepsFromEnv(env)).catch((error) => {
           console.log(JSON.stringify({ event: "user_models.pickup.failed", message: String(error?.message ?? error) }));

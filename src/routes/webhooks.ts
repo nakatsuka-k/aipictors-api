@@ -10,6 +10,7 @@ import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
 import { cancelPausedSubscriptionsOnNewSubscription } from "../lib/subscription-pause"
 import { applyPrepaidPassFromSession } from "../lib/prepaid-pass"
+import { grantReferralPaidReward } from "../lib/referrals"
 import { markTrialConverted, markTrialEnded, sendTrialWillEndEmail, startTrial } from "../lib/subscription-trial"
 export var getStringByKeys = (record, keys) => {
   for (const key of keys) {
@@ -319,6 +320,12 @@ webhookRoutes.post("/stripe", async (c) => {
         stripePriceId,
         stripeProductId
       });
+      // 紹介特典: 紹介された人のはじめての支払い（¥1 以上。無料お試しの開始は含めない）で、紹介した人にコインを付ける
+      if (amountPaid > 0) {
+        await grantReferralPaidReward({ db, core: c.env.SYSTEM_CORE ?? null, userId }).catch((error) => {
+          console.warn("Failed to grant referral paid reward", { eventId: event.id, message: error instanceof Error ? error.message : String(error) });
+        });
+      }
       // 休止中の人が新しく入り直したら、休止中の古い契約を止める（再開時の二重請求を防ぐ）
       if (getString(object2, "billing_reason") === "subscription_create") {
         await cancelPausedSubscriptionsOnNewSubscription(c.env.STRIPE_SECRET_KEY, db, userId, subscriptionId);
