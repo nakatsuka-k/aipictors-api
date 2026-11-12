@@ -46,7 +46,7 @@ export var saveCancelReason = async (db, props) => {
   );
 };
 
-var unsubscribeUrl = async (secret, userId) => {
+export var unsubscribeUrl = async (secret, userId) => {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),

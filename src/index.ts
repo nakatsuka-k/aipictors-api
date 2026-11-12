@@ -5,6 +5,7 @@ import { fillRecommendedSettings } from "./lib/user-model-recommendations";
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
 import { sendPaymentFailedNotices } from "./lib/payment-failed-notice"
+import { sendNewSubscriberNudges } from "./lib/new-subscriber-nudge"
 import { getDb, getGenlogDb, getNow } from "./lib/db"
 import { grantReferralActionRewards } from "./lib/referrals"
 import { collectAnalyticsDay, jstDayBefore } from "./lib/analytics"
@@ -81,6 +82,12 @@ const scheduled = async (controller, env, ctx) => {
           return null;
         });
         if (failedNotices) console.log(JSON.stringify({ event: "payment_failed_notice.done", ...failedNotices }));
+        // 入ったばかりで、最初の日のあと生成していない会員への使い方のお知らせ
+        const nudges = await sendNewSubscriberNudges(env, db).catch((error) => {
+          console.log(JSON.stringify({ event: "new_subscriber_nudge.batch_failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (nudges) console.log(JSON.stringify({ event: "new_subscriber_nudge.done", ...nudges }));
         const result = await sendCancelReminders(env, db, getStripeCustomerEmail);
         console.log(JSON.stringify({ event: "retention.cancel_reminders.done", ...result }));
         if (env.DISCORD_BOT_TOKEN) {
