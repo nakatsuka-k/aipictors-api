@@ -4,6 +4,7 @@ import { app } from "./app"
 import { fillRecommendedSettings } from "./lib/user-model-recommendations";
 import { runDailyCoinJob } from "./lib/daily-coins"
 import { sendCancelReminders } from "./lib/retention"
+import { sendPaymentFailedNotices } from "./lib/payment-failed-notice"
 import { getDb, getGenlogDb, getNow } from "./lib/db"
 import { grantReferralActionRewards } from "./lib/referrals"
 import { collectAnalyticsDay, jstDayBefore } from "./lib/analytics"
@@ -74,6 +75,12 @@ const scheduled = async (controller, env, ctx) => {
           });
           if (digest) console.log(JSON.stringify({ event: "user_events.digest.done", ...digest }));
         }
+        // 先に支払いの失敗のお知らせ（解約のリマインドが途中で失敗しても届くように、それぞれ失敗を受け止める）
+        const failedNotices = await sendPaymentFailedNotices(env, db).catch((error) => {
+          console.log(JSON.stringify({ event: "payment_failed_notice.batch_failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (failedNotices) console.log(JSON.stringify({ event: "payment_failed_notice.done", ...failedNotices }));
         const result = await sendCancelReminders(env, db, getStripeCustomerEmail);
         console.log(JSON.stringify({ event: "retention.cancel_reminders.done", ...result }));
         if (env.DISCORD_BOT_TOKEN) {
