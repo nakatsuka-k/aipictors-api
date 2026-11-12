@@ -49,6 +49,7 @@
   "GET /internal/user-models/reports",
   "GET /stripe/checkout/premium-coins/offer/:userId",
   "GET /stripe/checkout/prepaid-pass/status/:userId",
+  "GET /stripe/checkout/trial/:userId",
   "PATCH /internal/user-models/:id",
   "POST /discord-bot/member-joined/:discordUserId",
   "POST /email/unsubscribe",

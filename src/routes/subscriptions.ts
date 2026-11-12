@@ -483,6 +483,10 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   form.set("expand[]", "latest_invoice.payment_intent");
   form.set("items[0][id]", stripeSubscriptionItemId);
   setPlanPriceData(form, parsed.output.passType, nextAmount, interval);
+  // 無料お試し中のプラン変更は、お試しをその場で終えて新しいプランの料金を請求する（お試しのまま上のプランを無料で使えないように）
+  if (getString(stripeSubscription, "status") === "trialing") {
+    form.set("trial_end", "now");
+  }
   form.set("metadata[pass_type]", parsed.output.passType);
   form.set("metadata[user_id]", parsed.output.userId);
   if (subscriptionNanoid) {
@@ -618,6 +622,9 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
   form.set("subscription_details[proration_date]", String(prorationDate));
   form.set("subscription_details[items][0][id]", stripeSubscriptionItemId);
   setPreviewPlanPriceData(form, parsed.output.passType, nextAmount, interval);
+  if (getString(stripeSubscription, "status") === "trialing") {
+    form.set("subscription_details[trial_end]", "now");
+  }
   const previewInvoice = await postStripeForm2(
     c.env.STRIPE_SECRET_KEY,
     "/invoices/create_preview",

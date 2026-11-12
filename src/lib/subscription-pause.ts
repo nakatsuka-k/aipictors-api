@@ -44,6 +44,9 @@ export var pauseSubscription = async (secretKey, db, props) => {
   if (stripeSubscription?.error?.message) {
     return { error: stripeSubscription.error.message, status: 502 }
   }
+  if (getString(stripeSubscription, "status") === "trialing") {
+    return { error: "無料お試し中は休止できません", status: 409 }
+  }
   if (getSubscriptionInterval(stripeSubscription) === "year") {
     return { error: "年払いのプランは休止できません", status: 409 }
   }

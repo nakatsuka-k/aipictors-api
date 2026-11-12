@@ -1,5 +1,6 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { getPlanAmount, getPricingSettings } from "./pricing"
+import { buildTrialSubmitMessage } from "./subscription-trial"
 export var encoder = new TextEncoder();
 export var toHex2 = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 export var signPayload = async (secret, payload) => {
@@ -127,6 +128,21 @@ export var createSubscriptionCheckout = async (props) => {
   params.set("subscription_data[metadata][subscription_nanoid]", nanoid);
   params.set("metadata[interval]", interval);
   params.set("subscription_data[metadata][interval]", interval);
+  // 無料お試し（lib/subscription-trial.ts）: 決済画面に「7 日間無料、その後 ¥480/月」と出る。初月半額は付けない
+  if (props.trialDays > 0) {
+    params.set("success_url", `${props.origin}/plus/success?trial=1`);
+    params.set("subscription_data[trial_period_days]", String(props.trialDays));
+    // 支払い方法が無いままお試しが終わったら解約する（カードは必ず登録してもらう）
+    params.set("subscription_data[trial_settings][end_behavior][missing_payment_method]", "cancel");
+    params.set("payment_method_collection", "always");
+    params.set("metadata[trial]", "1");
+    params.set("subscription_data[metadata][trial]", "1");
+    params.set(
+      "custom_text[submit][message]",
+      buildTrialSubmitMessage({ now: Math.floor(Date.now() / 1e3), trialDays: props.trialDays, amount })
+    );
+    return postStripeForm(props.secretKey, params);
+  }
   // はじめてプランに入る人は初月半額（Stripe のクーポン）。クーポンが使えないときは通常の決済にする
   if (props.couponId) {
     const withCoupon = new URLSearchParams(params);

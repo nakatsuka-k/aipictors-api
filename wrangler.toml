@@ -38,6 +38,8 @@ migrations_dir = "migrations/genlog"
 STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
 # 今プランに入っていない人（はじめて・おかえり）の初月半額（Stripe のクーポン ID。空にすると止まる）
 FIRST_MONTH_COUPON_ID = "AIPICTORS_FIRST_MONTH_HALF"
+# ライトプランの無料お試しの日数（はじめてプランに入る人だけ・1 人 1 回。空にすると止まる。lib/subscription-trial.ts）
+LITE_TRIAL_DAYS = "7"
 # カード変更用の Stripe カスタマーポータル設定（カード変更・請求履歴のみ。解約は /plus から）
 # Discord 連携: 実績のお祝いを投稿するチャンネル
 DISCORD_CELEBRATION_CHANNEL_ID = "1566510587398066276"

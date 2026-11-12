@@ -1,13 +1,14 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { getCurrentSubscription } from "../lib/subscriptions";
 import { Hono as Hono2 } from "hono"
-import { literal, number, object, optional, safeParse, string, union } from "valibot"
+import { boolean, literal, number, object, optional, safeParse, string, union } from "valibot"
 import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
 import { getString } from "../lib/record-fields"
 import { createPremiumCoinPurchase } from "../lib/premium-coins"
 import { applyPrepaidPassFromSession, checkPrepaidPassAvailability, createPrepaidPassCheckout, getActivePrepaidSubscription, isPaypayAvailable } from "../lib/prepaid-pass"
+import { getTrialEligibility, getTrialOffer, TRIAL_PASS_TYPE } from "../lib/subscription-trial"
 import { createPointCheckout, createPremiumCoinCheckout, createSubscriptionCheckout, fetchStripeCheckoutSession } from "../lib/stripe"
 export var pointCheckoutSchema = object({
   userId: string(),
@@ -19,7 +20,9 @@ export var subscriptionCheckoutSchema = object({
   passType: union([literal("LITE"), literal("STANDARD"), literal("PREMIUM")]),
   origin: string(),
   // 省略時は月払い
-  interval: optional(union([literal("month"), literal("year")]))
+  interval: optional(union([literal("month"), literal("year")])),
+  // ライトの 7 日間無料お試し（lib/subscription-trial.ts）
+  trial: optional(boolean())
 });
 export var premiumCoinCheckoutSchema = object({
   userId: string(),
@@ -71,7 +74,25 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
     const interval = parsed.output.interval ?? "month";
     // 今プランに入っていない人（はじめての人・以前入っていた人）は初月半額のクーポンを付ける。
     // 年払いはもともと 2 か月分安いので付けない（クーポンは 1 回目の請求の半額なので、年額が半分になってしまう）
-    const isFirstSubscription = c.env.FIRST_MONTH_COUPON_ID && interval === "month" ? !await getCurrentSubscription(db, parsed.output.userId) : false;
+    let trialDays = 0;
+    if (parsed.output.trial === true) {
+      if (parsed.output.passType !== TRIAL_PASS_TYPE || interval !== "month") {
+        return json({ error: "無料お試しはライトプランの月払いだけです", code: "trial_invalid_plan" }, 400);
+      }
+      const eligibility = await getTrialEligibility(db, c.env, parsed.output.userId);
+      if (!eligibility.eligible) {
+        return json(
+          {
+            error: eligibility.reason === "disabled" ? "無料お試しは現在受け付けていません" : "無料お試しは、はじめてプランに入る方が 1 回だけ使えます",
+            code: "trial_not_eligible",
+            reason: eligibility.reason
+          },
+          409
+        );
+      }
+      trialDays = eligibility.trialDays;
+    }
+    const isFirstSubscription = trialDays > 0 ? false : c.env.FIRST_MONTH_COUPON_ID && interval === "month" ? !await getCurrentSubscription(db, parsed.output.userId) : false;
     const response = await createSubscriptionCheckout({
       secretKey: c.env.STRIPE_SECRET_KEY,
       origin: parsed.output.origin,
@@ -79,6 +100,7 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
       passType: parsed.output.passType,
       interval,
       couponId: isFirstSubscription ? c.env.FIRST_MONTH_COUPON_ID : null,
+      trialDays,
       db
     });
     if (!response.url) {
@@ -100,6 +122,11 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
     console.error("Checkout error:", error);
     return json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
   }
+});
+// 無料お試しの対象か（対象外なら理由）と、直近のお試しの状態（カードの重複で解約されたかを画面が知るため）
+stripeRoutes.get("/checkout/trial/:userId", async (c) => {
+  const db = await getDb(c.env);
+  return json({ error: null, data: await getTrialOffer(db, c.env, c.req.param("userId")) });
 });
 export var prepaidPassCheckoutSchema = object({
   userId: string(),

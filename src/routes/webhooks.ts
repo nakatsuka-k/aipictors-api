@@ -10,6 +10,7 @@ import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
 import { cancelPausedSubscriptionsOnNewSubscription } from "../lib/subscription-pause"
 import { applyPrepaidPassFromSession } from "../lib/prepaid-pass"
+import { markTrialConverted, markTrialEnded, sendTrialWillEndEmail, startTrial } from "../lib/subscription-trial"
 export var getStringByKeys = (record, keys) => {
   for (const key of keys) {
     const value = getString(record, key);
@@ -280,19 +281,37 @@ webhookRoutes.post("/stripe", async (c) => {
         message: error instanceof Error ? error.message : String(error)
       });
     }
-    if (userId && nanoid && passType) {
+    const amountPaid = getNumber(object2, "amount_paid") ?? 0;
+    // 無料お試しの開始（¥0 の請求の成功）。同じカードを別の人が使っていたら、ここで契約をすぐ解約して行を作らない
+    let trial = null;
+    if (userId && subscriptionId && getString(metadata, "trial") === "1" && getString(object2, "billing_reason") === "subscription_create" && amountPaid === 0) {
+      trial = await startTrial({
+        db,
+        secretKey: c.env.STRIPE_SECRET_KEY,
+        userId,
+        stripeSubscriptionId: subscriptionId,
+        passType,
+        periodEnd
+      });
+    }
+    if (trial?.rejected) {
+      console.log("Trial rejected, subscription canceled:", { userId, subscriptionId, status: trial.status });
+    } else if (userId && nanoid && passType) {
       console.log("Upserting subscription for user:", userId);
+      // お試しのあとの最初の支払い（¥1 以上）は「はじめての支払い」。更新ではないので継続ボーナスは付けない
+      const isFirstPaymentAfterTrial = amountPaid > 0 ? await markTrialConverted(db, subscriptionId) : false;
       await upsertSubscription(db, {
         nanoid,
         userId,
         type: passType,
-        status: getString(object2, "status") ?? "active",
+        // お試し中は trialing（プランの特典はそのまま効く。解約予約・再開で cancellation_requested / paid に変わる）
+        status: trial ? "trialing" : getString(object2, "status") ?? "active",
         isDisabled: false,
         createdAt,
         currentPeriodStart: subscriptionCurrentPeriodStart ?? periodStart,
-        currentPeriodEnd: subscriptionCurrentPeriodEnd ?? periodEnd,
-        trialStart: null,
-        trialEnd: null,
+        currentPeriodEnd: trial?.trialEnd ?? subscriptionCurrentPeriodEnd ?? periodEnd,
+        trialStart: trial?.trialStart ?? null,
+        trialEnd: trial?.trialEnd ?? null,
         stripeSubscriptionId: subscriptionId ?? "",
         stripeLatestInvoiceId: getString(object2, "id"),
         stripePaymentIntentId: getString(object2, "payment_intent"),
@@ -305,7 +324,7 @@ webhookRoutes.post("/stripe", async (c) => {
         await cancelPausedSubscriptionsOnNewSubscription(c.env.STRIPE_SECRET_KEY, db, userId, subscriptionId);
       }
       // 更新（2か月目以降）のたびに継続ボーナスのプレミアムコインを付ける
-      if (getString(object2, "billing_reason") === "subscription_cycle") {
+      if (getString(object2, "billing_reason") === "subscription_cycle" && amountPaid > 0 && !isFirstPaymentAfterTrial) {
         try {
           await grantRenewalBonus({ db, userId, passType, invoiceId: getString(object2, "id") });
         } catch (error) {
@@ -327,6 +346,18 @@ webhookRoutes.post("/stripe", async (c) => {
     const subscriptionId = getString(object2, "id");
     if (subscriptionId) {
       await disableSubscriptionByStripeId(db, subscriptionId);
+      await markTrialEnded(db, subscriptionId);
+    }
+  }
+  // 無料お試しの終了 3 日前: 終了日・その後の料金・解約の方法をメールで知らせる
+  if (event.type === "customer.subscription.trial_will_end") {
+    try {
+      const result = await sendTrialWillEndEmail(c.env, db, object2);
+      console.log(JSON.stringify({ event: "trial.reminder", subscriptionId: getString(object2, "id"), ...result }));
+    } catch (error) {
+      // 送れなかったら 500 を返して Stripe に再送してもらう
+      console.error("[webhooks.stripe] failed to send trial reminder", error);
+      return json({ error: "Failed to send trial reminder" }, 500);
     }
   }
   await db.execute("INSERT INTO webhook_events(event_id, type, processed_at) VALUES ($1, $2, $3)", [
