@@ -135,6 +135,8 @@ export var createSubscriptionCheckout = async (props) => {
     // 支払い方法が無いままお試しが終わったら解約する（カードは必ず登録してもらう）
     params.set("subscription_data[trial_settings][end_behavior][missing_payment_method]", "cancel");
     params.set("payment_method_collection", "always");
+    // カードだけ（Link などはカードの fingerprint が取れず、同じカードの 2 回目を見分けられない。Apple Pay / Google Pay はカード扱いで使える）
+    params.set("payment_method_types[0]", "card");
     params.set("metadata[trial]", "1");
     params.set("subscription_data[metadata][trial]", "1");
     params.set(

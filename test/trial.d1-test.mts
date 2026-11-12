@@ -139,6 +139,9 @@ await test("対象: 一度もプランに入ったことがない人だけ", asy
     { eligible: fresh.body.data.eligible, reason: fresh.body.data.reason, trialDays: fresh.body.data.trialDays, passType: fresh.body.data.passType, price: fresh.body.data.priceYenAfterTrial, latest: fresh.body.data.latestTrial },
     { eligible: true, reason: null, trialDays: 7, passType: "LITE", price: 480, latest: null },
   )
+  // 未ログインの人に出す内容
+  const anonymous = await call("GET", "/stripe/checkout/trial/anonymous")
+  assert.deepEqual(anonymous.body.data, { eligible: true, reason: null, trialDays: 7, passType: "LITE", priceYenAfterTrial: 480, latestTrial: null })
   // 解約済み（過去に入っていた）・アプリのストアの契約・自動更新なしのパスも対象外
   await db.execute(
     `INSERT INTO subscriptions(nanoid, user_id, type, status, is_disabled, created_at, current_period_start, current_period_end, stripe_subscription_id)
@@ -162,6 +165,7 @@ await test("お試しの決済画面: 7 日間無料・その後 ¥480/月・ク
   assert.equal(body.get("subscription_data[trial_period_days]"), "7")
   assert.equal(body.get("subscription_data[trial_settings][end_behavior][missing_payment_method]"), "cancel")
   assert.equal(body.get("payment_method_collection"), "always")
+  assert.equal(body.get("payment_method_types[0]"), "card")
   assert.equal(body.get("line_items[0][price_data][unit_amount]"), "480")
   assert.equal(body.get("line_items[0][price_data][recurring][interval]"), "month")
   assert.equal(body.get("discounts[0][coupon]"), null)

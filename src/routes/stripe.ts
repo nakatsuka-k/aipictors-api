@@ -8,7 +8,8 @@ import { json } from "../lib/json"
 import { getString } from "../lib/record-fields"
 import { createPremiumCoinPurchase } from "../lib/premium-coins"
 import { applyPrepaidPassFromSession, checkPrepaidPassAvailability, createPrepaidPassCheckout, getActivePrepaidSubscription, isPaypayAvailable } from "../lib/prepaid-pass"
-import { getTrialEligibility, getTrialOffer, TRIAL_PASS_TYPE } from "../lib/subscription-trial"
+import { getPlanAmount, getPricingSettings } from "../lib/pricing"
+import { getTrialDays, getTrialEligibility, getTrialOffer, TRIAL_PASS_TYPE } from "../lib/subscription-trial"
 import { createPointCheckout, createPremiumCoinCheckout, createSubscriptionCheckout, fetchStripeCheckoutSession } from "../lib/stripe"
 export var pointCheckoutSchema = object({
   userId: string(),
@@ -126,6 +127,22 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
 // 無料お試しの対象か（対象外なら理由）と、直近のお試しの状態（カードの重複で解約されたかを画面が知るため）
 stripeRoutes.get("/checkout/trial/:userId", async (c) => {
   const db = await getDb(c.env);
+  // 未ログインの人に出す内容（受付中か・日数・その後の料金だけ。対象かどうかはログインするまで分からない）
+  if (c.req.param("userId") === "anonymous") {
+    const trialDays = getTrialDays(c.env);
+    const pricing = await getPricingSettings(db);
+    return json({
+      error: null,
+      data: {
+        eligible: trialDays > 0,
+        reason: trialDays > 0 ? null : "disabled",
+        trialDays,
+        passType: TRIAL_PASS_TYPE,
+        priceYenAfterTrial: getPlanAmount(pricing, TRIAL_PASS_TYPE, "month"),
+        latestTrial: null
+      }
+    });
+  }
   return json({ error: null, data: await getTrialOffer(db, c.env, c.req.param("userId")) });
 });
 export var prepaidPassCheckoutSchema = object({
