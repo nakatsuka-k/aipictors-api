@@ -46,3 +46,14 @@ DDL は戻らない。
 - `lib/coins.ts`、`lib/coin-support.ts`、`lib/user-models.ts` は同名のディレクトリへの再 export。中身はディレクトリ側を直す。
 - `/internal/subscriptions/current/:userId` は契約者の取得のたびに呼ばれる。`customer.subscription.updated` を受けていないのでポータルでの解約予約と取り消しは Stripe に聞く必要があるが、解約予定の契約だけ同期（1 分に 1 回）、他は裏で確認（10 分に 1 回）にしている。
 - Neon は 1 文ごとに HTTP の往復になる。互いに依存しない読み取りは `Promise.all` で同時に投げる。
+
+## 無料お試しと紹介特典（2026-11-12）
+
+- ライトの 7 日間無料お試し: `src/lib/subscription-trial.ts`、表 `subscription_trials`。日数は wrangler の var `LITE_TRIAL_DAYS`（空にすると止まる）。決済画面は `/stripe/checkout/subscription` に `trial: true`、対象の判定は `/stripe/checkout/trial/:userId`。
+  - お試しの開始は `invoice.payment_succeeded`（¥0・`billing_reason=subscription_create`・metadata `trial=1`）で受け、ここでカードの fingerprint を見て重複ならその契約をすぐ解約する（`subscriptions` に行を作らない）。
+  - お試し中の `subscriptions.status` は `trialing`。プランの判定は status を見ていない（`canceled` / `cancellation_requested` だけ特別扱い）ので、ふつうの会員と同じに扱われる。
+  - 終了 3 日前のメールは `customer.subscription.trial_will_end`（Stripe の webhook `we_1Nmro1…` で受信済みのイベント）。
+- 紹介特典: `src/lib/referrals.ts`、表 `referral_codes`・`referrals`・`referral_rejections`。入口は `/internal/referrals/{summary,attach,stats}`。
+  - 紹介された人のはじめての生成・投稿は 5 分ごとの cron で確かめる（GENLOG の `generated_queues` / `image_generation_results`、core の `works`）。はじめての支払いは `invoice.payment_succeeded`（¥1 以上）と自動更新なしのパスの反映で付ける。
+  - 登録時刻と同じ IP の利用は aipictors-system の core（バインド `SYSTEM_CORE` の `wp_users`・`ip_bindings`）から読む。
+  - 数字（300 / 300 / 2,000、7 日、月 20 人）を変えるときは、フロントの `app/lib/referral/referral-rewards.ts` も直す。

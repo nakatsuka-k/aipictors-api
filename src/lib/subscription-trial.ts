@@ -119,7 +119,14 @@ export var startTrial = async (props) => {
   if (stripeSubscription?.error?.message) {
     throw new Error(`Stripe subscription fetch failed: ${stripeSubscription.error.message}`)
   }
-  const fingerprint = getCardFingerprint(stripeSubscription)
+  let fingerprint = getCardFingerprint(stripeSubscription)
+  const customerId = getString(stripeSubscription, "customer")
+  if (fingerprint === null && customerId) {
+    // 契約に支払い方法が付いていないときは、顧客に登録されたカードから読む
+    const methods = await getStripe(secretKey, `/payment_methods?customer=${customerId}&type=card&limit=1`).catch(() => null)
+    const card = getRecord(methods?.data?.[0] ?? {}, "card")
+    fingerprint = card ? getString(card, "fingerprint") : null
+  }
   const now = getNow()
   const trialStart = getNumber(stripeSubscription, "trial_start") ?? now
   const trialEnd = getNumber(stripeSubscription, "trial_end") ?? props.periodEnd ?? null

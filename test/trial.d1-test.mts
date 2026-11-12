@@ -24,6 +24,8 @@ type Call = { method: string; url: string; body: URLSearchParams; json: any }
 const calls: Call[] = []
 // Stripe の契約（id ごと）。fingerprint はここで決める
 const stripeSubscriptions = new Map<string, Record<string, unknown>>()
+// 顧客に登録されたカード（契約に支払い方法が付いていないときに読まれる）
+let customerCardFingerprint: string | null = null
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input)
   const method = init?.method ?? "GET"
@@ -36,6 +38,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   calls.push({ method, url, body: new URLSearchParams(raw), json: null })
   if (url.includes("/checkout/sessions")) return Response.json({ url: "https://checkout.stripe.test/s" })
   if (url.includes("/customers/")) return Response.json({ id: "cus_1", email: "trial@example.com" })
+  if (url.includes("/payment_methods?")) return Response.json({ data: customerCardFingerprint ? [{ id: "pm_c", card: { fingerprint: customerCardFingerprint } }] : [] })
   const match = url.match(/\/subscriptions\/(sub_[A-Za-z0-9_]+)/)
   if (match) {
     const sub = stripeSubscriptions.get(match[1])
@@ -275,6 +278,11 @@ await test("fingerprint が取れない支払い方法（カード以外）は�
   await startTrialFor("203", "sub_trial203", null)
   await startTrialFor("204", "sub_trial204", null)
   assert.equal((await db.queryOne<any>("SELECT status FROM subscription_trials WHERE user_id = '204'")).status, "trialing")
+  // 契約に支払い方法が付いていなくても、顧客に登録されたカードの fingerprint で見分ける
+  customerCardFingerprint = "fp_AAA"
+  await startTrialFor("206", "sub_trial206", null)
+  customerCardFingerprint = null
+  assert.equal((await db.queryOne<any>("SELECT status FROM subscription_trials WHERE user_id = '206'")).status, "rejected_duplicate_card")
 })
 
 await test("終了 3 日前のメール: 終了日・その後の料金・解約の方法。1 回だけ。解約予約済みには送らない", async () => {
