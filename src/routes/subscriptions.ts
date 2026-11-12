@@ -219,8 +219,11 @@ subscriptionRoutes.post("/billing-portal/:userId", async (c) => {
   }
   const form = new URLSearchParams();
   form.set("customer", customerId);
-  form.set("return_url", "https://www.aipictors.com/plus");
-  form.set("locale", "ja");
+  // 英語のページから来た人は英語で出す（body の locale。省略時は今までどおり日本語）
+  const portalInput = await c.req.json().catch(() => ({}));
+  const isEnglish = portalInput?.locale === "en";
+  form.set("return_url", isEnglish ? "https://www.aipictors.com/en/plus" : "https://www.aipictors.com/plus");
+  form.set("locale", isEnglish ? "en" : "ja");
   if (c.env.BILLING_PORTAL_CONFIGURATION_ID) {
     form.set("configuration", c.env.BILLING_PORTAL_CONFIGURATION_ID);
   }

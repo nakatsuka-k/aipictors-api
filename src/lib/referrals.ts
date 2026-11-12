@@ -21,6 +21,17 @@ export var REFERRAL_MAX_PER_IP = 2
 // はじめての生成・投稿を確かめる期間（登録からこれを過ぎた紹介は確かめない）
 var ACTION_CHECK_WINDOW_SECONDS = 90 * 86400
 
+/**
+ * 紹介特典を受け付けているか（wrangler の var REFERRAL_ENABLED。空・"0"・"false" で止まる）
+ * 止めている間は、新しいひも付けと特典の付与をしない（その間に起きた生成・支払いの分は、再開しても付かない。
+ * はじめての生成・投稿だけは、再開後の定期処理で付く）。すでに成立した分の表示は残す
+ */
+export var isReferralEnabled = (env) => {
+  const value = env?.REFERRAL_ENABLED
+  if (value === undefined || value === null) return true
+  return !["", "0", "false", "off"].includes(String(value).trim().toLowerCase())
+}
+
 var CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 var CODE_LENGTH = 8
 export var isReferralCode = (value) => typeof value === "string" && /^[a-z0-9]{6,16}$/.test(value)
@@ -134,6 +145,8 @@ export var attachReferral = async (props) => {
   const code = typeof props.code === "string" ? props.code.trim().toLowerCase() : ""
   const deviceId = toDeviceId(props.deviceId)
   const ipHash = await hashIp(env, props.ip)
+  // 止めている間は何も記録しない（画面は紹介コードを覚えたままにして、再開後にもう一度試す）
+  if (!isReferralEnabled(env)) return { attached: false, reason: "disabled", grantedCoins: 0 }
   const existing = await db.queryOne("SELECT id FROM referrals WHERE referred_user_id = $1", [userId])
   if (existing) return { attached: false, reason: "already", grantedCoins: 0 }
   if (!isReferralCode(code)) return { attached: false, reason: "unknown_code", grantedCoins: 0 }
@@ -233,6 +246,7 @@ var rejectIfSharedIp = async (db, core, referral) => {
  */
 export var grantReferralActionRewards = async (props) => {
   const { db, genlog, core } = props
+  if (props.env && !isReferralEnabled(props.env)) return { checked: 0, granted: 0 }
   const now = getNow()
   // 定期処理では、登録から 2 日以内の紹介は毎回、それより古い紹介は 6 時間おきに確かめる（動かない人を毎回確かめ続けない）
   const pending = props.referrerUserId
@@ -308,6 +322,7 @@ export var grantReferralActionRewards = async (props) => {
  */
 export var grantReferralPaidReward = async (props) => {
   const { db, core } = props
+  if (props.env && !isReferralEnabled(props.env)) return { granted: false }
   const referral = await db.queryOne(
     "SELECT * FROM referrals WHERE referred_user_id = $1 AND paid_rewarded_at IS NULL AND status = 'attached' AND referrer_capped = 0",
     [String(props.userId)]
@@ -337,7 +352,7 @@ export var grantReferralPaidReward = async (props) => {
 }
 
 /** 紹介ページに出す内容（自分のコード・これまでの人数と受け取ったコイン・今月の残り） */
-export var getReferralSummary = async (db, userId, code) => {
+export var getReferralSummary = async (db, userId, code, enabled = true) => {
   const now = getNow()
   const [totals, asReferred] = await Promise.all([
     db.queryOne(
@@ -354,6 +369,7 @@ export var getReferralSummary = async (db, userId, code) => {
   const actionCount = Number(totals?.action_count ?? 0)
   const paidCount = Number(totals?.paid_count ?? 0)
   return {
+    enabled,
     code,
     rewards: REFERRAL_REWARDS,
     coinTtlDays: REFERRAL_COIN_TTL_SECONDS / 86400,

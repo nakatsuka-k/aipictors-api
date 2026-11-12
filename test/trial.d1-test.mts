@@ -183,6 +183,40 @@ await test("お試しの決済画面: 7 日間無料・その後 ¥480/月・ク
   assert.ok(message.length <= 1200)
 })
 
+await test("表示言語: 英語の人は決済画面も送信ボタン下の文も英語だけ。日本語の人は Stripe に任せる（locale なし）・日本語だけ", async () => {
+  await call("POST", "/stripe/checkout/subscription", { userId: "110", passType: "LITE", origin: "https://www.test", trial: true, locale: "en" })
+  let body = calls[0].body
+  assert.equal(body.get("locale"), "en")
+  assert.equal(body.get("subscription_data[metadata][locale]"), "en")
+  assert.match(body.get("custom_text[submit][message]") ?? "", /^Free for 7 days/)
+  assert.doesNotMatch(body.get("custom_text[submit][message]") ?? "", /無料/)
+  assert.equal(body.get("line_items[0][price_data][product_data][name]"), "Aipictors+ ライト / Lite")
+  calls.length = 0
+  await call("POST", "/stripe/checkout/subscription", { userId: "110", passType: "LITE", origin: "https://www.test", trial: true, locale: "ja" })
+  body = calls[0].body
+  assert.equal(body.get("locale"), null)
+  assert.equal(body.get("subscription_data[metadata][locale]"), "ja")
+  assert.doesNotMatch(body.get("custom_text[submit][message]") ?? "", /Free for/)
+  calls.length = 0
+  // 知らない値は無視する
+  await call("POST", "/stripe/checkout/subscription", { userId: "110", passType: "STANDARD", origin: "https://www.test", interval: "year", locale: "fr" })
+  body = calls[0].body
+  assert.equal(body.get("locale"), null)
+  assert.equal(body.get("metadata[locale]"), null)
+  assert.equal(body.get("line_items[0][price_data][product_data][name]"), "Aipictors+ スタンダード / Standard（年払い / Yearly）")
+  calls.length = 0
+  // 自動更新なしのパス・コイン購入・カード変更の画面
+  await call("POST", "/stripe/checkout/prepaid-pass", { userId: "110", passType: "PREMIUM", interval: "month", origin: "https://www.test", locale: "en" })
+  assert.equal(calls[0].body.get("locale"), "en")
+  assert.equal(calls[0].body.get("line_items[0][price_data][product_data][name]"), "Aipictors+ プレミアム / Premium 1か月パス / 1-month pass（自動更新なし / no auto-renewal）")
+  calls.length = 0
+  await call("POST", "/stripe/checkout/premium-coins", { userId: "110", coins: 100, bonusCoins: 0, priceYen: 80, origin: "https://www.test", locale: "en" })
+  assert.equal(calls[0].body.get("locale"), "en")
+  calls.length = 0
+  await call("POST", "/stripe/checkout/premium-coins", { userId: "110", coins: 100, bonusCoins: 0, priceYen: 80, origin: "https://www.test" })
+  assert.equal(calls[0].body.get("locale"), null)
+})
+
 await test("お試しはライトの月払いだけ。対象外の人は 409（決済画面を作らない）", async () => {
   const standard = await call("POST", "/stripe/checkout/subscription", { userId: "111", passType: "STANDARD", origin: "https://www.test", trial: true })
   assert.equal(standard.status, 400)
@@ -295,11 +329,33 @@ await test("終了 3 日前のメール: 終了日・その後の料金・解約
   assert.match(mail.json.html, /月額 ¥480（税込）/)
   assert.match(mail.json.html, /解約する/)
   assert.match(mail.json.html, /https:\/\/www\.aipictors\.com\/plus/)
-  assert.match(mail.json.html, /¥480\/month/)
+  assert.match(mail.json.html, /¥480 per month/)
   assert.ok(Number((await db.queryOne<any>("SELECT reminder_sent_at FROM subscription_trials WHERE stripe_subscription_id = 'sub_trial200'")).reminder_sent_at) > 0)
   calls.length = 0
   await webhook("customer.subscription.trial_will_end", sub)
   assert.equal(calls.filter((c) => c.url === "https://api.resend.com/emails").length, 0)
+  // 言語が分かっていればその言語だけ（決済のときの metadata.locale）
+  const { buildTrialWillEndEmail } = await import(`${API}/lib/subscription-trial.ts`)
+  const both = buildTrialWillEndEmail({ trialEnd: now + 3 * DAY, amount: 480, locale: null })
+  assert.match(both.html, /無料お試しは/)
+  assert.match(both.html, /Your free trial of the Aipictors\+ Lite plan ends on/)
+  const english = buildTrialWillEndEmail({ trialEnd: now + 3 * DAY, amount: 480, locale: "en" })
+  assert.match(english.subject, /^\[Aipictors\] Your free trial ends on .+ \(then ¥480\/month\)$/)
+  assert.doesNotMatch(english.html, /無料お試し/)
+  assert.match(english.html, /https:\/\/www\.aipictors\.com\/en\/plus/)
+  const japanese = buildTrialWillEndEmail({ trialEnd: now + 3 * DAY, amount: 480, locale: "ja" })
+  assert.doesNotMatch(japanese.html, /free trial/)
+  const { buildCancelReminderEmail } = await import(`${API}/lib/retention.ts`)
+  const reminderBoth = buildCancelReminderEmail({ passType: "STANDARD", periodEnd: now + 3 * DAY, locale: null, optout: "https://x.test/u" })
+  assert.match(reminderBoth.html, /Aipictors\+（スタンダード）/)
+  assert.match(reminderBoth.html, /Your Aipictors\+ \(Standard\) plan ends on/)
+  const reminderEn = buildCancelReminderEmail({ passType: "STANDARD", periodEnd: now + 3 * DAY, locale: "en", optout: null })
+  assert.match(reminderEn.subject, /^\[Aipictors\] Your Aipictors\+ plan ends on /)
+  assert.doesNotMatch(reminderEn.html, /終了します/)
+  assert.match(reminderEn.html, /300 premium coins/)
+  const reminderJa = buildCancelReminderEmail({ passType: "LITE", periodEnd: now + 3 * DAY, locale: "ja", optout: null })
+  assert.match(reminderJa.subject, /^【Aipictors】Aipictors\+ は .+ で終了します$/)
+  assert.doesNotMatch(reminderJa.html, /Your Aipictors/)
   // 解約予約済み
   const scheduled = stripeSubscriptions.get("sub_trial202")!
   await webhook("customer.subscription.trial_will_end", { ...scheduled, cancel_at_period_end: true })

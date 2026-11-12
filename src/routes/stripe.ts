@@ -1,7 +1,7 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { getCurrentSubscription } from "../lib/subscriptions";
 import { Hono as Hono2 } from "hono"
-import { boolean, literal, number, object, optional, safeParse, string, union } from "valibot"
+import { boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
@@ -11,10 +11,12 @@ import { applyPrepaidPassFromSession, checkPrepaidPassAvailability, createPrepai
 import { getPlanAmount, getPricingSettings } from "../lib/pricing"
 import { getTrialDays, getTrialEligibility, getTrialOffer, TRIAL_PASS_TYPE } from "../lib/subscription-trial"
 import { createPointCheckout, createPremiumCoinCheckout, createSubscriptionCheckout, fetchStripeCheckoutSession } from "../lib/stripe"
+// locale: フロントの表示言語（"en" のとき決済画面を英語にする。省略可）
 export var pointCheckoutSchema = object({
   userId: string(),
   points: union([literal(100), literal(300), literal(1e3)]),
-  origin: string()
+  origin: string(),
+  locale: optional(nullable(string()))
 });
 export var subscriptionCheckoutSchema = object({
   userId: string(),
@@ -23,7 +25,8 @@ export var subscriptionCheckoutSchema = object({
   // 省略時は月払い
   interval: optional(union([literal("month"), literal("year")])),
   // ライトの 7 日間無料お試し（lib/subscription-trial.ts）
-  trial: optional(boolean())
+  trial: optional(boolean()),
+  locale: optional(nullable(string()))
 });
 export var premiumCoinCheckoutSchema = object({
   userId: string(),
@@ -32,7 +35,8 @@ export var premiumCoinCheckoutSchema = object({
   priceYen: number(),
   origin: string(),
   successPath: optional(string()),
-  cancelPath: optional(string())
+  cancelPath: optional(string()),
+  locale: optional(nullable(string()))
 });
 export var premiumCoinConfirmSchema = object({
   userId: string(),
@@ -54,6 +58,7 @@ stripeRoutes.post("/checkout/points", async (c) => {
     origin: parsed.output.origin,
     userId: parsed.output.userId,
     points: parsed.output.points,
+    locale: parsed.output.locale,
     db
   });
   if (!response.url) {
@@ -102,6 +107,7 @@ stripeRoutes.post("/checkout/subscription", async (c) => {
       interval,
       couponId: isFirstSubscription ? c.env.FIRST_MONTH_COUPON_ID : null,
       trialDays,
+      locale: parsed.output.locale,
       db
     });
     if (!response.url) {
@@ -149,7 +155,8 @@ export var prepaidPassCheckoutSchema = object({
   userId: string(),
   passType: union([literal("LITE"), literal("STANDARD"), literal("PREMIUM")]),
   interval: union([literal("month"), literal("year")]),
-  origin: string()
+  origin: string(),
+  locale: optional(nullable(string()))
 });
 // 自動更新なしのプラン（PayPay などの 1 回払い。lib/prepaid-pass.ts）
 stripeRoutes.post("/checkout/prepaid-pass", async (c) => {
@@ -191,7 +198,7 @@ stripeRoutes.post("/checkout/prepaid-pass/confirm", async (c) => {
     return json({ error: "Checkout session does not belong to this user" }, 403);
   }
   const db = await getDb(c.env);
-  const result = await applyPrepaidPassFromSession(db, session);
+  const result = await applyPrepaidPassFromSession(db, session, c.env);
   if (result.error) {
     return json({ error: result.error }, result.status ?? 400);
   }
@@ -243,7 +250,8 @@ stripeRoutes.post("/checkout/premium-coins", async (c) => {
     bonusCoins: parsed.output.bonusCoins,
     priceYen: parsed.output.priceYen,
     successPath: parsed.output.successPath,
-    cancelPath: parsed.output.cancelPath
+    cancelPath: parsed.output.cancelPath,
+    locale: parsed.output.locale
   });
   if (!response.url) {
     return json({ error: response.error?.message ?? "Failed to create checkout session" }, 502);

@@ -3,6 +3,7 @@ import { toHex } from "./auth"
 import { getNow } from "./db"
 import { escapeHtml, formatJstDate } from "./subscription-cancellation-email"
 import { RENEWAL_BONUS_COINS } from "./loyalty"
+import { getStripe } from "./subscription-stripe"
 
 /**
  * 解約を減らすための仕組み
@@ -61,6 +62,51 @@ var unsubscribeUrl = async (secret, userId) => {
 var PLAN_NAME = { LITE: "ライト", STANDARD: "スタンダード", PREMIUM: "プレミアム" };
 var DAILY_COINS = { LITE: 500, STANDARD: 1000, PREMIUM: 2000 };
 
+var PLAN_NAME_EN = { LITE: "Lite", STANDARD: "Standard", PREMIUM: "Premium" };
+
+/**
+ * 解約のリマインドのメール。言語が分かっていれば（locale が "en" / "ja"）その言語だけ、分からなければ日本語と英語の両方
+ */
+export var buildCancelReminderEmail = (props) => {
+  const plan = PLAN_NAME[props.passType] ?? props.passType;
+  const planEn = PLAN_NAME_EN[props.passType] ?? props.passType;
+  const endText = formatJstDate(props.periodEnd) ?? "";
+  const endTextEn = props.periodEnd
+    ? new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "short", day: "numeric" }).format(new Date(props.periodEnd * 1e3))
+    : "";
+  const bonus = RENEWAL_BONUS_COINS[props.passType] ?? 0;
+  const daily = DAILY_COINS[props.passType] ?? 0;
+  const button = (href, label) =>
+    `<p><a href="${href}" style="display:inline-block;background:#0ea5e9;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">${label}</a></p>`;
+  const japanese = [
+    "<p>Aipictors をご利用いただきありがとうございます。</p>",
+    `<p>Aipictors+（${escapeHtml(plan)}）は <b>${escapeHtml(endText)}</b> で終了します。</p>`,
+    `<p>終了後は、毎日もらえるフリーコインが ${daily} から 100 に減り、1回にまとめて生成できる枚数や広告なしなどの特典もなくなります。</p>`,
+    `<p>続ける場合は、プランのページで「解約を取り消す」を押すだけで、今と同じ内容で続けられます。続けると、更新のたびに<b>継続ボーナス ${bonus} プレミアムコイン（期限なし）</b>もお届けします。</p>`,
+    button("https://www.aipictors.com/plus", "プランのページを開く"),
+    "<p>このまま終了する場合は、何もしなくて大丈夫です（料金はかかりません）。困っていることがあれば、<a href=\"https://www.aipictors.com/support/chat\">お問い合わせ</a>からお気軽にどうぞ。</p>",
+    props.optout ? `<p style="color:#9ca3af;font-size:12px"><a href="${props.optout}" style="color:#9ca3af">このようなお知らせを受け取らない</a></p>` : ""
+  ];
+  const english = [
+    "<p>Thank you for using Aipictors.</p>",
+    `<p>Your Aipictors+ (${escapeHtml(planEn)}) plan ends on <b>${escapeHtml(endTextEn)}</b> (Japan time).</p>`,
+    `<p>After it ends, your daily free coins go from ${daily} down to 100, and you lose plan benefits such as generating several images per click and no ads.</p>`,
+    `<p>To keep your plan, just press "Undo cancellation" on the plan page. If you continue, you also get a <b>renewal bonus of ${bonus} premium coins (no expiry)</b> every time the plan renews.</p>`,
+    button("https://www.aipictors.com/en/plus", "Open the plan page"),
+    "<p>If you'd rather let it end, you don't need to do anything (you won't be charged). If you need help, <a href=\"https://www.aipictors.com/en/support/chat\">contact us</a> anytime.</p>",
+    props.optout ? `<p style="color:#9ca3af;font-size:12px"><a href="${props.optout}" style="color:#9ca3af">Stop receiving emails like this</a></p>` : ""
+  ];
+  const divider = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">';
+  const body = props.locale === "en" ? english : props.locale === "ja" ? japanese : [...japanese, divider, ...english];
+  const subjectJa = `【Aipictors】Aipictors+ は ${endText} で終了します`;
+  const subjectEn = `[Aipictors] Your Aipictors+ plan ends on ${endTextEn}`;
+  return {
+    endText,
+    subject: props.locale === "en" ? subjectEn : props.locale === "ja" ? subjectJa : `${subjectJa} / Your plan ends on ${endTextEn}`,
+    html: ['<div style="font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;line-height:1.8;color:#111827">', ...body, "</div>"].join("")
+  };
+};
+
 /**
  * 解約予約中で、あと 2〜3 日で終わる人に一度だけ知らせる（毎日の定期処理から呼ぶ）
  */
@@ -84,31 +130,27 @@ export var sendCancelReminders = async (env, db, getStripeCustomerEmail) => {
   const from = `Aipictors <${env.RESEND_FROM_EMAIL ?? "noreply@info.aipictors.com"}>`;
   let sent = 0;
   for (const row of rows) {
-    const email = await getStripeCustomerEmail(env.STRIPE_SECRET_KEY, null, row.stripe_subscription_id).catch(() => null);
+    // 契約を 1 回読んで、送り先（顧客）と、決済のときの表示言語（metadata.locale）を得る
+    const stripeSubscription = await getStripe(env.STRIPE_SECRET_KEY, `/subscriptions/${row.stripe_subscription_id}`).catch(() => null);
+    const customerId = typeof stripeSubscription?.customer === "string" ? stripeSubscription.customer : null;
+    const email = await getStripeCustomerEmail(env.STRIPE_SECRET_KEY, customerId, row.stripe_subscription_id).catch(() => null);
     if (!email) continue;
-    const plan = PLAN_NAME[row.type] ?? row.type;
-    const endText = formatJstDate(Number(row.current_period_end)) ?? "";
-    const bonus = RENEWAL_BONUS_COINS[row.type] ?? 0;
-    const daily = DAILY_COINS[row.type] ?? 0;
     const optout = secret ? await unsubscribeUrl(secret, String(row.user_id)) : null;
-    const html = [
-      '<div style="font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;line-height:1.8;color:#111827">',
-      "<p>Aipictors をご利用いただきありがとうございます。</p>",
-      `<p>Aipictors+（${escapeHtml(plan)}）は <b>${escapeHtml(endText)}</b> で終了します。</p>`,
-      `<p>終了後は、毎日もらえるフリーコインが ${daily} から 100 に減り、1回にまとめて生成できる枚数や広告なしなどの特典もなくなります。</p>`,
-      `<p>続ける場合は、プランのページで「解約を取り消す」を押すだけで、今と同じ内容で続けられます。続けると、更新のたびに<b>継続ボーナス ${bonus} プレミアムコイン（期限なし）</b>もお届けします。</p>`,
-      '<p><a href="https://www.aipictors.com/plus" style="display:inline-block;background:#0ea5e9;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">プランのページを開く</a></p>',
-      "<p>このまま終了する場合は、何もしなくて大丈夫です（料金はかかりません）。困っていることがあれば、<a href=\"https://www.aipictors.com/support/chat\">お問い合わせ</a>からお気軽にどうぞ。</p>",
-      optout ? `<p style="color:#9ca3af;font-size:12px"><a href="${optout}" style="color:#9ca3af">このようなお知らせを受け取らない</a></p>` : "",
-      "</div>"
-    ].join("");
+    const message = buildCancelReminderEmail({
+      passType: row.type,
+      periodEnd: Number(row.current_period_end),
+      locale: stripeSubscription?.metadata?.locale ?? null,
+      optout
+    });
+    const endText = message.endText;
+    const html = message.html;
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from,
         to: [email],
-        subject: `【Aipictors】Aipictors+ は ${endText} で終了します`,
+        subject: message.subject,
         html,
         headers: optout ? { "List-Unsubscribe": `<${optout}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : undefined
       })

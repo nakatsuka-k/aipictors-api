@@ -41,6 +41,7 @@ const scheduled = async (controller, env, ctx) => {
           db,
           genlog: env.GENLOG ? await getGenlogDb(env) : null,
           core: env.SYSTEM_CORE ?? null,
+          env,
         }).catch((error) => {
           console.log(JSON.stringify({ event: "referral.action_rewards.failed", message: String(error?.message ?? error) }));
           return null;

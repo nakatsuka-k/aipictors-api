@@ -35,6 +35,7 @@
   "GET /internal/image-generation/tasks/count/:userId",
   "GET /internal/points/:userId",
   "GET /internal/referrals/stats",
+  "GET /internal/referrals/status",
   "GET /internal/subscriptions/by-nanoid/:nanoid",
   "GET /internal/subscriptions/current/:userId",
   "GET /internal/subscriptions/has-previous/:userId",

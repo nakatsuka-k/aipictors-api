@@ -3,7 +3,7 @@ import { getNow } from "./db"
 import { getPlanAmount, getPricingSettings } from "./pricing"
 import { getNumber, getString } from "./record-fields"
 import { grantReferralPaidReward } from "./referrals"
-import { postStripeForm } from "./stripe"
+import { PLAN_DISPLAY_NAME, postStripeForm, setCheckoutLocale } from "./stripe"
 import { getCurrentSubscription } from "./subscriptions"
 
 /**
@@ -69,8 +69,9 @@ export var createPrepaidPassCheckout = async (props) => {
   params.set("line_items[0][price_data][unit_amount]", String(amount))
   params.set(
     "line_items[0][price_data][product_data][name]",
-    `Aipictors ${props.passType} ${interval === "year" ? "1年" : "1か月"}パス（自動更新なし）`
+    `Aipictors+ ${PLAN_DISPLAY_NAME[props.passType]} ${interval === "year" ? "1年パス / 1-year pass" : "1か月パス / 1-month pass"}（自動更新なし / no auto-renewal）`
   )
+  setCheckoutLocale(params, props.locale)
   for (const key of ["metadata", "payment_intent_data[metadata]"]) {
     params.set(`${key}[kind]`, "prepaid_pass")
     params.set(`${key}[user_id]`, props.userId)
@@ -84,7 +85,7 @@ export var createPrepaidPassCheckout = async (props) => {
 /**
  * 支払われたパスを反映する（webhook と決済後の画面の両方から呼ぶ。同じ決済は 1 回だけ反映する）
  */
-export var applyPrepaidPass = async (db, props) => {
+export var applyPrepaidPass = async (db, props, env) => {
   const existing = await db.queryOne(
     "SELECT * FROM prepaid_pass_purchases WHERE stripe_session_id = $1",
     [props.sessionId]
@@ -149,7 +150,7 @@ export var applyPrepaidPass = async (db, props) => {
   )
   // 紹介特典: 紹介された人のはじめての支払いで、紹介した人にコインを付ける
   if ((props.priceYen ?? 0) > 0) {
-    await grantReferralPaidReward({ db, userId: props.userId }).catch((error) => {
+    await grantReferralPaidReward({ db, core: env?.SYSTEM_CORE ?? null, env, userId: props.userId }).catch((error) => {
       console.warn("[prepaid-pass] failed to grant referral paid reward", error instanceof Error ? error.message : String(error))
     })
   }
@@ -157,7 +158,7 @@ export var applyPrepaidPass = async (db, props) => {
 }
 
 /** Stripe の決済（checkout session）の内容から反映する。支払い済みでなければ反映しない */
-export var applyPrepaidPassFromSession = async (db, session) => {
+export var applyPrepaidPassFromSession = async (db, session, env) => {
   const metadata = session?.metadata ?? {}
   if (getString(metadata, "kind") !== "prepaid_pass") {
     return { error: "Invalid checkout kind", status: 400 }
@@ -176,7 +177,7 @@ export var applyPrepaidPassFromSession = async (db, session) => {
     interval: getString(metadata, "interval"),
     priceYen: getNumber(session, "amount_total") ?? Number.parseInt(getString(metadata, "price_yen") ?? "0", 10),
     paymentIntentId: getString(session, "payment_intent")
-  })
+  }, env)
   return { error: null, data: { reflected: true, ...result } }
 }
 

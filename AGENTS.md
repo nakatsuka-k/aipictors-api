@@ -57,3 +57,6 @@ DDL は戻らない。
   - 紹介された人のはじめての生成・投稿は 5 分ごとの cron で確かめる（GENLOG の `generated_queues` / `image_generation_results`、core の `works`）。はじめての支払いは `invoice.payment_succeeded`（¥1 以上）と自動更新なしのパスの反映で付ける。
   - 登録時刻と同じ IP の利用は aipictors-system の core（バインド `SYSTEM_CORE` の `wp_users`・`ip_bindings`）から読む。
   - 数字（300 / 300 / 2,000、7 日、月 20 人）を変えるときは、フロントの `app/lib/referral/referral-rewards.ts` も直す。
+- 紹介特典を止める: wrangler の var `REFERRAL_ENABLED` を `""` か `"0"` にしてデプロイ（新しいひも付けと付与が止まる。画面は `/internal/referrals/status` を見て「受け付けていません」と出す）。
+- Stripe の画面の言語: 決済・カード変更の入口は body の `locale`（"en" / "ja"）を受け取り、"en" のときだけ Stripe に `locale=en` を渡す。契約の metadata `locale` に残し、お試しの終了前・解約のリマインドのメールの言語に使う（無ければ日英併記）。
+- `node_modules` を別の worktree へのシンボリックリンクにするときは、コミットに入っていないことを確かめる（一度入ってしまい、pull した側の node_modules が消えた）。

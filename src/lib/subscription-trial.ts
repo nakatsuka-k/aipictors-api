@@ -77,15 +77,26 @@ export var getTrialByStripeSubscriptionId = async (db, stripeSubscriptionId) =>
 export var buildTrialSubmitMessage = (props) => {
   const end = props.now + props.trialDays * 86400
   const ja = formatJstDate(end)
-  const en = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "short", day: "numeric" }).format(new Date(end * 1e3))
+  const en = formatJstDateEn(end)
   const yen = props.amount.toLocaleString("en-US")
-  return [
+  const japanese = [
     `${props.trialDays}日間は無料です。無料期間の終了日（本日お申し込みの場合は${ja}）以降、月額¥${yen}が自動で課金され、以後は毎月自動で更新されます。`,
-    "無料期間中を含め、プランのページからいつでも解約できます（無料期間中に解約すれば請求はありません）。無料お試しは1人1回です。",
+    "無料期間中を含め、プランのページからいつでも解約できます（無料期間中に解約すれば請求はありません）。無料お試しは1人1回です。"
+  ]
+  const english = [
     `Free for ${props.trialDays} days. After the trial ends (${en} if you start today), you will be charged ¥${yen}/month automatically and the plan renews monthly.`,
     "You can cancel anytime from the plan page — no charge if you cancel during the trial. One free trial per person."
-  ].join(" ")
+  ]
+  // 言語が分かっていればその言語だけ、分からなければ両方
+  if (props.locale === "en") return english.join(" ")
+  if (props.locale === "ja") return japanese.join(" ")
+  return [...japanese, ...english].join(" ")
 }
+
+export var formatJstDateEn = (unixSeconds) =>
+  unixSeconds
+    ? new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "short", day: "numeric" }).format(new Date(unixSeconds * 1e3))
+    : null
 
 /** 契約に付いているカードの fingerprint（カード以外・取れないときは null） */
 export var getCardFingerprint = (stripeSubscription) => {
@@ -214,7 +225,8 @@ export var sendTrialWillEndEmail = async (env, db, stripeSubscription) => {
   const trialEnd = getNumber(stripeSubscription, "trial_end") ?? getNumber(trial, "trial_end")
   const pricing = await getPricingSettings(db)
   const amount = getPlanAmount(pricing, getString(trial, "pass_type") ?? TRIAL_PASS_TYPE, "month")
-  const message = buildTrialWillEndEmail({ trialEnd, amount })
+  // 決済のときの表示言語（契約の metadata）。分からなければ日本語と英語の両方で送る
+  const message = buildTrialWillEndEmail({ trialEnd, amount, locale: getString(stripeSubscription.metadata ?? {}, "locale") })
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -234,24 +246,32 @@ export var sendTrialWillEndEmail = async (env, db, stripeSubscription) => {
 
 export var buildTrialWillEndEmail = (props) => {
   const endText = formatJstDate(props.trialEnd) ?? ""
-  const endTextEn = props.trialEnd
-    ? new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "short", day: "numeric" }).format(new Date(props.trialEnd * 1e3))
-    : ""
+  const endTextEn = formatJstDateEn(props.trialEnd) ?? ""
   const yen = Number(props.amount).toLocaleString("en-US")
-  const html = [
-    '<div style="font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;line-height:1.8;color:#111827">',
+  const button = (href, label) =>
+    `<p><a href="${href}" style="display:inline-block;background:#0ea5e9;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">${label}</a></p>`
+  const japanese = [
     "<p>Aipictors をご利用いただきありがとうございます。</p>",
     `<p>Aipictors+ ライトプランの無料お試しは <b>${escapeHtml(endText)}</b> に終了します。</p>`,
     `<p>終了後は、ご登録のカードに <b>月額 ¥${yen}（税込）</b> が自動で請求され、以後は毎月自動で更新されます。続ける場合は、何もしなくて大丈夫です。</p>`,
     `<p>続けない場合は、${escapeHtml(endText)} より前に、プランのページの「解約する」から手続きをしてください。無料期間中に解約すれば請求はありません（無料期間の終わりまではそのまま使えます）。</p>`,
-    '<p><a href="https://www.aipictors.com/plus" style="display:inline-block;background:#0ea5e9;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">プランのページを開く</a></p>',
-    '<p>困っていることがあれば、<a href="https://www.aipictors.com/support/chat">お問い合わせ</a>からお気軽にどうぞ。</p>',
-    '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">',
-    `<p style="color:#4b5563">Your free trial of the Aipictors+ Lite plan ends on <b>${escapeHtml(endTextEn)}</b> (JST). After that, your card will be charged <b>¥${yen}/month</b> automatically and the plan renews monthly. To avoid being charged, cancel from the <a href="https://www.aipictors.com/en/plus">plan page</a> before the trial ends — you can keep using the plan until then.</p>`,
-    "</div>"
-  ].join("")
+    button("https://www.aipictors.com/plus", "プランのページを開く"),
+    '<p>困っていることがあれば、<a href="https://www.aipictors.com/support/chat">お問い合わせ</a>からお気軽にどうぞ。</p>'
+  ]
+  const english = [
+    "<p>Thank you for using Aipictors.</p>",
+    `<p>Your free trial of the Aipictors+ Lite plan ends on <b>${escapeHtml(endTextEn)}</b> (Japan time).</p>`,
+    `<p>After that, your card will be charged <b>¥${yen} per month (tax included)</b> automatically, and the plan renews every month. If you want to continue, you don't need to do anything.</p>`,
+    `<p>If you don't want to continue, cancel from the plan page before ${escapeHtml(endTextEn)}. You won't be charged if you cancel during the trial, and you can keep using the plan until the trial ends.</p>`,
+    button("https://www.aipictors.com/en/plus", "Open the plan page"),
+    '<p>If you need help, <a href="https://www.aipictors.com/en/support/chat">contact us</a> anytime.</p>'
+  ]
+  const divider = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">'
+  const body = props.locale === "en" ? english : props.locale === "ja" ? japanese : [...japanese, divider, ...english]
+  const subjectJa = `【Aipictors】無料お試しは ${endText} に終了します（以後 月額¥${yen}）`
+  const subjectEn = `[Aipictors] Your free trial ends on ${endTextEn} (then ¥${yen}/month)`
   return {
-    subject: `【Aipictors】無料お試しは ${endText} に終了します（以後 月額¥${yen}）`,
-    html
+    subject: props.locale === "en" ? subjectEn : props.locale === "ja" ? subjectJa : `${subjectJa} / Your free trial ends on ${endTextEn}`,
+    html: ['<div style="font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;line-height:1.8;color:#111827">', ...body, "</div>"].join("")
   }
 }

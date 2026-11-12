@@ -115,7 +115,7 @@ webhookRoutes.post("/stripe/premium-coins", async (c) => {
     const kind = getString(metadata, "kind");
     // 自動更新なしのプラン（PayPay などの 1 回払い）。決済後の画面からも反映するが、画面を閉じた人のためにここでも反映する
     if (kind === "prepaid_pass") {
-      const result = await applyPrepaidPassFromSession(db, object2);
+      const result = await applyPrepaidPassFromSession(db, object2, c.env);
       if (result.error) {
         console.error("[webhooks.premium-coins] prepaid pass not applied", { eventId: event.id, error: result.error });
       }
@@ -322,7 +322,7 @@ webhookRoutes.post("/stripe", async (c) => {
       });
       // 紹介特典: 紹介された人のはじめての支払い（¥1 以上。無料お試しの開始は含めない）で、紹介した人にコインを付ける
       if (amountPaid > 0) {
-        await grantReferralPaidReward({ db, core: c.env.SYSTEM_CORE ?? null, userId }).catch((error) => {
+        await grantReferralPaidReward({ db, core: c.env.SYSTEM_CORE ?? null, env: c.env, userId }).catch((error) => {
           console.warn("Failed to grant referral paid reward", { eventId: event.id, message: error instanceof Error ? error.message : String(error) });
         });
       }

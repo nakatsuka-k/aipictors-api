@@ -301,5 +301,39 @@ await test("紹介した人が受け取れるのは月 20 人分まで。超え�
   assert.equal(Number((await db.queryOne<any>("SELECT referrer_capped FROM referrals WHERE referred_user_id = $1", [next])).referrer_capped), 0)
 })
 
+await test("止めるスイッチ（REFERRAL_ENABLED が空・0）: 新しいひも付けと付与を止める。成立済みの表示は残す", async () => {
+  const owner = "6500"
+  const code = await codeOf(owner)
+  const before = await newUser()
+  assert.equal((await attach(before, code, { ip: "198.51.105.1" })).attached, true)
+  for (const value of ["", "0"]) {
+    ;(env as any).REFERRAL_ENABLED = value
+    assert.equal((await call("GET", "/internal/referrals/status")).body.data.enabled, false)
+    const user = await newUser()
+    const result = await attach(user, code, { ip: "198.51.105.2" })
+    assert.deepEqual(result, { attached: false, reason: "disabled", grantedCoins: 0 })
+    assert.equal(await freeBalance(user), 0)
+    assert.deepEqual(await rejections(user), [])
+  }
+  // 成立済みの人が生成・支払いをしても付かない。表示は残る
+  await generate(before)
+  await grantReferralActionRewards({ db, genlog, core: CORE, env })
+  assert.equal(await webhook("invoice.payment_succeeded", paidInvoice(before, 480)), 200)
+  await applyPrepaidPass(db, { sessionId: "cs_pass_off", userId: before, passType: "LITE", interval: "month", priceYen: 480 }, env)
+  assert.equal(await freeBalance(owner), 0)
+  const summary = (await call("POST", "/internal/referrals/summary", { userId: owner })).body.data
+  assert.equal(summary.enabled, false)
+  assert.equal(summary.invitedCount, 1)
+  assert.equal(summary.code, code)
+  // 再開すると、新しいひも付けと、はじめての生成の分が付く
+  ;(env as any).REFERRAL_ENABLED = "1"
+  const status = (await call("GET", "/internal/referrals/status")).body.data
+  assert.deepEqual(status, { enabled: true, rewards: { signup: 300, action: 300, paid: 2000 }, coinTtlDays: 7, monthlyLimit: 20 })
+  const after = await newUser()
+  assert.equal((await attach(after, code, { ip: "198.51.105.3" })).attached, true)
+  await grantReferralActionRewards({ db, genlog, core: CORE, env, referrerUserId: owner })
+  assert.equal(await freeBalance(owner), 300)
+})
+
 await coreMf.dispose()
 process.exit(failed > 0 ? 1 : 0)

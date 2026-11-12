@@ -41,6 +41,20 @@ export var verifyStripeSignature = async (props) => {
   const expected = await signPayload(props.secret, `${timestamp}.${props.payload}`);
   return signatures.some((value) => constantTimeEqual(value, expected));
 };
+/** 商品名（Stripe の商品名は 1 言語しか持てないので、日本語と英語を並べる） */
+export var PLAN_DISPLAY_NAME = {
+  LITE: "ライト / Lite",
+  STANDARD: "スタンダード / Standard",
+  PREMIUM: "プレミアム / Premium"
+};
+/** フロントから来た表示言語（"en" / "ja"。分からなければ null） */
+export var toCheckoutLocale = (value) => (value === "en" || value === "ja" ? value : null);
+/**
+ * 決済画面の言語。英語のページから来た人は英語にする。それ以外は今までどおり Stripe に任せる（ブラウザの言語）
+ */
+export var setCheckoutLocale = (params, locale) => {
+  if (toCheckoutLocale(locale) === "en") params.set("locale", "en");
+};
 export var postStripeForm = async (secretKey, params) => {
   const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",
@@ -98,6 +112,7 @@ export var createPointCheckout = async (props) => {
   params.set("payment_intent_data[metadata][kind]", "points");
   params.set("payment_intent_data[metadata][user_id]", props.userId);
   params.set("payment_intent_data[metadata][points]", String(props.points));
+  setCheckoutLocale(params, props.locale);
   return postStripeForm(props.secretKey, params);
 };
 export var createSubscriptionCheckout = async (props) => {
@@ -116,8 +131,16 @@ export var createSubscriptionCheckout = async (props) => {
   params.set("line_items[0][price_data][recurring][interval]", interval);
   params.set(
     "line_items[0][price_data][product_data][name]",
-    interval === "year" ? `Aipictors ${props.passType} (年払い)` : `Aipictors ${props.passType}`
+    interval === "year"
+      ? `Aipictors+ ${PLAN_DISPLAY_NAME[props.passType]}（年払い / Yearly）`
+      : `Aipictors+ ${PLAN_DISPLAY_NAME[props.passType]}`
   );
+  setCheckoutLocale(params, props.locale);
+  // メール（お試しの終了前・解約のリマインド）の言語を決めるために覚えておく
+  if (toCheckoutLocale(props.locale)) {
+    params.set("metadata[locale]", props.locale);
+    params.set("subscription_data[metadata][locale]", props.locale);
+  }
   params.set("metadata[kind]", "subscription");
   params.set("metadata[user_id]", props.userId);
   params.set("metadata[pass_type]", props.passType);
@@ -141,7 +164,7 @@ export var createSubscriptionCheckout = async (props) => {
     params.set("subscription_data[metadata][trial]", "1");
     params.set(
       "custom_text[submit][message]",
-      buildTrialSubmitMessage({ now: Math.floor(Date.now() / 1e3), trialDays: props.trialDays, amount })
+      buildTrialSubmitMessage({ now: Math.floor(Date.now() / 1e3), trialDays: props.trialDays, amount, locale: toCheckoutLocale(props.locale) })
     );
     return postStripeForm(props.secretKey, params);
   }
@@ -190,5 +213,6 @@ export var createPremiumCoinCheckout = async (props) => {
   params.set("payment_intent_data[metadata][bonus_coins]", String(bonusCoins));
   params.set("payment_intent_data[metadata][total_coins]", String(totalCoins));
   params.set("payment_intent_data[metadata][price_yen]", String(priceYen));
+  setCheckoutLocale(params, props.locale);
   return postStripeForm(props.secretKey, params);
 };
