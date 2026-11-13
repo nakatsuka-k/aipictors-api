@@ -6,6 +6,7 @@
  * - RunPod: 請求 API の時間ごとの実額（Pod と保存領域）
  * - Google（Gemini API）: BigQuery の請求エクスポートの実額（クレジット差し引き後）
  * - OpenAI（組織 techpage）: Costs API の実額。日ごとの区切りが UTC なので、同じ日付の UTC の 1 日分を入れる
+ * - xAI（Grok）: 管理 API の利用額（USD）。日本時間の範囲で聞ける
  * どれかが失敗しても取れたところだけ返す（errors に理由）
  */
 
@@ -290,6 +291,37 @@ export var collectOpenaiCost = async (adminKey, day) => {
   return { usd: round(usd) };
 };
 
+var toTokyoText = (seconds) =>
+  new Date((seconds + 9 * 3600) * 1000).toISOString().slice(0, 19).replace("T", " ");
+
+/** xAI（Grok）: チームの利用額。範囲は日本時間で渡す（endTime は含まない） */
+export var collectXaiCost = async (managementKey, teamId, range) => {
+  if (!managementKey || !teamId) return null;
+  const response = await fetch(`https://management-api.x.ai/v1/billing/teams/${teamId}/usage`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${managementKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      analyticsRequest: {
+        timeRange: { startTime: toTokyoText(range.start), endTime: toTokyoText(range.end), timezone: "Asia/Tokyo" },
+        timeUnit: "TIME_UNIT_NONE",
+        values: [{ name: "usd", aggregation: "AGGREGATION_SUM" }],
+        groupBy: ["description"],
+        filters: [],
+      },
+    }),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(`xai usage ${response.status}: ${JSON.stringify(body).slice(0, 120)}`);
+  let usd = 0;
+  const byModel = {};
+  for (const series of body.timeSeries ?? []) {
+    const value = (series.dataPoints ?? []).reduce((total, point) => total + toNumber(point.values?.[0]), 0);
+    usd += value;
+    if (value >= 0.001) byModel[series.group?.[0] ?? "?"] = round(value);
+  }
+  return { usd: round(usd), byModel };
+};
+
 /** 1 ドルの円（無料の為替 API。取れなければ前の値か 155） */
 export var fetchUsdJpy = async () => {
   const response = await fetch("https://open.er-api.com/v6/latest/USD");
@@ -313,12 +345,13 @@ export var collectCosts = async (env, day, range, options = {}) => {
       return null;
     }
   };
-  const [fx, cloudflare, runpod, google, openai] = await Promise.all([
+  const [fx, cloudflare, runpod, google, openai, xai] = await Promise.all([
     options.fxUsdJpy ? options.fxUsdJpy : safe("fx", fetchUsdJpy),
     safe("cloudflare", () => collectCloudflareCost(env.CF_BILLING_TOKEN, range)),
     safe("runpod", () => collectRunpodCost(env.RUNPOD_API_KEY, range)),
     safe("google", () => collectGoogleCost(env.GCP_BILLING_SA_JSON, range)),
     options.skipOpenai ? null : safe("openai", () => collectOpenaiCost(env.OPENAI_ADMIN_KEY, day)),
+    safe("xai", () => collectXaiCost(env.XAI_MANAGEMENT_KEY, env.XAI_TEAM_ID, range)),
   ]);
   const fxUsdJpy = fx ?? FALLBACK_USD_JPY;
   const toJpy = (usd) => Math.round(usd * fxUsdJpy);
@@ -330,6 +363,7 @@ export var collectCosts = async (env, day, range, options = {}) => {
     items.google = { ...google, jpy };
   }
   if (openai) items.openai = { ...openai, jpy: toJpy(openai.usd) };
+  if (xai) items.xai = { ...xai, jpy: toJpy(xai.usd) };
   const jpy = Object.values(items).reduce((total, item) => total + toNumber(item.jpy), 0);
   return { fxUsdJpy, jpy, items, errors };
 };

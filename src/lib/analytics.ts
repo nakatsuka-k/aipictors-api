@@ -294,7 +294,7 @@ export var getLiveProfitAndLoss = async (env, db, nowSeconds, { fresh = false } 
     ? recentDays.reduce((total, metrics) => total + toNumber(metrics.stripe?.net) - toNumber(metrics.costs?.jpy), 0) / recentDays.length
     : null;
   const pastDays = rows.map((row) => ({ day: row.day, ...(typeof row.metrics === "string" ? JSON.parse(row.metrics) : row.metrics) }));
-  const costKeys = ["cloudflare", "runpod", "google", "openai"];
+  const costKeys = ["cloudflare", "runpod", "google", "openai", "xai"];
   const monthCosts = Object.fromEntries(costKeys.map((key) => [key, 0]));
   let monthRevenue = 0;
   let daysWithCosts = 0;
