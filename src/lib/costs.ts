@@ -278,7 +278,7 @@ export var collectOpenaiCost = async (adminKey, day) => {
     response = await fetch(`https://api.openai.com/v1/organization/costs?${params}`, {
       headers: { Authorization: `Bearer ${adminKey}` },
     });
-    if (response.status !== 429) break;
+    if (response.status !== 429 || attempt === 3) break;
     await response.body?.cancel();
     await new Promise((resolve) => setTimeout(resolve, 8000));
   }
