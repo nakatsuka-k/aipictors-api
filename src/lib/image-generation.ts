@@ -648,8 +648,24 @@ export var listImageGenerationResults = async (db, input) => {
     params
   );
 };
+/**
+ * 履歴の件数（消していない・画像のあるもの）の条件を、値を埋めた形で書く。
+ * 部分索引 idx_image_generation_results_user_visible は、条件が定数で書かれているときだけ使われる
+ * （? で渡すと (user_id, request_time) の索引で、消した履歴も含めてその人の全行を読む）
+ */
+var buildVisibleResultCountQuery = (input) => {
+  if (input.isDeleted !== false || !input.imageUrlPresent || input.fromDate) return null;
+  if (input.excludeStatuses && input.excludeStatuses.length > 0) return null;
+  if (!input.statuses || input.statuses.length === 0) return null;
+  if (!input.statuses.every((status) => /^[a-z_]+$/.test(status))) return null;
+  const statuses = input.statuses.map((status) => `'${status}'`).join(", ");
+  return {
+    params: [input.userId],
+    whereSql: `user_id = $1 AND status IN (${statuses}) AND is_deleted = 0 AND image_url IS NOT NULL AND image_url <> ''`
+  };
+};
 export var countImageGenerationResults = async (db, input) => {
-  const { params, whereSql } = buildResultQuery(input);
+  const { params, whereSql } = buildVisibleResultCountQuery(input) ?? buildResultQuery(input);
   // 上限つき: 上限まで数えたら止める（履歴のページ数は上限より先を使わないのに、多い人は 1 回で数万行読んでいた）
   if (input.maxCount) {
     params.push(input.maxCount);
