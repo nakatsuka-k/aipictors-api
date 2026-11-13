@@ -271,9 +271,16 @@ export var collectOpenaiCost = async (adminKey, day) => {
   if (!adminKey) return null;
   const start = Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000);
   const params = new URLSearchParams({ start_time: String(start), end_time: String(start + 86400), bucket_width: "1d", limit: "1" });
-  const response = await fetch(`https://api.openai.com/v1/organization/costs?${params}`, {
-    headers: { Authorization: `Bearer ${adminKey}` },
-  });
+  // Costs API は 1 分 10 回まで。まとめて集め直すときに当たるので少し待って取り直す
+  let response;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    response = await fetch(`https://api.openai.com/v1/organization/costs?${params}`, {
+      headers: { Authorization: `Bearer ${adminKey}` },
+    });
+    if (response.status !== 429) break;
+    await response.body?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 8000));
+  }
   const body = await response.json();
   if (!response.ok) throw new Error(`openai costs ${response.status}: ${body.error?.message ?? ""}`.slice(0, 160));
   let usd = 0;
