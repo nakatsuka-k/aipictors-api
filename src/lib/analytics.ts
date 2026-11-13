@@ -280,11 +280,19 @@ export var getLiveProfitAndLoss = async (env, db, nowSeconds, { fresh = false } 
   const today = jstDayBefore(nowSeconds, 0);
   const todayRange = { start: toJstDayRange(today).start, end: nowSeconds };
   const monthStart = `${today.slice(0, 8)}01`;
-  const [stripeToday, costsToday, rows] = await Promise.all([
+  const [stripeToday, costsToday, rows, recent] = await Promise.all([
     collectStripe(env.STRIPE_SECRET_KEY, todayRange).catch(() => null),
     collectCosts(env, today, todayRange, { skipOpenai: true }),
     db.query(`SELECT day, metrics FROM analytics_daily WHERE day >= $1 AND day < $2 ORDER BY day ASC`, [monthStart, today]),
+    db.query(`SELECT day, metrics FROM analytics_daily WHERE day >= date($1, '-7 days') AND day < $1 ORDER BY day ASC`, [today]),
   ]);
+  // 直近 7 日（月をまたいでもよい）の 1 日あたりの収支。月初の一時的な費用に引っぱられない見込みに使う
+  const recentDays = recent
+    .map((row) => (typeof row.metrics === "string" ? JSON.parse(row.metrics) : row.metrics))
+    .filter((metrics) => metrics?.costs);
+  const recentDailyProfit = recentDays.length
+    ? recentDays.reduce((total, metrics) => total + toNumber(metrics.stripe?.net) - toNumber(metrics.costs?.jpy), 0) / recentDays.length
+    : null;
   const pastDays = rows.map((row) => ({ day: row.day, ...(typeof row.metrics === "string" ? JSON.parse(row.metrics) : row.metrics) }));
   const costKeys = ["cloudflare", "runpod", "google", "openai"];
   const monthCosts = Object.fromEntries(costKeys.map((key) => [key, 0]));
@@ -324,6 +332,11 @@ export var getLiveProfitAndLoss = async (env, db, nowSeconds, { fresh = false } 
       daysWithCosts,
       storedDays: pastDays.length,
       projectedProfit: elapsedDays > 0 ? Math.round(((monthRevenue - monthCostTotal) / elapsedDays) * daysInMonth) : null,
+    },
+    recent: {
+      days: recentDays.length,
+      dailyProfit: recentDailyProfit === null ? null : Math.round(recentDailyProfit),
+      monthlyProfit: recentDailyProfit === null ? null : Math.round(recentDailyProfit * 30),
     },
   };
   if (cache) {
