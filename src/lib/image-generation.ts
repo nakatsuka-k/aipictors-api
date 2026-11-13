@@ -650,6 +650,18 @@ export var listImageGenerationResults = async (db, input) => {
 };
 export var countImageGenerationResults = async (db, input) => {
   const { params, whereSql } = buildResultQuery(input);
+  // 上限つき: 上限まで数えたら止める（履歴のページ数は上限より先を使わないのに、多い人は 1 回で数万行読んでいた）
+  if (input.maxCount) {
+    params.push(input.maxCount);
+    const capped = await db.queryOne(
+      `SELECT COUNT(*) AS count
+         FROM (SELECT 1 FROM image_generation_results
+                WHERE ${whereSql}
+                LIMIT $${params.length}) AS capped`,
+      params
+    );
+    return Number(capped?.count ?? 0);
+  }
   const result = await db.queryOne(
     `SELECT COUNT(*) AS count
        FROM image_generation_results

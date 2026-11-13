@@ -111,7 +111,9 @@ export var resultQuerySchema = object({
   excludeStatuses: optional(nullable(array(string()))),
   isDeleted: optional(nullable(boolean())),
   imageUrlPresent: optional(nullable(boolean())),
-  fromDate: optional(nullable(string()))
+  fromDate: optional(nullable(string())),
+  /** 件数だけ: この数まで数えたら止める */
+  maxCount: optional(nullable(number()))
 });
 export var listResultQuerySchema = object({
   userId: number(),
@@ -428,7 +430,8 @@ imageGenerationRoutes.post("/results/query/count", async (c) => {
     excludeStatuses: parsed.output.excludeStatuses ?? null,
     isDeleted: parsed.output.isDeleted ?? null,
     imageUrlPresent: parsed.output.imageUrlPresent ?? null,
-    fromDate: parsed.output.fromDate ? new Date(parsed.output.fromDate) : null
+    fromDate: parsed.output.fromDate ? new Date(parsed.output.fromDate) : null,
+    maxCount: parsed.output.maxCount && parsed.output.maxCount > 0 ? Math.floor(parsed.output.maxCount) : null
   });
   await writeLargeResultCount(c, parsed.output, count);
   return json({ error: null, data: { count } });

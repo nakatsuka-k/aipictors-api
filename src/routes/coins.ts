@@ -585,6 +585,9 @@ coinsRoutes.post("/grant-support", async (c) => {
 export var publicCoinsRoutes = new Hono2();
 // 順位の集計は 1 回で今週の全件（数万行）を読むので、同じ条件は少しの間データセンターの中で使い回す
 var RANKING_CACHE_SECONDS = 900;
+// Service Binding 経由の呼び出しでは Cache API が効かないので、同じ isolate の中でも覚えておく
+var RANKING_MEMORY_MAX = 200;
+var rankingMemory = new Map();
 var withRankingCache = async (c, build) => {
   // 特定の人を推した一覧（プロフィールの累計）は件数が少なく、推した直後に反映されないと困るので使い回さない
   if (c.req.query("recipientUserId")?.trim()) {
@@ -592,11 +595,22 @@ var withRankingCache = async (c, build) => {
   }
   const cache = typeof caches === "undefined" ? null : caches.default;
   const key = new Request(`https://cache.internal/support-ranking${new URL(c.req.url).pathname}?${new URL(c.req.url).searchParams.toString()}`);
+  const remembered = rankingMemory.get(key.url);
+  if (remembered && remembered.expiresAt > Date.now()) {
+    return json(remembered.body);
+  }
+  const remember = (body) => {
+    if (rankingMemory.size >= RANKING_MEMORY_MAX) rankingMemory.clear();
+    rankingMemory.set(key.url, { expiresAt: Date.now() + RANKING_CACHE_SECONDS * 1e3, body });
+  };
   const hit = await cache?.match(key).catch(() => void 0);
   if (hit) {
-    return json(await hit.json());
+    const body = await hit.json();
+    remember(body);
+    return json(body);
   }
   const body = await build();
+  if (body?.error === null) remember(body);
   c.executionCtx.waitUntil(
     cache?.put(key, new Response(JSON.stringify(body), { headers: { "Cache-Control": `public, max-age=${RANKING_CACHE_SECONDS}`, "Content-Type": "application/json" } })).catch(() => void 0) ?? Promise.resolve()
   );
