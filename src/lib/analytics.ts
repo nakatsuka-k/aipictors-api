@@ -1,6 +1,7 @@
 // @ts-nocheck -- 周りのファイルに合わせて型は付けていない
 import { getGenlogDb } from "./db"
 import { collectCosts } from "./costs"
+import { collectUsersDay, collectUsersMonth } from "./analytics-users"
 
 /**
  * 分析ページ用の日別の数字（日本時間の 1 日ごとに 1 行）
@@ -144,6 +145,65 @@ var toTop = (groups, key, limit = 15) =>
     .map((group) => ({ name: group.dimensions?.[key] || "(なし)", count: toNumber(group.count) }))
     .slice(0, limit);
 
+/** 国別の件数 → 合計・日本・上位（日本と海外の比を見るため、合計は上位に入らない国も含める） */
+var toCountryTotals = (groups, limit = 15) => {
+  let total = 0;
+  let jp = 0;
+  for (const group of groups ?? []) {
+    const count = toNumber(group.count);
+    total += count;
+    if (group.dimensions?.clientCountryName === "JP") jp += count;
+  }
+  return { total, jp, countries: toTop(groups, "clientCountryName", limit) };
+};
+
+/**
+ * 計測（/api/pv）の国別。ブラウザで開いた人だけなので、HTML の国別（ボットを含む）より実際の利用者に近い
+ * a=1 はログイン中。d=1 / w=1 / m=1 はそのブラウザでその日・週・月の最初の表示、n=1 は初めての表示（ブラウザに日付だけ覚えさせている）
+ * → d=1 の数がその日の訪問者数（ブラウザ数）になる
+ */
+var collectPageViewCountries = async (token, startTime, endTime) => {
+  const group = (alias, like) =>
+    `${alias}: httpRequestsAdaptiveGroups(limit: 300, filter: { datetime_geq: $s, datetime_lt: $e, clientRequestPath: "/api/pv", edgeResponseStatus_in: [200, 204]${like ? `, clientRequestQuery_like: "${like}"` : ""} }, orderBy: [count_DESC]) {
+          count dimensions { clientCountryName }
+        }`;
+  const zone = await cloudflareQuery(
+    token,
+    `query($z: String!, $s: Time!, $e: Time!) {
+      viewer { zones(filter: { zoneTag: $z }) {
+        ${group("pv", "")}
+        ${group("pvLoggedIn", "%&a=1%")}
+        ${group("daily", "%&d=1%")}
+        ${group("dailyLoggedIn", "%&a=1%&d=1%")}
+        ${group("weekFirst", "%&w=1%")}
+        ${group("monthFirst", "%&m=1%")}
+        ${group("newcomers", "%&n=1%")}
+      } }
+    }`,
+    { z: ZONE_ID, s: startTime, e: endTime }
+  );
+  const daily = toCountryTotals(zone?.daily);
+  const short = (groups) => {
+    const { total, jp } = toCountryTotals(groups);
+    return { total, jp };
+  };
+  return {
+    pv: toCountryTotals(zone?.pv),
+    pvLoggedIn: short(zone?.pvLoggedIn),
+    // 計測に d=1 を付ける前の日は 0 件なので、数えていないことが分かるよう null にする
+    visitors:
+      daily.total > 0
+        ? {
+            ...daily,
+            loggedIn: short(zone?.dailyLoggedIn),
+            weekFirst: short(zone?.weekFirst),
+            monthFirst: short(zone?.monthFirst),
+            newcomers: short(zone?.newcomers),
+          }
+        : null,
+  };
+};
+
 /**
  * Cloudflare: ゾーン全体のアクセス、HTML を開いた人の流入元・国（ボットを含む参考値）、
  * サイトのスクリプトが送るページ表示の計測（/api/pv。ブラウザで開いた人だけ）
@@ -174,13 +234,14 @@ var collectCloudflare = async (token, day, range) => {
         countries: httpRequestsAdaptiveGroups(limit: 15, filter: { datetime_geq: $s, datetime_lt: $e, requestSource: "eyeball", edgeResponseContentTypeName: "html", edgeResponseStatus: 200 }, orderBy: [count_DESC]) {
           count dimensions { clientCountryName }
         }
-        pv: httpRequestsAdaptiveGroups(limit: 200, filter: { datetime_geq: $s, datetime_lt: $e, clientRequestPath: "/api/pv", edgeResponseStatus_in: [200, 204] }, orderBy: [count_DESC]) {
+        pv: httpRequestsAdaptiveGroups(limit: 5000, filter: { datetime_geq: $s, datetime_lt: $e, clientRequestPath: "/api/pv", edgeResponseStatus_in: [200, 204] }, orderBy: [count_DESC]) {
           count dimensions { clientRequestQuery }
         }
       } }
     }`,
     { z: ZONE_ID, s: startTime, e: endTime }
   ).catch(() => null);
+  const byCountry = await collectPageViewCountries(token, startTime, endTime).catch(() => null);
   const daily = totals?.daily?.[0];
   const pv = { total: 0, landings: 0, bySource: {}, bySection: {} };
   for (const group of zone?.pv ?? []) {
@@ -202,7 +263,8 @@ var collectCloudflare = async (token, day, range) => {
     bytes: toNumber(daily?.sum?.bytes),
     referers: toTop(zone?.referers, "clientRefererHost"),
     countries: toTop(zone?.countries, "clientCountryName"),
-    pv,
+    pv: { ...pv, byCountry: byCountry?.pv ?? null, loggedIn: byCountry?.pvLoggedIn ?? null },
+    visitors: byCountry?.visitors ?? null,
   };
 };
 
@@ -219,22 +281,64 @@ export var collectAnalyticsDay = async (env, db, day) => {
       return null;
     }
   };
-  const [subscriptions, coins, generations, stripe, cloudflare, costs] = await Promise.all([
+  // ログインした人数は翌日を過ぎると数え直せないので、集め直すときは保存済みの値を残す
+  const stored = await db.queryOne(`SELECT metrics FROM analytics_daily WHERE day = $1`, [day]).catch(() => null);
+  const storedMetrics = typeof stored?.metrics === "string" ? JSON.parse(stored.metrics) : stored?.metrics;
+  const today = jstDayBefore(Math.floor(Date.now() / 1000), 0);
+  const [subscriptions, coins, generations, stripe, cloudflare, costs, users] = await Promise.all([
     safe("subscriptions", () => collectSubscriptions(db, range)),
     safe("coins", () => collectCoinSales(db, range)),
     safe("generations", async () => collectGenerations(await getGenlogDb(env), day)),
     safe("stripe", () => collectStripe(env.STRIPE_SECRET_KEY, range)),
     safe("cloudflare", () => collectCloudflare(env.CF_ANALYTICS_TOKEN, day, range)),
     safe("costs", () => collectCosts(env, day, range)),
+    safe("users", () => collectUsersDay(env.SYSTEM_CORE, day, today, storedMetrics?.users)),
   ]);
   for (const message of costs?.errors ?? []) errors.push(`costs.${message}`);
-  const metrics = { subscriptions, coins, generations, stripe, cloudflare, costs, errors };
+  const metrics = { subscriptions, coins, generations, stripe, cloudflare, costs, users, errors };
   await db.execute(
     `INSERT INTO analytics_daily (day, metrics, updated_at) VALUES ($1, $2, $3)
     ON CONFLICT (day) DO UPDATE SET metrics = EXCLUDED.metrics, updated_at = EXCLUDED.updated_at`,
     [day, JSON.stringify(metrics), Math.floor(Date.now() / 1000)]
   );
   return { day, metrics };
+};
+
+/**
+ * 利用者の数字だけを集め直す（始める前の日を埋めるとき。Stripe や費用は呼ばない）
+ * 行がない日は作らない
+ */
+export var collectAnalyticsUsersDay = async (env, db, day) => {
+  const stored = await db.queryOne(`SELECT metrics FROM analytics_daily WHERE day = $1`, [day]);
+  if (!stored) return { day, skipped: true };
+  const metrics = typeof stored.metrics === "string" ? JSON.parse(stored.metrics) : stored.metrics;
+  const today = jstDayBefore(Math.floor(Date.now() / 1000), 0);
+  const range = toJstDayRange(day);
+  metrics.users = await collectUsersDay(env.SYSTEM_CORE, day, today, metrics.users);
+  if (metrics.cloudflare && env.CF_ANALYTICS_TOKEN) {
+    const byCountry = await collectPageViewCountries(
+      env.CF_ANALYTICS_TOKEN,
+      new Date(range.start * 1000).toISOString(),
+      new Date(range.end * 1000).toISOString()
+    ).catch(() => null);
+    // Cloudflare に詳しい集計が残っていない古い日は 0 件で返るので、そのときは書かない
+    if (byCountry && byCountry.pv.total > 0) {
+      metrics.cloudflare.pv = { ...metrics.cloudflare.pv, byCountry: byCountry.pv, loggedIn: byCountry.pvLoggedIn };
+      metrics.cloudflare.visitors = byCountry.visitors;
+    }
+  }
+  await db.execute(`UPDATE analytics_daily SET metrics = $2, updated_at = $3 WHERE day = $1`, [
+    day,
+    JSON.stringify(metrics),
+    Math.floor(Date.now() / 1000),
+  ]);
+  return { day, users: metrics.users };
+};
+
+/** その日が入る月の利用者の数字を数え直す（毎日の集計のあとに呼ぶ。月の途中はそこまでの数字） */
+export var collectAnalyticsUsersMonth = async (env, db, month) => {
+  if (!env.SYSTEM_CORE) return null;
+  return collectUsersMonth(env.SYSTEM_CORE, db, month);
 };
 
 /** 保存済みの日別の数字（古い順） */

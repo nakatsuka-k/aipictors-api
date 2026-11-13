@@ -8,7 +8,7 @@ import { sendPaymentFailedNotices } from "./lib/payment-failed-notice"
 import { sendNewSubscriberNudges } from "./lib/new-subscriber-nudge"
 import { getDb, getGenlogDb, getNow } from "./lib/db"
 import { grantReferralActionRewards } from "./lib/referrals"
-import { collectAnalyticsDay, jstDayBefore } from "./lib/analytics"
+import { collectAnalyticsDay, collectAnalyticsUsersMonth, jstDayBefore } from "./lib/analytics"
 import { runDiscordSyncBatch, sendCoinExpiryDms } from "./lib/discord"
 import { getStripeCustomerEmail } from "./routes/subscriptions"
 import { runWeeklyPickup } from "./lib/user-model-pickups"
@@ -109,6 +109,10 @@ const scheduled = async (controller, env, ctx) => {
           return null;
         });
         if (analytics) console.log(JSON.stringify({ event: "analytics.daily.done", day, errors: analytics.metrics.errors }));
+        // 利用者の月別の数字（その日が入る月を数え直す）
+        await collectAnalyticsUsersMonth(env, db, day.slice(0, 7)).catch((error) => {
+          console.log(JSON.stringify({ event: "analytics.users_monthly.failed", day, message: String(error?.message ?? error) }));
+        });
       }
     })()
   );

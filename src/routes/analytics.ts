@@ -3,11 +3,14 @@ import { Hono as Hono2 } from "hono"
 import { getBearer, getInternalApiToken } from "../lib/auth"
 import {
   collectAnalyticsDay,
+  collectAnalyticsUsersDay,
+  collectAnalyticsUsersMonth,
   getCurrentSubscriptionCounts,
   getLiveProfitAndLoss,
   jstDayBefore,
   listAnalyticsDays,
 } from "../lib/analytics"
+import { listUsersMonths, nextMonth } from "../lib/analytics-users"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 
@@ -66,6 +69,38 @@ analyticsRoutes.post("/collect", async (c) => {
   for (const day of days) {
     const { metrics } = await collectAnalyticsDay(c.env, db, day);
     results.push({ day, errors: metrics.errors });
+  }
+  return json({ results });
+});
+
+/** 利用者の月別の数字（登録・投稿した人・いいねした人）。サービス開始からの推移 */
+analyticsRoutes.get("/users/monthly", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const db = await getDb(c.env);
+  return json({ months: await listUsersMonths(db) });
+});
+
+/**
+ * 利用者の数字を集め直す（始める前の期間を埋めるとき）
+ * { months: { from: "YYYY-MM", to: "YYYY-MM" } } は月別（1 回 6 か月まで）、{ from: "YYYY-MM-DD", to: "YYYY-MM-DD" } は日別（1 回 31 日まで）
+ */
+analyticsRoutes.post("/users/collect", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const body = await c.req.json().catch(() => ({}));
+  const db = await getDb(c.env);
+  const results = [];
+  if (body.months) {
+    const pattern = /^\d{4}-\d{2}$/;
+    if (!pattern.test(body.months.from ?? "") || !pattern.test(body.months.to ?? "")) return json({ error: "Invalid months" }, 400);
+    for (let month = body.months.from; month <= body.months.to && results.length < 6; month = nextMonth(month)) {
+      results.push(await collectAnalyticsUsersMonth(c.env, db, month));
+    }
+    return json({ results });
+  }
+  const pattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!pattern.test(body.from ?? "") || !pattern.test(body.to ?? "")) return json({ error: "Invalid range" }, 400);
+  for (let t = Date.parse(`${body.from}T00:00:00Z`); t <= Date.parse(`${body.to}T00:00:00Z`) && results.length < 31; t += 86400000) {
+    results.push(await collectAnalyticsUsersDay(c.env, db, new Date(t).toISOString().slice(0, 10)));
   }
   return json({ results });
 });
