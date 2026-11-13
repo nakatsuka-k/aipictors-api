@@ -63,6 +63,8 @@ var toMessage = (row) => ({
       }
     : null,
   mentions: parseJson(row.mentions) ?? [],
+  /** "discord" = Discord で書かれたもの */
+  source: row.source ?? null,
   createdAt: Number(row.created_at)
 })
 
@@ -143,7 +145,145 @@ export var createPictorRunMessage = async (db, props) => {
       mentions.length > 0 ? JSON.stringify(mentions) : null, now
     ]
   )
-  return { error: null, message: toMessage(row) }
+  return { error: null, message: toMessage(row), row }
+}
+
+// ---- Discord のチャンネルとの連携 -------------------------------------------------
+// サイト → Discord: Webhook で、書いた人の名前とアイコンのまま写す
+// Discord → サイト: だれかがチャットを読みに来たときに、新しいものを取り込む（数秒に 1 回まで。だれも見ていない間は何もしない）
+var DISCORD_API = "https://discord.com/api/v10"
+/** Discord へ取りに行く間隔（秒） */
+var DISCORD_SYNC_INTERVAL_SECONDS = 4
+
+var discordConfig = (env) => {
+  const token = env?.PICTOR_RUN_DISCORD_BOT_TOKEN
+  const channelId = env?.PICTOR_RUN_DISCORD_CHANNEL_ID
+  const webhookUrl = env?.PICTOR_RUN_DISCORD_WEBHOOK_URL
+  return token && channelId && webhookUrl ? { token, channelId, webhookUrl } : null
+}
+
+/** Discord の文を、サイトで出す文にする（メンション・絵文字の記号を読める形に） */
+var toSiteBody = (message) => {
+  let text = typeof message.content === "string" ? message.content : ""
+  for (const user of message.mentions ?? []) {
+    text = text.split(`<@${user.id}>`).join(`@${user.global_name || user.username}`)
+    text = text.split(`<@!${user.id}>`).join(`@${user.global_name || user.username}`)
+  }
+  text = text
+    .replace(/<a?:(\w+):\d+>/g, ":$1:")
+    .replace(/<#\d+>/g, "#チャンネル")
+    .replace(/<@&\d+>/g, "@ロール")
+    .trim()
+  const images = (message.attachments ?? []).length + (message.sticker_items ?? []).length
+  if (images > 0) text = `${text}${text ? " " : ""}（画像）`
+  return text.slice(0, PICTOR_RUN_BODY_MAX_LENGTH)
+}
+
+/** Discord の新しいメッセージを取り込む */
+export var syncPictorRunDiscord = async (db, env, now) => {
+  const config = discordConfig(env)
+  if (!config) return
+  // 同時に何人が読みに来ても、取りに行くのは数秒に 1 回だけ
+  const claimed = await db.executeResult(
+    `INSERT INTO pictor_run_state (key, value, updated_at) VALUES ('discord_sync', '', $1)
+     ON CONFLICT (key) DO UPDATE SET updated_at = excluded.updated_at
+     WHERE pictor_run_state.updated_at <= $2`,
+    [now, now - DISCORD_SYNC_INTERVAL_SECONDS]
+  )
+  if ((claimed?.rowCount ?? 0) === 0) return
+  const state = await db.queryOne("SELECT value FROM pictor_run_state WHERE key = 'discord_last_id'", [])
+  const lastId = state?.value || ""
+  const response = await fetch(
+    `${DISCORD_API}/channels/${config.channelId}/messages?limit=${lastId ? 50 : 1}${lastId ? `&after=${lastId}` : ""}`,
+    { headers: { authorization: `Bot ${config.token}`, "user-agent": "DiscordBot (https://www.aipictors.com, 1.0)" } }
+  )
+  if (!response.ok) return
+  const list = await response.json().catch(() => null)
+  if (!Array.isArray(list) || list.length === 0) return
+  // 新しい順で届くので、古い順に入れる。はじめての回は、いまの位置を覚えるだけ（過去のものは取り込まない）
+  const messages = lastId ? list.slice().reverse() : []
+  for (const message of messages) {
+    // Webhook で写したもの（= サイトで書かれたもの）とボットは取り込まない。ふつうの発言と返信だけ
+    if (message.webhook_id || message.author?.bot || (message.type !== 0 && message.type !== 19)) continue
+    const body = toSiteBody(message)
+    if (body.length === 0) continue
+    const author = message.author
+    const name = String(message.member?.nick || author.global_name || author.username || "Discord").slice(0, 80)
+    const iconUrl = author.avatar
+      ? `https://cdn.discordapp.com/avatars/${author.id}/${author.avatar}.webp?size=128`
+      : null
+    let reply = null
+    const referenceId = message.message_reference?.message_id
+    if (referenceId) {
+      const target = await db.queryOne(
+        "SELECT id, user_id, user_name, body, sticker_url FROM pictor_run_messages WHERE discord_id = $1 AND deleted_at IS NULL",
+        [String(referenceId)]
+      )
+      if (target) {
+        reply = {
+          id: Number(target.id),
+          userId: target.user_id,
+          name: target.user_name,
+          excerpt: (target.body || (target.sticker_url ? "（スタンプ）" : "")).slice(0, 60)
+        }
+      }
+    }
+    await db.execute(
+      `INSERT OR IGNORE INTO pictor_run_messages
+         (user_id, user_name, icon_url, body, reply_to_id, reply_to_user_id, reply_to_name, reply_to_excerpt,
+          created_at, source, discord_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'discord', $10)`,
+      [
+        `discord:${author.id}`, name, iconUrl, body,
+        reply?.id ?? null, reply?.userId ?? null, reply?.name ?? null, reply?.excerpt ?? null,
+        now, String(message.id)
+      ]
+    )
+  }
+  await db.execute(
+    `INSERT INTO pictor_run_state (key, value, updated_at) VALUES ('discord_last_id', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [String(list[0].id), now]
+  )
+}
+
+/** サイトで書かれたものを、Discord のチャンネルに写す */
+export var sendPictorRunMessageToDiscord = async (db, env, row) => {
+  const config = discordConfig(env)
+  if (!config || !row) return
+  const quote = row.reply_to_name ? `> ↪ ${row.reply_to_name}: ${String(row.reply_to_excerpt ?? "").replace(/\n/g, " ")}\n` : ""
+  const content = `${quote}${row.body || ""}${row.sticker_url ? `${row.body ? "\n" : ""}${row.sticker_url}` : ""}`.slice(0, 1900)
+  if (content.length === 0) return
+  // Webhook の名前に「discord」「clyde」は使えない
+  const username = String(row.user_name).replace(/discord/gi, "d1scord").replace(/clyde/gi, "c1yde").slice(0, 80) || "Aipictors"
+  const response = await fetch(`${config.webhookUrl}?wait=true`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      content,
+      username,
+      avatar_url: typeof row.icon_url === "string" && row.icon_url.startsWith("https://") ? row.icon_url : undefined,
+      // サイトから @everyone などを飛ばせないようにする
+      allowed_mentions: { parse: [] }
+    })
+  })
+  if (!response.ok) return
+  const sent = await response.json().catch(() => null)
+  if (sent?.id) {
+    await db.execute("UPDATE pictor_run_messages SET discord_id = $1 WHERE id = $2 AND discord_id IS NULL", [String(sent.id), row.id])
+  }
+}
+
+/** サイトで消されたものを、Discord からも消す（サイトで書かれて、写してあるものだけ） */
+export var deletePictorRunMessageFromDiscord = async (db, env, messageId) => {
+  const config = discordConfig(env)
+  if (!config) return
+  const row = await db.queryOne(
+    "SELECT discord_id FROM pictor_run_messages WHERE id = $1 AND deleted_at IS NOT NULL AND source IS NULL AND discord_id IS NOT NULL",
+    [Number(messageId) || 0]
+  )
+  if (!row?.discord_id) return
+  await fetch(`${config.webhookUrl}/messages/${row.discord_id}`, { method: "DELETE" })
 }
 
 /** 本人かモデレーターだけ消せる */

@@ -8,6 +8,9 @@ import { json } from "../lib/json"
 import {
   createPictorRunMessage,
   deletePictorRunMessage,
+  deletePictorRunMessageFromDiscord,
+  sendPictorRunMessageToDiscord,
+  syncPictorRunDiscord,
   getPictorRunRanking,
   listPictorRunDeletedIds,
   listPictorRunMessages,
@@ -23,6 +26,8 @@ pictorRunRoutes.post("/messages/list", async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const db = await getDb(c.env)
   const now = getNow()
+  // Discord で書かれたものを取り込む（返事は待たせない。次に読みに来たときに出る）
+  c.executionCtx.waitUntil(syncPictorRunDiscord(db, c.env, now).catch(() => {}))
   const [messages, deletedIds] = await Promise.all([
     listPictorRunMessages(db, body),
     Number(body.afterId) > 0 ? listPictorRunDeletedIds(db, now - 120) : Promise.resolve([])
@@ -34,20 +39,24 @@ pictorRunRoutes.post("/messages/create", async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const user = toPictorRunUser(body.user)
   if (!user) return json({ error: "user is required" }, 400)
-  const result = await createPictorRunMessage(await getDb(c.env), { ...body, user, now: getNow() })
+  const db = await getDb(c.env)
+  const result = await createPictorRunMessage(db, { ...body, user, now: getNow() })
   if (result.error) return json({ error: result.error }, result.status)
+  c.executionCtx.waitUntil(sendPictorRunMessageToDiscord(db, c.env, result.row).catch(() => {}))
   return json({ error: null, data: { message: result.message } })
 })
 
 pictorRunRoutes.post("/messages/delete", async (c) => {
   const body = await c.req.json().catch(() => ({}))
   if (!body.userId || !body.messageId) return json({ error: "userId and messageId are required" }, 400)
-  const deleted = await deletePictorRunMessage(await getDb(c.env), {
+  const db = await getDb(c.env)
+  const deleted = await deletePictorRunMessage(db, {
     messageId: body.messageId,
     userId: String(body.userId),
     isModerator: body.isModerator === true,
     now: getNow()
   })
+  if (deleted) c.executionCtx.waitUntil(deletePictorRunMessageFromDiscord(db, c.env, body.messageId).catch(() => {}))
   return json({ error: null, data: { deleted } })
 })
 
