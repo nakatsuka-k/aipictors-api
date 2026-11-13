@@ -199,7 +199,17 @@ export var syncPictorRunDiscord = async (db, env, now) => {
   )
   if (!response.ok) return
   const list = await response.json().catch(() => null)
-  if (!Array.isArray(list) || list.length === 0) return
+  if (!Array.isArray(list)) return
+  if (list.length === 0) {
+    // まだ何も書かれていないチャンネル: 次からは最初の 1 件めから取り込む
+    if (!lastId) {
+      await db.execute(
+        "INSERT OR IGNORE INTO pictor_run_state (key, value, updated_at) VALUES ('discord_last_id', '1', $1)",
+        [now]
+      )
+    }
+    return
+  }
   // 新しい順で届くので、古い順に入れる。はじめての回は、いまの位置を覚えるだけ（過去のものは取り込まない）
   const messages = lastId ? list.slice().reverse() : []
   for (const message of messages) {
