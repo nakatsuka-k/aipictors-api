@@ -229,11 +229,15 @@ export var getPictorRunRanking = async (db, props) => {
   if (props.period === "week") {
     const since = pictorRunWeekStart(props.now)
     const rows = await db.query(
-      `SELECT p.user_id, MAX(p.score) AS score, s.user_name, s.user_login, s.icon_url, s.badge, 0 AS coins
+      `SELECT p.user_id, MAX(p.score) AS score, s.user_name, s.user_login, s.icon_url, s.badge,
+              (SELECT q.coins FROM pictor_run_plays q
+                WHERE q.user_id = p.user_id AND q.created_at >= $3
+                ORDER BY q.score DESC, q.created_at LIMIT 1) AS coins
          FROM pictor_run_plays p JOIN pictor_run_scores s ON s.user_id = p.user_id
         WHERE p.created_at >= $1
         GROUP BY p.user_id ORDER BY score DESC, MIN(p.created_at) LIMIT $2`,
-      [since, limit]
+      // coins = 今週いちばん良かった回のコイン（走れた距離 = 得点 - コイン × 10 を、看板に出すのに使う）
+      [since, limit, since]
     )
     let me = null
     if (userId) {

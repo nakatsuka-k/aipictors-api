@@ -91,6 +91,9 @@ const weekStart = pictorRunWeekStart(Math.floor(Date.now() / 1000))
 await d1.DB.prepare("UPDATE pictor_run_plays SET created_at = ? WHERE user_id = '2'").bind(weekStart - 10).run()
 const week = await call("/scores/ranking", { period: "week", userId: "2" })
 assert.deepEqual(week.body.data.items.map((i: any) => [i.rank, i.user.name, i.score]), [[1, "アリス", 120]])
+// 今週いちばん良かった回のコインも返る（看板に出す距離の計算に使う）
+console.log("week coins:", week.body.data.items[0].coins)
+assert.ok(week.body.data.items[0].coins > 0)
 assert.equal(week.body.data.me, null)
 // 月曜 0 時（日本時間）: 2026-11-14(土) 12:00 JST → 2026-11-09(月) 00:00 JST
 assert.equal(pictorRunWeekStart(Date.UTC(2026, 10, 14, 3) / 1000), Date.UTC(2026, 10, 8, 15) / 1000)
