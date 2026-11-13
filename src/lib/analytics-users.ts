@@ -28,11 +28,6 @@ var jstDayStartAsUtcText = (day) => new Date(Date.parse(`${day}T00:00:00Z`) - 9 
 
 var first = async (core, sql, params) => (await core.prepare(sql).bind(...params).first()) ?? {};
 
-var column = async (core, sql, params) => {
-  const { results } = await core.prepare(sql).bind(...params).all();
-  return (results ?? []).map((row) => toNumber(Object.values(row)[0]));
-};
-
 /**
  * 登録者: その期間の新規と、期間の終わりまでの累計（退会した人は除く。過去の日も今の退会の状態で数える）
  * user_registered に索引はないが 20 万行ほどなので全件を 1 回読む
@@ -55,23 +50,18 @@ var collectRegistered = async (core, fromDay, toDay) => {
  */
 var collectActivity = async (core, fromDay, toDay) => {
   const range = [`${fromDay}T00:00:00`, `${toDay}T00:00:00`];
-  const [posters, likers, counts] = await Promise.all([
-    column(core, `SELECT DISTINCT userId FROM works WHERE time >= ?1 AND time < ?2`, range),
-    column(core, `SELECT DISTINCT userId FROM favorited_works WHERE favTime >= ?1 AND favTime < ?2 AND userId > 0`, range),
-    first(
-      core,
-      `SELECT
-        (SELECT count(*) FROM works WHERE time >= ?1 AND time < ?2) AS posts,
-        (SELECT count(*) FROM favorited_works WHERE favTime >= ?1 AND favTime < ?2) AS likes`,
-      range
-    ),
-  ]);
+  // 件数と人数を 1 回の読み取りで出す（本体の DB に負荷をかけないよう、同じ範囲を 2 度読まない）
+  const grouped = async (sql) => (await core.prepare(sql).bind(...range).all()).results ?? [];
+  const works = await grouped(`SELECT userId AS id, count(*) AS n FROM works WHERE time >= ?1 AND time < ?2 GROUP BY userId`);
+  const likes = await grouped(`SELECT userId AS id, count(*) AS n FROM favorited_works WHERE favTime >= ?1 AND favTime < ?2 GROUP BY userId`);
+  const posters = works.map((row) => toNumber(row.id));
+  const likers = likes.map((row) => toNumber(row.id)).filter((id) => id > 0);
   return {
     active: new Set([...posters, ...likers]).size,
     posters: posters.length,
     likers: likers.length,
-    posts: toNumber(counts.posts),
-    likes: toNumber(counts.likes),
+    posts: works.reduce((total, row) => total + toNumber(row.n), 0),
+    likes: likes.reduce((total, row) => total + toNumber(row.n), 0),
   };
 };
 
