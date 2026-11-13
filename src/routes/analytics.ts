@@ -4,6 +4,7 @@ import { getBearer, getInternalApiToken } from "../lib/auth"
 import {
   collectAnalyticsDay,
   getCurrentSubscriptionCounts,
+  getLiveProfitAndLoss,
   jstDayBefore,
   listAnalyticsDays,
 } from "../lib/analytics"
@@ -37,6 +38,13 @@ analyticsRoutes.get("/daily", async (c) => {
     getCurrentSubscriptionCounts(db, getNow()),
   ]);
   return json({ days: rows, current: { subscriptions: current, at: getNow() } });
+});
+
+/** 収支（今日のここまで・今月・月末の見込み）。?fresh=1 で 10 分のキャッシュを使わない */
+analyticsRoutes.get("/pnl", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const db = await getDb(c.env);
+  return json(await getLiveProfitAndLoss(c.env, db, getNow(), { fresh: c.req.query("fresh") === "1" }));
 });
 
 /**

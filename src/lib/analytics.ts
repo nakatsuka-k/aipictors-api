@@ -1,5 +1,6 @@
 // @ts-nocheck -- 周りのファイルに合わせて型は付けていない
 import { getGenlogDb } from "./db"
+import { collectCosts } from "./costs"
 
 /**
  * 分析ページ用の日別の数字（日本時間の 1 日ごとに 1 行）
@@ -218,14 +219,16 @@ export var collectAnalyticsDay = async (env, db, day) => {
       return null;
     }
   };
-  const [subscriptions, coins, generations, stripe, cloudflare] = await Promise.all([
+  const [subscriptions, coins, generations, stripe, cloudflare, costs] = await Promise.all([
     safe("subscriptions", () => collectSubscriptions(db, range)),
     safe("coins", () => collectCoinSales(db, range)),
     safe("generations", async () => collectGenerations(await getGenlogDb(env), day)),
     safe("stripe", () => collectStripe(env.STRIPE_SECRET_KEY, range)),
     safe("cloudflare", () => collectCloudflare(env.CF_ANALYTICS_TOKEN, day, range)),
+    safe("costs", () => collectCosts(env, day, range)),
   ]);
-  const metrics = { subscriptions, coins, generations, stripe, cloudflare, errors };
+  for (const message of costs?.errors ?? []) errors.push(`costs.${message}`);
+  const metrics = { subscriptions, coins, generations, stripe, cloudflare, costs, errors };
   await db.execute(
     `INSERT INTO analytics_daily (day, metrics, updated_at) VALUES ($1, $2, $3)
     ON CONFLICT (day) DO UPDATE SET metrics = EXCLUDED.metrics, updated_at = EXCLUDED.updated_at`,
@@ -258,4 +261,73 @@ export var getCurrentSubscriptionCounts = async (db, nowSeconds) => {
   const counts = { LITE: 0, STANDARD: 0, PREMIUM: 0 };
   for (const row of rows) counts[row.type] = toNumber(row.count);
   return counts;
+};
+
+var PNL_CACHE_SECONDS = 600;
+
+/**
+ * 収支（今日のここまでと今月）。今日の分はその場で Stripe と各サービスに聞き、今月の昨日までは保存済みの日別を足す
+ * 売上は Stripe の入金（手数料・返金を引いた net）。App Store・Google Play の売上は入らない
+ * 10 分だけ Cache API に置く（外部 API をページを開くたびに呼ばない）
+ */
+export var getLiveProfitAndLoss = async (env, db, nowSeconds, { fresh = false } = {}) => {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = new Request("https://aipictors-api.internal/analytics/pnl");
+  if (cache && !fresh) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit.json();
+  }
+  const today = jstDayBefore(nowSeconds, 0);
+  const todayRange = { start: toJstDayRange(today).start, end: nowSeconds };
+  const monthStart = `${today.slice(0, 8)}01`;
+  const [stripeToday, costsToday, rows] = await Promise.all([
+    collectStripe(env.STRIPE_SECRET_KEY, todayRange).catch(() => null),
+    collectCosts(env, today, todayRange, { skipOpenai: true }),
+    db.query(`SELECT day, metrics FROM analytics_daily WHERE day >= $1 AND day < $2 ORDER BY day ASC`, [monthStart, today]),
+  ]);
+  const pastDays = rows.map((row) => ({ day: row.day, ...(typeof row.metrics === "string" ? JSON.parse(row.metrics) : row.metrics) }));
+  const costKeys = ["cloudflare", "runpod", "google", "openai"];
+  const monthCosts = Object.fromEntries(costKeys.map((key) => [key, 0]));
+  let monthRevenue = 0;
+  let daysWithCosts = 0;
+  for (const day of pastDays) {
+    monthRevenue += toNumber(day.stripe?.net);
+    if (day.costs) daysWithCosts += 1;
+    for (const key of costKeys) monthCosts[key] += toNumber(day.costs?.items?.[key]?.jpy);
+  }
+  const todayRevenue = toNumber(stripeToday?.net);
+  for (const key of costKeys) monthCosts[key] += toNumber(costsToday.items?.[key]?.jpy);
+  monthRevenue += todayRevenue;
+  const monthCostTotal = costKeys.reduce((total, key) => total + monthCosts[key], 0);
+  const elapsedDays = pastDays.length + (nowSeconds - todayRange.start) / 86400;
+  const [year, month] = today.split("-").map(Number);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const result = {
+    at: nowSeconds,
+    today: {
+      day: today,
+      revenue: todayRevenue,
+      costs: Object.fromEntries(costKeys.map((key) => [key, toNumber(costsToday.items?.[key]?.jpy)])),
+      costTotal: costsToday.jpy,
+      profit: todayRevenue - costsToday.jpy,
+      fxUsdJpy: costsToday.fxUsdJpy,
+      errors: costsToday.errors,
+    },
+    month: {
+      from: monthStart,
+      revenue: monthRevenue,
+      costs: monthCosts,
+      costTotal: monthCostTotal,
+      profit: monthRevenue - monthCostTotal,
+      elapsedDays: Math.round(elapsedDays * 100) / 100,
+      daysInMonth,
+      daysWithCosts,
+      storedDays: pastDays.length,
+      projectedProfit: elapsedDays > 0 ? Math.round(((monthRevenue - monthCostTotal) / elapsedDays) * daysInMonth) : null,
+    },
+  };
+  if (cache) {
+    await cache.put(cacheKey, new Response(JSON.stringify(result), { headers: { "Cache-Control": `max-age=${PNL_CACHE_SECONDS}` } }));
+  }
+  return result;
 };

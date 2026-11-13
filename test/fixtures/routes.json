@@ -6,6 +6,7 @@
   "GET /email/unsubscribe",
   "GET /healthz",
   "GET /internal/analytics/daily",
+  "GET /internal/analytics/pnl",
   "GET /internal/coins/:userId",
   "GET /internal/coins/admin-history",
   "GET /internal/coins/amazon-exchange",
