@@ -10,6 +10,7 @@ import { d1ProxyRoutes } from "./routes/d1-proxy"
 import { discordBotRoutes, discordRoutes } from "./routes/discord"
 import { imageGenerationRoutes } from "./routes/image-generation"
 import { pointsRoutes } from "./routes/points"
+import { pictorRunRoutes } from "./routes/pictor-run"
 import { referralRoutes } from "./routes/referrals"
 import { stripeRoutes } from "./routes/stripe"
 import { subscriptionRoutes } from "./routes/subscriptions"
@@ -27,6 +28,7 @@ app.route("/internal/image-generation", imageGenerationRoutes);
 app.route("/internal/d1", d1ProxyRoutes);
 app.route("/internal/points", pointsRoutes);
 app.route("/internal/referrals", referralRoutes);
+app.route("/internal/pictor-run", pictorRunRoutes);
 app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);
 app.route("/internal/user-model-pickups", userModelPickupRoutes);
