@@ -15,7 +15,8 @@ import {
   listPictorRunDeletedIds,
   listPictorRunMessages,
   submitPictorRunScore,
-  toPictorRunUser
+  toPictorRunUser,
+  unlockPictorRunAchievements
 } from "../lib/pictor-run"
 
 export var pictorRunRoutes = new Hono2()
@@ -66,7 +67,11 @@ pictorRunRoutes.post("/scores/submit", async (c) => {
   if (!user) return json({ error: "user is required" }, 400)
   const result = await submitPictorRunScore(await getDb(c.env), { ...body, user, now: getNow() })
   if (result.error) return json({ error: result.error }, result.status)
-  return json({ error: null, data: result.data })
+  if (result.achievements.length > 0) {
+    // 返事の前に書いておく（このあとすぐ、画面が実績を確かめに来る）。書けなくても記録は受け付ける
+    await unlockPictorRunAchievements(c.env.SYSTEM_CORE, user.id, result.achievements, Date.now()).catch(() => {})
+  }
+  return json({ error: null, data: { ...result.data, achievements: result.achievements } })
 })
 
 // ランキング（未ログインでも読める）。userId があれば本人の順位も返す

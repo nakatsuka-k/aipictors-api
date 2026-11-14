@@ -356,7 +356,39 @@ export var submitPictorRunScore = async (db, props) => {
   ])
   const best = Math.max(previousBest, score)
   const above = await db.queryOne("SELECT COUNT(*) AS n FROM pictor_run_scores WHERE best_score > $1", [best])
-  return { error: null, data: { best, isNewBest, rank: Number(above?.n ?? 0) + 1 } }
+  // サイトの隠し実績: はじめて遊んだ・全 13 ステージを走りぬけた（走った距離 = 得点 - コイン × 10）
+  const achievements = []
+  if (!before) achievements.push("special-pictor-run-play")
+  if (score - coins * 10 >= PICTOR_RUN_CLEAR_DISTANCE) achievements.push("special-pictor-run-clear")
+  return { error: null, data: { best, isNewBest, rank: Number(above?.n ?? 0) + 1 }, achievements }
+}
+
+/** 全 13 ステージ（1 ステージ 80m）を走りぬけた距離 */
+export var PICTOR_RUN_CLEAR_DISTANCE = 1040
+/** 実績でもらえる無料コイン（aipictors-system の achievement-catalog.ts のランクと同じ: ブロンズ 10・プラチナ 50） */
+var PICTOR_RUN_ACHIEVEMENT_COINS = { "special-pictor-run-play": 10, "special-pictor-run-clear": 50 }
+
+/**
+ * サイトの実績（aipictors-system の core の user_achievement_unlocks）に、達成を記録する。
+ * 既に達成していれば何もしない。コインは、次にサイトが実績を確かめたときに付与される（reward_status = PENDING）
+ */
+export var unlockPictorRunAchievements = async (core, userId, keys, nowMs) => {
+  const id = Number(userId)
+  if (!core || !Number.isInteger(id) || id <= 0 || keys.length === 0) return
+  // ほかの表と同じく、日本時間をそのまま入れる
+  const unlockedAt = new Date(nowMs + 9 * 3600 * 1000).toISOString().replace("Z", "+00:00")
+  for (const key of keys) {
+    const coins = PICTOR_RUN_ACHIEVEMENT_COINS[key]
+    if (coins === undefined) continue
+    await core
+      .prepare(
+        `INSERT INTO user_achievement_unlocks (user_id, achievement_key, unlocked_at, reward_coins, reward_status, is_initial_sync)
+         VALUES (?, ?, ?, ?, 'PENDING', 0)
+         ON CONFLICT(user_id, achievement_key) DO NOTHING`
+      )
+      .bind(id, key, unlockedAt, coins)
+      .run()
+  }
 }
 
 var toRankingItem = (row, index) => ({
