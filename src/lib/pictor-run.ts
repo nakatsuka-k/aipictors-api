@@ -356,15 +356,15 @@ export var submitPictorRunScore = async (db, props) => {
   ])
   const best = Math.max(previousBest, score)
   const above = await db.queryOne("SELECT COUNT(*) AS n FROM pictor_run_scores WHERE best_score > $1", [best])
-  // サイトの隠し実績: はじめて遊んだ・全 13 ステージを走りぬけた（走った距離 = 得点 - コイン × 10）
+  // サイトの隠し実績: はじめて遊んだ・全ステージを走りぬけた（走った距離 = 得点 - コイン × 10）
   const achievements = []
   if (!before) achievements.push("special-pictor-run-play")
   if (score - coins * 10 >= PICTOR_RUN_CLEAR_DISTANCE) achievements.push("special-pictor-run-clear")
   return { error: null, data: { best, isNewBest, rank: Number(above?.n ?? 0) + 1 }, achievements }
 }
 
-/** 全 13 ステージ（1 ステージ 80m）を走りぬけた距離 */
-export var PICTOR_RUN_CLEAR_DISTANCE = 1040
+/** 全 15 ステージ（1 ステージ 80m）を走りぬけた距離 */
+export var PICTOR_RUN_CLEAR_DISTANCE = 1200
 /** 実績でもらえる無料コイン（aipictors-system の achievement-catalog.ts のランクと同じ: ブロンズ 10・プラチナ 50） */
 var PICTOR_RUN_ACHIEVEMENT_COINS = { "special-pictor-run-play": 10, "special-pictor-run-clear": 50 }
 
