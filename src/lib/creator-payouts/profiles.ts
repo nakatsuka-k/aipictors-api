@@ -7,7 +7,7 @@ import { createStripeClient, toAccountState } from "./stripe-connect"
 export const getProfile = async (db, userId) => {
   const row = await db.queryOne(
     `SELECT user_id, status, terms_version, joined_at, stripe_account_id, stripe_livemode, details_submitted,
-            payouts_enabled, transfers_active, tax_kind, requirements_json, email, approved_at, note
+            payouts_enabled, payouts_enabled_at, transfers_active, tax_kind, requirements_json, email, approved_at, note
        FROM creator_payout_profiles WHERE user_id = $1`,
     [String(userId)],
   )
@@ -21,6 +21,8 @@ export const getProfile = async (db, userId) => {
     stripeLivemode: row.stripe_livemode === null || row.stripe_livemode === undefined ? null : Number(row.stripe_livemode) === 1,
     detailsSubmitted: Number(row.details_submitted) === 1,
     payoutsEnabled: Number(row.payouts_enabled) === 1,
+    // 本人確認が済んで入金できるようになった日時（新しい口座の 1 回の上限に使う）
+    payoutsEnabledAt: row.payouts_enabled_at ? Number(row.payouts_enabled_at) : null,
     transfersActive: Number(row.transfers_active) === 1,
     taxKind: row.tax_kind ?? null,
     requirements: row.requirements_json ? JSON.parse(row.requirements_json) : null,
@@ -74,6 +76,7 @@ const saveAccountState = async (db, userId, account, livemode, now) => {
   await db.execute(
     `UPDATE creator_payout_profiles
         SET stripe_account_id = $2, stripe_livemode = $3, details_submitted = $4, payouts_enabled = $5,
+            payouts_enabled_at = CASE WHEN $5 = 1 THEN COALESCE(payouts_enabled_at, $10) ELSE payouts_enabled_at END,
             transfers_active = $6, tax_kind = COALESCE($7, tax_kind), requirements_json = $8,
             email = COALESCE($9, email), updated_at = $10
       WHERE user_id = $1`,
@@ -109,7 +112,7 @@ export const createOnboardingLink = async ({ db, env, userId, email, returnUrl, 
     // 同じアカウントが 2 人に付かないよう、まだ無いときだけ書く（同時に 2 回押されたら先の方を使う）
     await db.execute(
       `UPDATE creator_payout_profiles SET stripe_account_id = $2, stripe_livemode = $3, details_submitted = 0,
-              payouts_enabled = 0, transfers_active = 0, updated_at = $4
+              payouts_enabled = 0, payouts_enabled_at = NULL, transfers_active = 0, updated_at = $4
         WHERE user_id = $1 AND (stripe_account_id IS NULL OR stripe_livemode IS NOT $3)`,
       [String(userId), account.id, stripe.livemode ? 1 : 0, now],
     )

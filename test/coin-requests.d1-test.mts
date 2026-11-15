@@ -227,7 +227,7 @@ let req2: string
   assert.equal(earning.coins, expected.earnedCoins)
   assert.equal(earning.amount_milliyen, expected.earnedCoins * 500, "0.5 円/枚")
   assert.equal(earning.status, "HELD")
-  assert.ok(earning.available_at >= NOW + 59 * 86400, "換金と同じ 60 日保留")
+  assert.ok(earning.available_at >= NOW + 7 * 86400 && earning.available_at < NOW + 8 * 86400, "換金と同じ 7 日保留")
   const after = await balance("1")
   assert.equal(after.free - before.free, expected.settleFreeCoins)
   assert.equal(after.premium - before.premium, expected.settlePremiumCoins)

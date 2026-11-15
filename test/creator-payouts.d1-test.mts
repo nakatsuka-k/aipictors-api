@@ -198,7 +198,7 @@ await t("参加者への全年齢作品の推し: 有料コインは報酬（0.5
   assert.equal(rows[0].coins, 100)
   assert.equal(rows[0].amount_milliyen, 50000)
   assert.equal(rows[0].status, "HELD")
-  assert.ok(Number(rows[0].available_at) - realNow() > 59 * DAY)
+  assert.ok(Math.abs(Number(rows[0].available_at) - realNow() - 7 * DAY) < 120)
 })
 
 await t("おまけ（ボーナス）分は報酬にならない: 1,000 + おまけ 250 を全部推すと 1,000 枚分だけ報酬", async () => {
@@ -334,8 +334,30 @@ await t("金額: 源泉 10.21%（個人）・法人は 0・手数料 500 円・�
   // マイナスは必ず入れる。古い順に入れて、上限を超える行が来たらそこで止める（60,000 − 1,000、50,000 からあとは次の月）
   assert.equal(grossMilliyen, 59000000)
   assert.equal(selected.length, 2)
-  assert.deepEqual(cp.getClosingPeriod(Math.floor(Date.parse("2027-01-10T10:00:00+09:00") / 1000)), { period: "2026-12", cutoff: Math.floor(Date.parse("2027-01-01T00:00:00+09:00") / 1000) })
+  const ts = (iso: string) => Math.floor(Date.parse(iso) / 1000)
+  // 締めは 10 日と 25 日。その日の 0:00 までに保留が明けた分
+  assert.deepEqual(cp.getClosingPeriod(ts("2027-01-10T10:00:00+09:00")), { period: "2027-01-10", cutoff: ts("2027-01-10T00:00:00+09:00") })
+  assert.deepEqual(cp.getClosingPeriod(ts("2027-01-25T10:00:00+09:00")), { period: "2027-01-25", cutoff: ts("2027-01-25T00:00:00+09:00") })
+  assert.deepEqual(cp.getClosingPeriod(ts("2027-01-05T10:00:00+09:00")), { period: "2026-12-25", cutoff: ts("2026-12-25T00:00:00+09:00") })
+  assert.equal(cp.payoutIdFor("2026-12-25", "42"), "cp_20261225_42")
   assert.equal(cp.payoutIdFor("2026-12", "42"), "cp_202612_42")
+  assert.equal(cp.CREATOR_REWARD_HOLD_DAYS, 7)
+  // 次の締め
+  assert.equal(cp.nextCloseAt(ts("2026-11-16T06:00:00+09:00")), ts("2026-11-25T10:00:00+09:00"))
+  assert.equal(cp.nextCloseAt(ts("2026-11-25T10:00:00+09:00")), ts("2026-12-10T10:00:00+09:00"))
+  assert.equal(cp.nextCloseAt(ts("2026-12-26T00:00:00+09:00")), ts("2027-01-10T10:00:00+09:00"))
+  // 11/16 の推し → 11/23 に保留明け → 11/25 の締め。11/18 の推し → 11/25 明け（その日の 0:00 より後）→ 12/10
+  const now16 = ts("2026-11-16T06:00:00+09:00")
+  assert.equal(cp.firstCloseForAvailableAt(now16 + 7 * 86400, now16), ts("2026-11-25T10:00:00+09:00"))
+  assert.equal(cp.firstCloseForAvailableAt(ts("2026-11-25T06:00:00+09:00"), now16), ts("2026-12-10T10:00:00+09:00"))
+  assert.equal(cp.firstCloseForAvailableAt(ts("2026-11-24T23:59:00+09:00"), now16), ts("2026-11-25T10:00:00+09:00"))
+  // 1 回の上限: 月 10 万円からその月の締めを引く。本人確認から 30 日以内は 3 万円まで
+  const old = now16 - 40 * 86400
+  assert.equal(cp.payoutLimitYen({ monthUsedYen: 0, payoutsEnabledAt: old, now: now16 }), 100000)
+  assert.equal(cp.payoutLimitYen({ monthUsedYen: 70000, payoutsEnabledAt: old, now: now16 }), 30000)
+  assert.equal(cp.payoutLimitYen({ monthUsedYen: 120000, payoutsEnabledAt: old, now: now16 }), 0)
+  assert.equal(cp.payoutLimitYen({ monthUsedYen: 0, payoutsEnabledAt: now16 - 10 * 86400, now: now16 }), 30000)
+  assert.equal(cp.payoutLimitYen({ monthUsedYen: 0, payoutsEnabledAt: null, now: now16 }), 30000)
 })
 
 // ---------------- 締めと送金 ----------------
@@ -348,9 +370,9 @@ const addEarning = async (userId: string, coins: number, availableAt: number, se
   )
 const closeAt = Math.floor(Date.parse("2027-02-10T10:00:00+09:00") / 1000)
 const janEnd = Math.floor(Date.parse("2027-01-31T12:00:00+09:00") / 1000)
-const febStart = Math.floor(Date.parse("2027-02-02T00:00:00+09:00") / 1000)
+const febStart = Math.floor(Date.parse("2027-02-10T06:00:00+09:00") / 1000)
 
-await t("締め: 保留明け（前月末まで）だけ・最低額未満と口座未登録は繰り越し・承認制なら承認待ち", async () => {
+await t("締め: 保留明け（締めの日の 0:00 まで）だけ・最低額未満と口座未登録は繰り越し・承認制なら承認待ち", async () => {
   const a = await newUser(); const small = await newUser(); const noAccount = await newUser()
   for (const u of [a, small, noAccount]) await join(u)
   await onboard(a); await onboard(small)
@@ -385,7 +407,7 @@ await t("承認するとすぐ送金。同時に何回送っても Stripe への
   const account = await onboard(a)
   await addEarning(a, 3000, janEnd, "2001"); await addEarning(a, 3000, janEnd, "2002"); await addEarning(a, 3000, janEnd, "2003")
   await cp.closeMonthlyPayouts({ db, core: CORE, env, now: closeAt })
-  const id = cp.payoutIdFor("2027-01", a)
+  const id = cp.payoutIdFor("2027-02-10", a)
   // 承認前に送ろうとしても送らない
   assert.equal((await cp.sendReadyPayouts({ db, env, now: closeAt, payoutId: id })).sent, 0)
   const before = stripe.transfers.length
@@ -427,7 +449,7 @@ await t("送金が残高不足で失敗 → FAILED（やり直し可）→ 翌�
   } finally {
     env.CREATOR_PAYOUT_APPROVAL_MODE = "all"
   }
-  const id = cp.payoutIdFor("2027-01", a)
+  const id = cp.payoutIdFor("2027-02-10", a)
   stripe.failNextTransfer = { status: 400, code: "balance_insufficient" }
   const first = await cp.sendReadyPayouts({ db, env, now: closeAt, payoutId: id })
   assert.equal(first.failed, 1)
@@ -451,7 +473,7 @@ await t("口座の誤りなどやり直せない失敗は止めて、運営と�
   env.CREATOR_PAYOUT_APPROVAL_MODE = "first"; env.CREATOR_PAYOUT_ADMIN_EMAIL = "admin@example.com"
   try {
     await cp.closeMonthlyPayouts({ db, core: CORE, env, now: closeAt })
-    const id = cp.payoutIdFor("2027-01", a)
+    const id = cp.payoutIdFor("2027-02-10", a)
     stripe.failNextTransfer = { status: 400, code: "account_invalid" }
     await cp.sendReadyPayouts({ db, env, now: closeAt, payoutId: id, notify: cp.createPayoutNotifier(env, db) })
     const p: any = await payout(id)
@@ -475,7 +497,7 @@ await t("SENDING のまま止まった振込は、Stripe に送金があれば S
   } finally {
     env.CREATOR_PAYOUT_APPROVAL_MODE = "all"
   }
-  const id = cp.payoutIdFor("2027-01", a)
+  const id = cp.payoutIdFor("2027-02-10", a)
   // 送金は Stripe に届いたが、こちらの記録の前に落ちた
   stripe.transfers.push({ id: "tr_crashed", amount: 1, destination: account, transfer_group: id, reversed: false })
   await db.execute(`UPDATE creator_payouts SET status = 'SENDING', updated_at = $2 WHERE id = $1`, [id, closeAt - 7200])
@@ -514,8 +536,8 @@ await t("振込をやめる: release は翌月以降へ繰り越し、reverse �
   for (const u of [a, b]) { await join(u); await onboard(u) }
   for (const u of [a, b]) { await addEarning(u, 3000, janEnd, "6001"); await addEarning(u, 3000, janEnd, "6002"); await addEarning(u, 3000, janEnd, "6003") }
   await cp.closeMonthlyPayouts({ db, core: CORE, env, now: closeAt })
-  const r1 = await call("POST", `/internal/creator-payouts/admin/payouts/${cp.payoutIdFor("2027-01", a)}/cancel`, { moderatorUserId: "1", mode: "release" })
-  const r2 = await call("POST", `/internal/creator-payouts/admin/payouts/${cp.payoutIdFor("2027-01", b)}/cancel`, { moderatorUserId: "1", mode: "reverse", reason: "self support" })
+  const r1 = await call("POST", `/internal/creator-payouts/admin/payouts/${cp.payoutIdFor("2027-02-10", a)}/cancel`, { moderatorUserId: "1", mode: "release" })
+  const r2 = await call("POST", `/internal/creator-payouts/admin/payouts/${cp.payoutIdFor("2027-02-10", b)}/cancel`, { moderatorUserId: "1", mode: "reverse", reason: "self support" })
   assert.equal(r1.status, 200); assert.equal(r2.status, 200)
   assert.ok((await earnings(a)).every((e: any) => e.status === "HELD" && e.payout_id === null))
   assert.ok((await earnings(b)).every((e: any) => e.status === "REVERSED"))
@@ -534,6 +556,28 @@ await t("上限: 1 か月 100,000 円を超えた分は次の月へ", async () =
   assert.equal(mine.grossYen, 80000)
   assert.equal(mine.withholdingYen, 0) // 法人
   assert.deepEqual((await earnings(a)).map((e: any) => e.status), ["IN_PAYOUT", "IN_PAYOUT", "HELD"])
+})
+
+await t("月 2 回の締め: 25 日はその月の 10 日の分を引いた残りまで。本人確認から 30 日以内は 1 回 3 万円まで", async () => {
+  const a = await newUser()
+  await join(a); await onboard(a, "company")
+  for (let i = 0; i < 3; i++) await addEarning(a, 80000, janEnd, String(7100 + i)) // 40,000 円 × 3
+  const close10 = await cp.closeMonthlyPayouts({ db, core: CORE, env, now: closeAt })
+  assert.equal(close10.results.find((r: any) => r.userId === a).grossYen, 80000)
+  const close25 = await cp.closeMonthlyPayouts({ db, core: CORE, env, now: Math.floor(Date.parse("2027-02-25T10:00:00+09:00") / 1000) })
+  // 残りは 20,000 円だが次の行は 40,000 円なので 3 月へ
+  assert.equal(close25.results.find((r: any) => r.userId === a).action, "monthly_limit_reached")
+  const close0310 = await cp.closeMonthlyPayouts({ db, core: CORE, env, now: Math.floor(Date.parse("2027-03-10T10:00:00+09:00") / 1000) })
+  assert.equal(close0310.results.find((r: any) => r.userId === a).grossYen, 40000)
+  // 新しい口座（本人確認が済んだばかり）
+  const b = await newUser()
+  await join(b); await onboard(b, "company")
+  const enabledAt = Number((await db.queryOne(`SELECT payouts_enabled_at FROM creator_payout_profiles WHERE user_id = $1`, [b])).payouts_enabled_at)
+  assert.ok(enabledAt > 0)
+  // 口座登録の前からたまっていた 10,000 円 × 4。登録直後の締めでは 3 万円まで
+  for (let i = 0; i < 4; i++) await addEarning(b, 20000, enabledAt - 30 * DAY, String(7200 + i))
+  const res = await cp.closeMonthlyPayouts({ db, core: CORE, env, now: cp.nextCloseAt(enabledAt), period: "new-account-test" })
+  assert.equal(res.results.find((r: any) => r.userId === b).grossYen, 30000)
 })
 
 // ---------------- 返金・チャージバック ----------------
@@ -562,14 +606,14 @@ await t("チャージバック: 振込待ちの振込からは外して計算し
   await addEarning(creator, 8000, janEnd, "8001")
   await addEarning(paidCreator, 6000, janEnd, "8002"); await addEarning(paidCreator, 6000, janEnd, "8003")
   await cp.closeMonthlyPayouts({ db, core: CORE, env, now: closeAt })
-  const paidId = cp.payoutIdFor("2027-01", paidCreator)
+  const paidId = cp.payoutIdFor("2027-02-10", paidCreator)
   await cp.approvePayout({ db, payoutId: paidId, moderatorUserId: "1" })
   await cp.sendReadyPayouts({ db, env, now: closeAt, payoutId: paidId })
   assert.equal(((await payout(paidId)) as any).status, "SENT")
   const status = await webhook("/webhooks/stripe/premium-coins", "whsec_test", "charge.dispute.created", { id: "dp_1", charge: `ch_${n}`, payment_intent: `pi_${n}` })
   assert.equal(status, 200)
   // creator: 推しの 8,000 枚分が外れ、残りは 8,000 枚 = 4,000 円で振込は続く
-  const p: any = await payout(cp.payoutIdFor("2027-01", creator))
+  const p: any = await payout(cp.payoutIdFor("2027-02-10", creator))
   assert.equal(p.status, "AWAITING_APPROVAL")
   assert.equal(Number(p.gross_yen), 4000)
   assert.equal(Number(p.net_yen), 4000 - 408 - 500)
@@ -636,11 +680,13 @@ await t("Amazon ギフト券の交換申請・承認は 410（廃止）", async 
   assert.equal(a.status, 410)
 })
 
-await t("cron: 10 日は締めてから送る。それ以外の日は送るだけ", async () => {
+await t("cron: 10 日と 25 日は締めてから送る。それ以外の日は送るだけ", async () => {
   const r = await cp.runCreatorPayoutJob(env, db, Math.floor(Date.parse("2027-04-11T10:00:00+09:00") / 1000))
   assert.equal(r.closed, null)
   const r2 = await cp.runCreatorPayoutJob(env, db, Math.floor(Date.parse("2027-04-10T10:00:00+09:00") / 1000))
-  assert.equal(r2.closed.period, "2027-03")
+  assert.equal(r2.closed.period, "2027-04-10")
+  const r3 = await cp.runCreatorPayoutJob(env, db, Math.floor(Date.parse("2027-04-25T10:00:00+09:00") / 1000))
+  assert.equal(r3.closed.period, "2027-04-25")
 })
 
 console.log(`${passed} passed`)

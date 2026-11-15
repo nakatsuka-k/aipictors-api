@@ -3,6 +3,9 @@
 import { getNow } from "../db"
 import {
   CREATOR_PAYOUT_CLOSE_DAY,
+  CREATOR_PAYOUT_CLOSE_DAYS,
+  CREATOR_PAYOUT_NEW_ACCOUNT_DAYS,
+  CREATOR_PAYOUT_NEW_ACCOUNT_MAX_YEN,
   CREATOR_PAYOUT_FEE_YEN,
   CREATOR_PAYOUT_MAX_YEN,
   CREATOR_PAYOUT_MIN_YEN,
@@ -11,23 +14,13 @@ import {
   CREATOR_REWARD_TERMS_VERSION,
   canUseStripeOnboarding,
   getCreatorPayoutConfig,
-  jstMonthStart,
-  jstParts,
+  firstCloseForAvailableAt,
   milliyenToYen,
+  nextCloseAt,
 } from "./config"
 import { getProfile, isPayoutReady } from "./profiles"
 
 const toNum = (v) => Number(v ?? 0)
-
-/** 次の締めの日時（毎月 10 日 10:00 JST） */
-export const nextCloseAt = (now) => {
-  const { year, month, day } = jstParts(now)
-  const thisMonthClose = jstMonthStart(year, month) + (CREATOR_PAYOUT_CLOSE_DAY - 1) * 86400 + 10 * 3600
-  if (now < thisMonthClose) return thisMonthClose
-  const nextYear = month === 12 ? year + 1 : year
-  const nextMonth = month === 12 ? 1 : month + 1
-  return jstMonthStart(nextYear, nextMonth) + (CREATOR_PAYOUT_CLOSE_DAY - 1) * 86400 + 10 * 3600
-}
 
 export const getPublicConfig = (env) => {
   const config = getCreatorPayoutConfig(env)
@@ -41,6 +34,9 @@ export const getPublicConfig = (env) => {
     feeYen: CREATOR_PAYOUT_FEE_YEN,
     withholdingPpm: config.withholdingPpm,
     closeDay: CREATOR_PAYOUT_CLOSE_DAY,
+    closeDays: CREATOR_PAYOUT_CLOSE_DAYS,
+    newAccountDays: CREATOR_PAYOUT_NEW_ACCOUNT_DAYS,
+    newAccountMaxYen: CREATOR_PAYOUT_NEW_ACCOUNT_MAX_YEN,
     stripeMode: config.stripeMode,
   }
 }
@@ -88,7 +84,7 @@ export const getCreatorRewardSummary = async ({ db, env, userId, now = getNow(),
       : null,
     onboardingAvailable: canUseStripeOnboarding(config, uid),
     balances: {
-      // 保留中（まだ 60 日たっていない）
+      // 保留中（まだ保留の日数がたっていない）
       holdingYen: milliyenToYen(sum((r) => r.status === "HELD" && toNum(r.holding) === 1)),
       // 保留明け（次の締めで振込の対象）
       availableYen: milliyenToYen(sum((r) => r.status === "HELD" && toNum(r.holding) === 0)),
@@ -108,6 +104,8 @@ export const getCreatorRewardSummary = async ({ db, env, userId, now = getNow(),
       amountYen: toNum(r.amount_milliyen) / 1000,
       status: r.status === "HELD" && toNum(r.available_at) > now ? "HOLDING" : r.status,
       availableAt: toNum(r.available_at),
+      // 振込予定（最短）: 保留が明けたあとの最初の締め。最低額・上限で次回以降になることがある
+      expectedCloseAt: r.status === "HELD" && toNum(r.amount_milliyen) > 0 ? firstCloseForAvailableAt(toNum(r.available_at), now) : null,
       reversedReason: r.reversed_reason ?? null,
       createdAt: toNum(r.earned_at),
     })),

@@ -8,14 +8,21 @@ export const CREATOR_REWARD_TERMS_VERSION = "2026-11-16"
 /** 有料コイン 1 枚あたりの報酬（ミリ円）。500 = 0.5 円（1,000 コイン = 500 円） */
 export const CREATOR_REWARD_RATE_MILLIYEN = 500
 
-/** 保留の日数（チャージバック・返金に備える） */
-export const CREATOR_REWARD_HOLD_DAYS = 60
+/**
+ * 保留の日数（カードの不正利用の早期警告・ストアの返金の大半はこの間に来る）。
+ * 保留明けのあとに来た返金・チャージバックは、マイナスの報酬行で次回以降の振込から差し引く
+ */
+export const CREATOR_REWARD_HOLD_DAYS = 7
 
 /** 振込の最低額（報酬の合計、円）。未満は翌月以降へ繰り越す */
 export const CREATOR_PAYOUT_MIN_YEN = 3000
 
-/** 1 人 1 か月の上限（報酬の合計、円）。超えた分は翌月以降へ繰り越す */
+/** 1 人 1 か月の上限（報酬の合計、円。その月の締め 2 回の合計）。超えた分は翌月以降へ繰り越す */
 export const CREATOR_PAYOUT_MAX_YEN = 100000
+
+/** Stripe の本人確認が済んでからこの日数のあいだは、1 回の振込をこの額まで（超えた分は次回以降へ繰り越す） */
+export const CREATOR_PAYOUT_NEW_ACCOUNT_DAYS = 30
+export const CREATOR_PAYOUT_NEW_ACCOUNT_MAX_YEN = 30000
 
 /** 振込手数料（円、クリエイター負担）。Stripe の 1 回の費用（月 200 円 + 0.25% + 250 円）をまかなう */
 export const CREATOR_PAYOUT_FEE_YEN = 500
@@ -23,8 +30,10 @@ export const CREATOR_PAYOUT_FEE_YEN = 500
 /** 源泉徴収の率（100 万分率）。個人のみ。100 万円以下は 10.21%（上限が 10 万円なので超えない） */
 export const DEFAULT_WITHHOLDING_PPM = 102100
 
-/** 締めの日（毎月この日の 10:00 JST の cron で前月分を締める） */
-export const CREATOR_PAYOUT_CLOSE_DAY = 10
+/** 締めの日（毎月この日の 10:00 JST の cron で、その日の 0:00 までに保留が明けた分を締める） */
+export const CREATOR_PAYOUT_CLOSE_DAYS = [10, 25]
+/** 古いアプリ向け（closeDay だけを読む） */
+export const CREATOR_PAYOUT_CLOSE_DAY = CREATOR_PAYOUT_CLOSE_DAYS[0]
 
 /** 送金の自動やり直しの回数 */
 export const CREATOR_PAYOUT_MAX_ATTEMPTS = 3
@@ -96,19 +105,47 @@ export const jstParts = (unixSeconds) => {
 /** 日本時間のその月の 1 日 0:00（UNIX 秒） */
 export const jstMonthStart = (year, month) => Math.floor(Date.UTC(year, month - 1, 1) / 1000) - JST_OFFSET
 
+/** 日本時間のその日の 0:00（UNIX 秒） */
+export const jstDayStart = (year, month, day) => Math.floor(Date.UTC(year, month - 1, day) / 1000) - JST_OFFSET
+
 /**
- * 締める期間。「今」が属する月の前月を締める（保留が前月末までに明けた分）。
- * period = "YYYY-MM"（前月）、cutoff = 今月 1 日 0:00 JST（この時刻より前に保留が明けた報酬が対象）
+ * 締める期間。「今」以前でいちばん新しい締めの日（10 日か 25 日）を締める。
+ * period = "YYYY-MM-DD"（締めの日）、cutoff = その日の 0:00 JST（この時刻より前に保留が明けた報酬が対象）
  */
 export const getClosingPeriod = (now) => {
-  const { year, month } = jstParts(now)
-  const prevYear = month === 1 ? year - 1 : year
-  const prevMonth = month === 1 ? 12 : month - 1
-  return { period: `${prevYear}-${String(prevMonth).padStart(2, "0")}`, cutoff: jstMonthStart(year, month) }
+  let { year, month, day } = jstParts(now)
+  let closeDay = [...CREATOR_PAYOUT_CLOSE_DAYS].reverse().find((d) => d <= day)
+  if (!closeDay) {
+    year = month === 1 ? year - 1 : year
+    month = month === 1 ? 12 : month - 1
+    closeDay = CREATOR_PAYOUT_CLOSE_DAYS[CREATOR_PAYOUT_CLOSE_DAYS.length - 1]
+  }
+  const mm = String(month).padStart(2, "0")
+  return { period: `${year}-${mm}-${String(closeDay).padStart(2, "0")}`, cutoff: jstDayStart(year, month, closeDay) }
 }
 
-/** 振込 ID（1 人 1 か月 1 つ。Stripe の transfer_group と冪等性キーにも使う） */
-export const payoutIdFor = (period, userId) => `cp_${period.replace("-", "")}_${userId}`
+/** 次の締めの日時（10 日・25 日の 10:00 JST）。after より後でいちばん早いもの */
+export const nextCloseAt = (after) => {
+  const { year, month } = jstParts(after)
+  for (let i = 0; i < 3; i++) {
+    const y = month + i > 12 ? year + 1 : year
+    const m = ((month - 1 + i) % 12) + 1
+    for (const d of CREATOR_PAYOUT_CLOSE_DAYS) {
+      const at = jstDayStart(y, m, d) + 10 * 3600
+      if (at > after) return at
+    }
+  }
+  return null
+}
+
+/** 保留が availableAt に明ける報酬が入る、最初の締めの日時（その日の 0:00 より前に明けた分が対象） */
+export const firstCloseForAvailableAt = (availableAt, now) => {
+  // 締めの日の 0:00 以降に明けた分はその日の締めに入らないので、10 時間ずらして探す
+  return nextCloseAt(Math.max(availableAt + 10 * 3600, now))
+}
+
+/** 振込 ID（1 人 1 回の締めに 1 つ。Stripe の transfer_group と冪等性キーにも使う） */
+export const payoutIdFor = (period, userId) => `cp_${period.replaceAll("-", "")}_${userId}`
 
 /** 作品コメントの推しの source（work-comment:<作品>:<送った人>:<時刻>）から作品 ID を読む */
 export const workIdFromSupportSource = (source) => {

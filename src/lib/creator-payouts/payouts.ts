@@ -6,6 +6,8 @@ import {
   CREATOR_PAYOUT_MAX_ATTEMPTS,
   CREATOR_PAYOUT_MAX_YEN,
   CREATOR_PAYOUT_MIN_YEN,
+  CREATOR_PAYOUT_NEW_ACCOUNT_DAYS,
+  CREATOR_PAYOUT_NEW_ACCOUNT_MAX_YEN,
   SUSPICIOUS_SENDER_ACCOUNT_DAYS,
   SUSPICIOUS_SINGLE_SENDER_MIN_YEN,
   SUSPICIOUS_SINGLE_SENDER_SHARE,
@@ -82,7 +84,16 @@ export const detectPayoutFlags = async ({ core, userId, rows, grossYen }) => {
 }
 
 /**
- * 月の締め（何度実行しても同じ）。前月末までに保留が明けた報酬を集めて、1 人 1 か月 1 つの振込を作る。
+ * 今回の振込の上限（円）。月の上限からその月にすでに締めた分を引き、本人確認から 30 日以内の口座は 1 回の上限を低くする
+ */
+export const payoutLimitYen = ({ monthUsedYen = 0, payoutsEnabledAt = null, now }) => {
+  const monthLeft = Math.max(0, CREATOR_PAYOUT_MAX_YEN - monthUsedYen)
+  const isNewAccount = !payoutsEnabledAt || now - payoutsEnabledAt < CREATOR_PAYOUT_NEW_ACCOUNT_DAYS * 86400
+  return isNewAccount ? Math.min(monthLeft, CREATOR_PAYOUT_NEW_ACCOUNT_MAX_YEN) : monthLeft
+}
+
+/**
+ * 締め（何度実行しても同じ。10 日・25 日）。締めの日の 0:00 までに保留が明けた報酬を集めて、1 人 1 回 1 つの振込を作る。
  * dryRun のときは書かずに結果だけ返す
  */
 export const closeMonthlyPayouts = async ({ db, core, env, now = getNow(), period: forcedPeriod, dryRun = false }) => {
@@ -107,10 +118,19 @@ export const closeMonthlyPayouts = async ({ db, core, env, now = getNow(), perio
   const results = []
   for (const [userId, userRows] of byUser) {
     const profile = await getProfile(db, userId)
-    const { selected, grossMilliyen } = selectEarningsForPayout(userRows)
+    // 同じ月のほかの締め（取り消し以外）の合計。古い "YYYY-MM" の期間も同じ月に数える
+    const used = await db.queryOne(
+      `SELECT COALESCE(SUM(gross_yen), 0) AS yen FROM creator_payouts
+        WHERE user_id = $1 AND substr(period, 1, 7) = $2 AND period <> $3 AND status <> 'CANCELED'`,
+      [userId, period.slice(0, 7), period],
+    )
+    const limitYen = payoutLimitYen({ monthUsedYen: toNum(used?.yen), payoutsEnabledAt: profile?.payoutsEnabledAt ?? null, now })
+    const { selected, grossMilliyen } = selectEarningsForPayout(userRows, limitYen)
     const grossYen = Math.floor(grossMilliyen / 1000)
     if (grossYen < CREATOR_PAYOUT_MIN_YEN) {
-      results.push({ userId, action: "below_minimum", grossYen })
+      // 保留明けの合計は最低額以上なのに上限で選べなかったときは、上限による繰り越し
+      const availableYen = Math.floor(userRows.reduce((sum, r) => sum + toNum(r.amount_milliyen), 0) / 1000)
+      results.push({ userId, action: availableYen >= CREATOR_PAYOUT_MIN_YEN ? "monthly_limit_reached" : "below_minimum", grossYen, limitYen })
       continue
     }
     if (!profile || profile.status === "SUSPENDED") {

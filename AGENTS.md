@@ -65,5 +65,5 @@ DDL は戻らない。
 
 - 設計・レートの根拠・法務: `~/Documents/aipictors-coin-payout-2026-11-16/design.md`。コードは `src/lib/creator-payouts/`、入口は `/internal/creator-payouts/*`、Connect の webhook は `/webhooks/stripe/connect`。
 - 参加者が全年齢の作品で受け取った「有料・おまけ以外」のプレミアムコインは、コインでなく `creator_earnings`（円建て、0.5 円/枚）に記録する（`transferSupportCoins` の batch の中）。有料の割合は `coin_lots.paid_ratio_ppm`。
-- 締めは毎月 10 日 10:00 JST の cron（`runCreatorPayoutJob`）、送金は毎日。設定は wrangler の `CREATOR_PAYOUT_*`（design.md の 7 章）。
+- 保留 7 日。締めは毎月 10 日・25 日 10:00 JST の cron（`runCreatorPayoutJob`、その日の 0:00 までに保留が明けた分、period = "YYYY-MM-DD"、月の上限 10 万円は 2 回の合計、本人確認から 30 日以内は 1 回 3 万円まで）、送金は毎日。設定は wrangler の `CREATOR_PAYOUT_*`（design.md の 7 章）。
 - テスト: `npx tsx test/creator-payouts.d1-test.mts`。D1 では数値の引数が REAL になるので、割り算の前に `CAST(... AS INTEGER)` する。
