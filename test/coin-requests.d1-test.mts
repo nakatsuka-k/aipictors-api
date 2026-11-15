@@ -16,14 +16,14 @@ const db = d1.db
 const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('ok') } }", d1Databases: ["CORE", "ACTIVITY"] })
 const CORE = await mf.getD1Database("CORE")
 const ACTIVITY = await mf.getD1Database("ACTIVITY")
-await CORE.prepare("CREATE TABLE wp_users (ID INTEGER PRIMARY KEY)").run()
-await CORE.prepare("CREATE TABLE user_profiles (userId INTEGER PRIMARY KEY, userName TEXT, fcm_token TEXT, web_fcm_token TEXT)").run()
+await CORE.prepare("CREATE TABLE wp_users (ID INTEGER PRIMARY KEY, user_login TEXT)").run()
+await CORE.prepare("CREATE TABLE user_profiles (userId INTEGER PRIMARY KEY, userName TEXT, iconUrl TEXT, fcm_token TEXT, web_fcm_token TEXT)").run()
 await CORE.prepare("CREATE TABLE blocked_users (id INTEGER PRIMARY KEY, user_id INTEGER, blocked_user_id INTEGER, is_canceled INTEGER DEFAULT 0)").run()
 await ACTIVITY.prepare(
   "CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, userId INTEGER, workId INTEGER, comment TEXT, stampId INTEGER, ownerUserId INTEGER, notifyInnerCount INTEGER, notifyType INTEGER, notifyTime TEXT, commentId INTEGER)",
 ).run()
 for (const id of [1, 2, 3, 4, 5, 6]) {
-  await CORE.prepare("INSERT INTO wp_users (ID) VALUES (?1)").bind(id).run()
+  await CORE.prepare("INSERT INTO wp_users (ID, user_login) VALUES (?1, ?2)").bind(id, `login${id}`).run()
   await CORE.prepare("INSERT INTO user_profiles (userId, userName) VALUES (?1, ?2)").bind(id, `user${id}`).run()
 }
 

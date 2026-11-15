@@ -702,3 +702,26 @@ export const runRequestJob = async ({ db, env, core, activity, now }) => {
 }
 
 export { calcSettlement }
+
+// ---- 表示用のユーザー（名前・ログイン名・アイコン）。core が読めなければ空 ----
+export const loadRequestUsers = async (core, ids) => {
+  const unique = [...new Set(ids.filter((id) => id !== null && id !== undefined && /^\d+$/.test(String(id))).map(String))].slice(0, 100)
+  if (!core || unique.length === 0) return {}
+  try {
+    const rows =
+      (
+        await core
+          .prepare(
+            `SELECT u.ID AS id, u.user_login AS login, p.userName AS name, p.iconUrl AS icon_url
+               FROM wp_users u LEFT JOIN user_profiles p ON p.userId = u.ID
+              WHERE u.ID IN (${unique.map(() => "?").join(", ")})`,
+          )
+          .bind(...unique.map(Number))
+          .all()
+      ).results ?? []
+    return Object.fromEntries(rows.map((r) => [String(r.id), { id: String(r.id), login: r.login, name: r.name || r.login || "ユーザー", iconUrl: r.icon_url || null }]))
+  } catch (error) {
+    console.error(JSON.stringify({ event: "coin_requests.users_failed", message: String(error?.message ?? error) }))
+    return {}
+  }
+}

@@ -18,6 +18,7 @@ import {
   listPlans,
   listRequests,
   listRequestsForAdmin,
+  loadRequestUsers,
   reportPlan,
   savePlan,
   saveRequestSettings,
@@ -67,7 +68,8 @@ coinRequestRoutes.get("/plans", async (c) => {
     limit: Number(q.limit ?? 30),
     offset: Number(q.offset ?? 0),
   })
-  return json({ error: null, data: { plans } })
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, plans.map((p) => p.userId))
+  return json({ error: null, data: { plans, users } })
 })
 
 coinRequestRoutes.get("/plans/:id", async (c) => {
@@ -75,7 +77,8 @@ coinRequestRoutes.get("/plans/:id", async (c) => {
   const plan = await getPlan({ db, planId: Number(c.req.param("id")) })
   const viewer = c.req.query("viewerUserId")
   if (!plan || (plan.status !== "ACTIVE" && plan.userId !== viewer)) return fail("PLAN_NOT_FOUND")
-  return json({ error: null, data: { plan } })
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, [plan.userId])
+  return json({ error: null, data: { plan, users } })
 })
 
 coinRequestRoutes.post("/plans", async (c) => {
@@ -104,7 +107,8 @@ coinRequestRoutes.post("/plans/:id/report", async (c) => {
 coinRequestRoutes.get("/creators/:userId", async (c) => {
   const db = await getDb(c.env)
   const data = await getCreatorRequestProfile({ db, userId: c.req.param("userId"), viewerUserId: c.req.query("viewerUserId") ?? null })
-  return json({ error: null, data })
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, [c.req.param("userId")])
+  return json({ error: null, data: { ...data, users } })
 })
 
 coinRequestRoutes.get("/settings/:userId", async (c) => {
@@ -126,13 +130,17 @@ coinRequestRoutes.get("/badge/:userId", async (c) => {
 coinRequestRoutes.get("/admin/list", async (c) => {
   const db = await getDb(c.env)
   const q = c.req.query()
-  return json({ error: null, data: await listRequestsForAdmin({ db, status: q.status || null, reportedOnly: q.reported === "1" }) })
+  const data = await listRequestsForAdmin({ db, status: q.status || null, reportedOnly: q.reported === "1" })
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, data.requests.flatMap((r) => [r.requesterUserId, r.creatorUserId]))
+  return json({ error: null, data: { ...data, users } })
 })
 
 coinRequestRoutes.get("/admin/:id", async (c) => {
   const db = await getDb(c.env)
   const request = await getRequest({ db, requestId: Number(c.req.param("id")), viewerUserId: null, isModerator: true })
-  return request ? json({ error: null, data: { request } }) : fail("NOT_FOUND")
+  if (!request) return fail("NOT_FOUND")
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, [request.requesterUserId, request.creatorUserId])
+  return json({ error: null, data: { request, users } })
 })
 
 coinRequestRoutes.post("/admin/:id", async (c) => {
@@ -148,7 +156,9 @@ coinRequestRoutes.get("/", async (c) => {
   const q = c.req.query()
   if (!q.userId) return fail("FORBIDDEN")
   const db = await getDb(c.env)
-  return json({ error: null, data: await listRequests({ db, userId: q.userId, role: q.role === "sent" ? "sent" : "received", status: q.status || "open", limit: Number(q.limit ?? 50), offset: Number(q.offset ?? 0) }) })
+  const data = await listRequests({ db, userId: q.userId, role: q.role === "sent" ? "sent" : "received", status: q.status || "open", limit: Number(q.limit ?? 50), offset: Number(q.offset ?? 0) })
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, data.requests.flatMap((r) => [r.requesterUserId, r.creatorUserId]))
+  return json({ error: null, data: { ...data, users } })
 })
 
 coinRequestRoutes.post("/", async (c) => {
@@ -162,7 +172,9 @@ coinRequestRoutes.post("/", async (c) => {
 coinRequestRoutes.get("/:id", async (c) => {
   const db = await getDb(c.env)
   const request = await getRequest({ db, requestId: Number(c.req.param("id")), viewerUserId: c.req.query("userId") })
-  return request ? json({ error: null, data: { request } }) : fail("NOT_FOUND")
+  if (!request) return fail("NOT_FOUND")
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, [request.requesterUserId, request.creatorUserId])
+  return json({ error: null, data: { request, users } })
 })
 
 coinRequestRoutes.post("/:id/action", async (c) => {
