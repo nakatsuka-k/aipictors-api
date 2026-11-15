@@ -42,6 +42,10 @@ const stripeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     return ok(body)
   }
   if (method === "POST" && url.pathname === "/v1/accounts") {
+    // 本物の Stripe と同じく、空のメールは断る
+    if (form.has("email") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.get("email") ?? "")) {
+      return new Response(JSON.stringify({ error: { type: "invalid_request_error", message: `Invalid email address: ${form.get("email")}` } }), { status: 400 })
+    }
     const id = `acct_test_${nextAccount++}`
     const account = { id, email: form.get("email"), details_submitted: false, payouts_enabled: false, capabilities: { transfers: "inactive" }, business_type: null }
     stripe.accounts.set(id, account)
@@ -636,6 +640,14 @@ await t("口座登録: テストモードでは許可した人だけ。アカウ
   const l1 = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: a, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
   const l2 = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: a, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
   assert.equal(l1.body.data.url, l2.body.data.url)
+  // プロフィールのメール欄が空の人（email: ""）でも登録画面へ進める
+  const noMail = await newUser()
+  await join(noMail)
+  env.CREATOR_PAYOUT_TEST_USER_IDS = `${env.CREATOR_PAYOUT_TEST_USER_IDS},${noMail}`
+  for (const email of ["", "  ", "not-an-email"]) {
+    const r = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: noMail, email, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
+    assert.equal(r.status, 200, JSON.stringify(r.body))
+  }
   const accountId = l1.body.data.url.split("/").pop()
   let summary = (await call("GET", `/internal/creator-payouts/summary/${a}`)).body.data
   assert.equal(summary.profile.payoutReady, false)

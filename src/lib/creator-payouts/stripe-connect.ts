@@ -22,6 +22,12 @@ const encodeForm = (params, prefix = "", out = new URLSearchParams()) => {
   return out
 }
 
+/** Stripe に渡せる形のメールだけを返す（空・空白・@ のないものは undefined） */
+export const toStripeEmail = (email) => {
+  const value = typeof email === "string" ? email.trim() : ""
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : undefined
+}
+
 export const createStripeClient = ({ secretKey, fetchImpl = fetch }) => {
   if (!secretKey) throw new Error("Stripe Connect の鍵が設定されていません")
   const call = async (method, path, params, { idempotencyKey } = {}) => {
@@ -59,7 +65,8 @@ export const createStripeClient = ({ secretKey, fetchImpl = fetch }) => {
         {
           type: "express",
           country: "JP",
-          email: email ?? undefined,
+          // プロフィールのメール欄が空（""）や形の違う文字のときは送らない（Stripe が "Invalid email address" で断る。メールは登録画面で本人が入れる）
+          email: toStripeEmail(email),
           capabilities: { transfers: { requested: true } },
           business_profile: {
             mcc: "7333",
