@@ -10,7 +10,8 @@ export var PICTOR_RUN_RATE_MAX = 4
 /** 1 秒に進める距離の上限と、1 秒に取れるコインの上限（あり得ないスコアを弾く目安） */
 export var PICTOR_RUN_MAX_METERS_PER_SECOND = 7.2
 export var PICTOR_RUN_MAX_COINS_PER_SECOND = 2.5
-export var PICTOR_RUN_MAX_SCORE = 200000
+/** 1 回の得点の上限（距離とコインは時間あたりの上限でも確かめるので、ここは桁外れの値だけ弾く） */
+export var PICTOR_RUN_MAX_SCORE = 5000000
 
 var parseJson = (text) => {
   if (!text) return null
@@ -315,7 +316,7 @@ export var pictorRunWeekStart = (now) => {
   return (days - sinceMonday) * 86400 - 9 * 3600
 }
 
-var isPlausibleScore = (score, coins, durationMs) => {
+export var isPlausiblePictorRunScore = (score, coins, durationMs) => {
   if (!Number.isInteger(score) || !Number.isInteger(coins)) return false
   if (score < 0 || coins < 0 || score > PICTOR_RUN_MAX_SCORE) return false
   const seconds = Math.max(0, Number(durationMs) || 0) / 1000
@@ -328,7 +329,7 @@ export var submitPictorRunScore = async (db, props) => {
   const { user, now } = props
   const score = Number(props.score)
   const coins = Number(props.coins)
-  if (!isPlausibleScore(score, coins, props.durationMs)) return { error: "invalid_score", status: 400 }
+  if (!isPlausiblePictorRunScore(score, coins, props.durationMs)) return { error: "invalid_score", status: 400 }
   const before = await db.queryOne("SELECT best_score FROM pictor_run_scores WHERE user_id = $1", [user.id])
   const previousBest = before ? Number(before.best_score) : 0
   const isNewBest = score > previousBest

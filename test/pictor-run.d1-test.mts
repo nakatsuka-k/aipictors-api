@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 
 const API = process.env.API_SRC ?? new URL("../src", import.meta.url).pathname
 const { app } = await import(`${API}/app.ts`)
-const { pictorRunWeekStart } = await import(`${API}/lib/pictor-run.ts`)
+const { pictorRunWeekStart, isPlausiblePictorRunScore } = await import(`${API}/lib/pictor-run.ts`)
 
 import { createTestD1 } from "./d1.mts"
 const d1 = await createTestD1()
@@ -75,6 +75,9 @@ assert.ok(afterDelete.body.data.deletedIds.includes(firstId))
 // スコア: あり得ないものは弾く（10 秒で 1000m は進めない）
 assert.equal((await call("/scores/submit", { user: alice, score: 1000, coins: 0, durationMs: 10_000 })).status, 400)
 assert.equal((await call("/scores/submit", { user: alice, score: -1, coins: 0, durationMs: 10_000 })).status, 400)
+// 20 万 m を超える長時間の記録も、時間あたりの上限に収まっていれば受け付ける（上限 500 万）
+assert.equal(isPlausiblePictorRunScore(223_440, 0, 9 * 3600_000), true)
+assert.equal(isPlausiblePictorRunScore(5_000_001, 0, 1000 * 3600_000), false)
 const s1 = await call("/scores/submit", { user: alice, score: 120, coins: 5, durationMs: 20_000 })
 assert.deepEqual(s1.body.data, { best: 120, isNewBest: true, rank: 1, achievements: ["special-pictor-run-play"] })
 const s2 = await call("/scores/submit", { user: alice, score: 80, coins: 2, durationMs: 15_000 })
