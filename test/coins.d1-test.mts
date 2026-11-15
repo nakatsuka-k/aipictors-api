@@ -256,6 +256,34 @@ await t("Gemini の枠: 月曜 0 時（日本時間）に戻り、プランご�
   assert.equal(a.resetsAt, Date.parse("2026-11-23T00:00:00+09:00") / 1000)
 })
 
+await t("premiumOnly: フリーコインがあってもプレミアムコインだけで払い、足りなければ何も引かない", async () => {
+  // 消費の前に今日の日次コインが付くので、先に受け取っておく
+  await coins.ensureInitialCoinGrant({ db, userId: "p1", planType: "FREE" })
+  await coins.applyCoinDelta({ db, userId: "p1", freeDelta: 5000, premiumDelta: 3000, kind: "GRANT", reason: "test" })
+  const before = await coins.getCoinSummary(db, "p1", {})
+  const short = await coins.consumeCoins({ db, userId: "p1", amount: 5000, reason: "アイコン枠", source: "avatar-frame:1", premiumOnly: true })
+  assert.deepEqual(short, { ok: false, code: "INSUFFICIENT_COINS" })
+  const same = await coins.getCoinSummary(db, "p1", {})
+  assert.deepEqual([same.freeBalance, same.premiumBalance], [before.freeBalance, before.premiumBalance])
+  const ok = await coins.consumeCoins({ db, userId: "p1", amount: 2000, reason: "アイコン枠", source: "avatar-frame:2", premiumOnly: true })
+  assert.deepEqual([ok.ok, ok.freeSpent, ok.premiumSpent], [true, 0, 2000])
+  const after = await coins.getCoinSummary(db, "p1", {})
+  assert.deepEqual([after.freeBalance, after.premiumBalance], [before.freeBalance, before.premiumBalance - 2000])
+  assert.deepEqual(await coins.getConsumedCoinBreakdownBySource({ db, userId: "p1", source: "avatar-frame:2" }), { freeConsumed: 0, premiumConsumed: 2000 })
+  // 指定しなければ今まで通りフリーコインから
+  const normal = await coins.consumeCoins({ db, userId: "p1", amount: 100, reason: "アイコン枠", source: "avatar-frame:3" })
+  assert.deepEqual([normal.freeSpent, normal.premiumSpent], [100, 0])
+})
+
+await t("premiumOnly: プレミアムコインしか無い人の同時購入は残高の分だけ通る", async () => {
+  await coins.applyCoinDelta({ db, userId: "p2", freeDelta: 100000, premiumDelta: 1000, kind: "GRANT", reason: "test" })
+  const rs = await Promise.all(Array.from({ length: 8 }, () => coins.consumeCoins({ db, userId: "p2", amount: 300, premiumOnly: true })))
+  assert.equal(rs.filter((r) => r.ok).length, 3)
+  const s = await coins.getCoinSummary(db, "p2", {})
+  assert.equal(s.premiumBalance, 100)
+  assert.ok(s.freeBalance >= 100000)
+})
+
 console.log(`\n${passed} passed`)
 await d1.dispose()
 process.exit(0)

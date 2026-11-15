@@ -27,7 +27,9 @@ export var consumeSchema = object({
   userId: string(),
   amount: number(),
   reason: optional(nullable(string())),
-  source: optional(nullable(string()))
+  source: optional(nullable(string())),
+  // true: プレミアムコインだけで払う（無料コインは使わない。スペシャルのアイコン枠など）
+  premiumOnly: optional(boolean())
 });
 export var consumeBreakdownSchema = object({
   userId: string(),
@@ -170,7 +172,8 @@ coinsRoutes.post("/consume", async (c) => {
     userId: parsed.output.userId,
     amount: parsed.output.amount,
     reason: parsed.output.reason ?? null,
-    source: parsed.output.source ?? null
+    source: parsed.output.source ?? null,
+    premiumOnly: parsed.output.premiumOnly ?? false
   });
   if (!result.ok) {
     const error = result.code === "INSUFFICIENT_COINS" ? "Insufficient coins" : "Invalid amount";
