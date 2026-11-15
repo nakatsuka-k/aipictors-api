@@ -334,7 +334,7 @@ export const reverseEarningsForSenderRefund = async ({ db, senderUserId, since, 
   const rows = await db.query(
     `SELECT id AS earning_id, user_id, coins, rate_milliyen, amount_milliyen, status, payout_id, work_id, source
        FROM creator_earnings
-      WHERE sender_user_id = $1 AND kind = 'SUPPORT' AND created_at >= $2 AND status IN ('HELD', 'IN_PAYOUT', 'PAID')
+      WHERE sender_user_id = $1 AND kind IN ('SUPPORT', 'REQUEST') AND created_at >= $2 AND status IN ('HELD', 'IN_PAYOUT', 'PAID')
       ORDER BY id DESC`,
     [String(senderUserId), Math.floor(since ?? 0)],
   )
