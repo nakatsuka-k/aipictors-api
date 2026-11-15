@@ -2,6 +2,7 @@
 // 感謝コインを送る・戻す・運営から付与する
 import { getNow } from "../db"
 import { SUPPORT_PT_MULTIPLIER, getBalanceColumn, getSupportWeekStartDate } from "./common"
+import { CREATOR_REWARD_HOLD_DAYS, CREATOR_REWARD_RATE_MILLIYEN } from "../creator-payouts/config"
 export var transferSupportCoins = async (props) => {
   const now = props.now ?? getNow();
   const amount = Math.floor(Math.max(0, props.amount));
@@ -47,10 +48,12 @@ export var transferSupportCoins = async (props) => {
   // D1: 1 つのトランザクション（batch）で実行する。使う量は「使う前のロット」から計算し、
   // 受付（source の重複なし）と残高が足りるときだけ d1_guard に 1 行入れて、以降の文はその行があるときだけ書く（最後に消す）
   const updatesSql = `SELECT id,
+               paid_ratio_ppm,
                min(remaining, max($3 - (cumulative - remaining), 0)) AS spend
           FROM (
             SELECT id,
                    remaining,
+                   paid_ratio_ppm,
                    SUM(remaining) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS cumulative
               FROM coin_lots
              WHERE user_id = $1
@@ -59,6 +62,13 @@ export var transferSupportCoins = async (props) => {
           )
          WHERE max($3 - (cumulative - remaining), 0) > 0`;
   const spentSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${updatesSql}))`;
+  // クリエイター報酬: 受け取る人が報酬の対象（props.earnings、呼び出し側で参加・全年齢を確かめる）なら、
+  // 送る人のロットから使う「有料（おまけでない）」分をコインではなく報酬（creator_earnings）にする
+  const earnedSql = `(CASE WHEN $11 = 1 AND $4 = 'PREMIUM'
+          THEN CAST((SELECT COALESCE(SUM(spend * paid_ratio_ppm), 0) FROM (${updatesSql})) AS INTEGER) / 1000000
+          ELSE 0 END)`;
+  // 受け取る人にコインで渡す分
+  const recipientCoinsSql = `($3 - ${earnedSql})`;
   const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
   const params = [
     props.senderUserId,
@@ -70,7 +80,11 @@ export var transferSupportCoins = async (props) => {
     now,
     ptAmount,
     weekStartDate,
-    isAnonymous
+    isAnonymous,
+    props.earnings ? 1 : 0,
+    props.earnings?.workId ?? null,
+    props.earnings?.rateMilliyen ?? CREATOR_REWARD_RATE_MILLIYEN,
+    (props.earnings?.holdDays ?? CREATOR_REWARD_HOLD_DAYS) * 86400
   ];
   const upsertWeekly = (table, userParam) => ({
     text: `INSERT INTO ${table}(week_start_date, user_id, coin_amount, pt_amount, transfer_count, updated_at)
@@ -98,6 +112,7 @@ export var transferSupportCoins = async (props) => {
     },
     // changes() は直前の文（受付の INSERT）で入った行数
     { text: `INSERT INTO d1_guard(ok) SELECT 1 WHERE ($6 IS NULL OR changes() = 1) AND ${spentSql} = $3`, params },
+    { text: `SELECT CASE WHEN ${guarded} THEN ${earnedSql} ELSE 0 END AS earned_coins`, params },
     {
       text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
         SELECT $1, $4, -$3, 'CONSUME', $5, $6, $7, NULL WHERE ${guarded}`,
@@ -130,7 +145,7 @@ export var transferSupportCoins = async (props) => {
     },
     {
       text: `UPDATE coin_balances
-           SET premium_balance = coin_balances.premium_balance + $3,
+           SET premium_balance = coin_balances.premium_balance + ${recipientCoinsSql},
                updated_at = $7
          WHERE user_id = $2
            AND $4 = 'PREMIUM'
@@ -139,14 +154,20 @@ export var transferSupportCoins = async (props) => {
     },
     {
       text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at)
-        SELECT $2, 'PREMIUM', $3, 0, 'SUPPORT', $6, $1, NULL, $7, $7
-         WHERE $4 = 'PREMIUM' AND ${guarded}`,
+        SELECT $2, 'PREMIUM', ${recipientCoinsSql}, 0, 'SUPPORT', $6, $1, NULL, $7, $7
+         WHERE $4 = 'PREMIUM' AND ${recipientCoinsSql} > 0 AND ${guarded}`,
       params
     },
     {
       text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $2, 'PREMIUM', $3, 'GRANT', COALESCE($5, 'coin support received'), $6, $7, NULL
-         WHERE $4 = 'PREMIUM' AND ${guarded}`,
+        SELECT $2, 'PREMIUM', ${recipientCoinsSql}, 'GRANT', COALESCE($5, 'coin support received'), $6, $7, NULL
+         WHERE $4 = 'PREMIUM' AND ${recipientCoinsSql} > 0 AND ${guarded}`,
+      params
+    },
+    {
+      text: `INSERT INTO creator_earnings(user_id, kind, source, sender_user_id, work_id, coins, rate_milliyen, amount_milliyen, status, available_at, created_at, updated_at)
+        SELECT $2, 'SUPPORT', $6, $1, $12, ${earnedSql}, CAST($13 AS INTEGER), ${earnedSql} * CAST($13 AS INTEGER), 'HELD', CAST($7 + $14 AS INTEGER), $7, $7
+         WHERE ${earnedSql} > 0 AND ${guarded}`,
       params
     },
     {
@@ -172,6 +193,7 @@ export var transferSupportCoins = async (props) => {
     { text: "DELETE FROM d1_guard" }
   ]);
   const transferred = Boolean(results[results.length - 2].rows[0]?.ok);
+  const earnedCoins = transferred ? Number(results[3].rows[0]?.earned_coins ?? 0) : 0;
   const result = transferred
     ? { transferred_amount: amount, sender_pt_added: ptAmount, recipient_pt_added: ptAmount, week_start_date: weekStartDate }
     : null;
@@ -212,7 +234,8 @@ export var transferSupportCoins = async (props) => {
     transferredAmount: amount,
     senderPtAdded: ptAmount,
     recipientPtAdded: ptAmount,
-    weekStartDate
+    weekStartDate,
+    earnedCoins
   };
 };
 
@@ -225,10 +248,14 @@ export var revertSupportTransferBySource = async (props) => {
            AND source = $3`;
   const freeAmountSql = `(SELECT COALESCE(SUM(coin_amount), 0) FROM (${targetSql}) WHERE coin_type = 'FREE')`;
   const premiumAmountSql = `(SELECT COALESCE(SUM(coin_amount), 0) FROM (${targetSql}) WHERE coin_type = 'PREMIUM')`;
+  // クリエイター報酬になった分（受け取る人にはコインで渡していない。保留中のものだけ取り消せる）
+  const earnedSql = `(SELECT COALESCE(SUM(coins), 0) FROM creator_earnings WHERE user_id = $2 AND source = $3 AND kind = 'SUPPORT' AND status = 'HELD' AND EXISTS (${targetSql}))`;
   const params = [props.senderUserId, props.recipientUserId, props.source, now];
   const refundLot = (coinType, amountSql) => ({
-    text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at)
-        SELECT $1, '${coinType}', ${amountSql}, 0, 'ROLLBACK', $3, $2, NULL, $4, $4
+    // 報酬になった分は有料のコインだったので、戻すロットにもその割合を残す（もう一度推したときに報酬になるように）
+    text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at, paid_ratio_ppm)
+        SELECT $1, '${coinType}', ${amountSql}, 0, 'ROLLBACK', $3, $2, NULL, $4, $4,
+               ${coinType === "PREMIUM" ? `min(1000000, CAST(${earnedSql} AS INTEGER) * 1000000 / CAST(max(${amountSql}, 1) AS INTEGER))` : "0"}
          WHERE ${amountSql} > 0`,
     params
   });
@@ -289,7 +316,7 @@ export var revertSupportTransferBySource = async (props) => {
     },
     {
       text: `UPDATE coin_balances
-           SET premium_balance = max(coin_balances.premium_balance - ${premiumAmountSql}, 0),
+           SET premium_balance = max(coin_balances.premium_balance - (${premiumAmountSql} - ${earnedSql}), 0),
                updated_at = $4
          WHERE user_id = $2
            AND ${premiumAmountSql} > 0`,
@@ -309,14 +336,21 @@ export var revertSupportTransferBySource = async (props) => {
     },
     {
       text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-        SELECT $2, 'PREMIUM', -${premiumAmountSql}, 'CONSUME', 'support rollback reversal', $3, $4, NULL
-         WHERE ${premiumAmountSql} > 0`,
+        SELECT $2, 'PREMIUM', -(${premiumAmountSql} - ${earnedSql}), 'CONSUME', 'support rollback reversal', $3, $4, NULL
+         WHERE ${premiumAmountSql} - ${earnedSql} > 0`,
       params
     },
     weekly("coin_support_weekly_sent_points", "sender_user_id"),
     weekly("coin_support_weekly_received_points", "recipient_user_id"),
     totals("sender_user_id", "sent_pt_total", "sent_coin_total"),
     totals("recipient_user_id", "received_pt_total", "received_coin_total"),
+    {
+      text: `UPDATE creator_earnings
+           SET status = 'REVERSED', reversed_reason = 'support_rollback', reversed_at = $4, updated_at = $4
+         WHERE user_id = $2 AND source = $3 AND kind = 'SUPPORT' AND status = 'HELD'
+           AND EXISTS (${targetSql})`,
+      params
+    },
     { text: `DELETE FROM coin_support_transfers WHERE id IN (SELECT id FROM (${targetSql}))`, params }
   ]);
   const result = results[0].rows[0];

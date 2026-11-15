@@ -1,7 +1,8 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
-import { approveAmazonExchangeRequest, createAmazonExchangeRequest, listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
+import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
+import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
@@ -42,7 +43,10 @@ export var grantSchema = object({
   reason: optional(nullable(string())),
   source: optional(nullable(string())),
   // 有効期限（UNIX 秒）。実績のコインなど、当日 24:00 より長く使えるようにするとき
-  expiresAt: optional(nullable(number()))
+  expiresAt: optional(nullable(number())),
+  // 有料で買われたコイン（アプリ内課金）。STORE_PURCHASE と、おまけを除いた枚数（クリエイター報酬の対象を決める）
+  sourceKind: optional(nullable(literal("STORE_PURCHASE"))),
+  paidPremiumCoins: optional(nullable(number()))
 });
 export var bulkAdjustSchema = object({
   userIds: array(string()),
@@ -60,22 +64,14 @@ export var supportSchema = object({
   isAnonymous: optional(boolean()),
   planType: optional(nullable(planTypeSchema)),
   reason: optional(nullable(string())),
-  source: optional(nullable(string()))
+  source: optional(nullable(string())),
+  // どの作品への推しか（全年齢の作品だけがクリエイター報酬になる）。作品コメントの推しは source から読む
+  workId: optional(nullable(union([string(), number()])))
 });
 export var revertSupportSchema = object({
   senderUserId: string(),
   recipientUserId: string(),
   source: string()
-});
-export var amazonExchangeCreateSchema = object({
-  userId: string(),
-  packageId: string(),
-  coinAmount: number(),
-  amazonPointYen: number()
-});
-export var amazonExchangeApproveSchema = object({
-  amazonGiftCode: string(),
-  moderatorUserId: string()
 });
 export var coinsRoutes = new Hono2();
 coinsRoutes.use("*", requireInternalAuth);
@@ -221,7 +217,9 @@ coinsRoutes.post("/grant", async (c) => {
     kind: "GRANT",
     reason: parsed.output.reason ?? null,
     source: parsed.output.source ?? null,
-    expiresAt: parsed.output.expiresAt ?? void 0
+    expiresAt: parsed.output.expiresAt ?? void 0,
+    sourceKind: parsed.output.sourceKind ?? null,
+    paidPremiumCoins: parsed.output.paidPremiumCoins ?? null
   });
   return json({ error: null, data: summary });
 });
@@ -278,6 +276,17 @@ coinsRoutes.post("/support", async (c) => {
     userId: parsed.output.senderUserId,
     planType: parsed.output.planType ?? "FREE"
   });
+  // クリエイター報酬にするか（参加者・全年齢の作品だけ。読み取りは参加者の 1 行と、参加者のときだけ作品 1 行）
+  const decision = await decideSupportEarnings({
+    db,
+    core: c.env.SYSTEM_CORE ?? null,
+    env: c.env,
+    senderUserId: parsed.output.senderUserId,
+    recipientUserId: parsed.output.recipientUserId,
+    coinType: parsed.output.coinType,
+    workId: parsed.output.workId === null || parsed.output.workId === void 0 ? null : String(parsed.output.workId),
+    source: parsed.output.source ?? null
+  });
   const result = await transferSupportCoins({
     db,
     senderUserId: parsed.output.senderUserId,
@@ -286,7 +295,8 @@ coinsRoutes.post("/support", async (c) => {
     amount: parsed.output.amount,
     isAnonymous: parsed.output.isAnonymous ?? false,
     reason: parsed.output.reason ?? null,
-    source: parsed.output.source ?? null
+    source: parsed.output.source ?? null,
+    earnings: decision.earnings
   });
   if (!result.ok) {
     const status = result.code === "INSUFFICIENT_COINS" ? 409 : 400;
@@ -299,7 +309,9 @@ coinsRoutes.post("/support", async (c) => {
       transferredAmount: result.transferredAmount,
       senderPtAdded: result.senderPtAdded,
       recipientPtAdded: result.recipientPtAdded,
-      weekStartDate: result.weekStartDate
+      weekStartDate: result.weekStartDate,
+      // クリエイター報酬になった有料コインの枚数（受け取る人にはコインでなく報酬として記録）
+      earnedCoins: result.earnedCoins ?? 0
     }
   });
 });
@@ -480,39 +492,8 @@ coinsRoutes.get("/amazon-exchange", async (c) => {
   const result = await listAmazonExchangeRequestsByUser({ db, userId });
   return json({ error: null, data: result });
 });
-coinsRoutes.post("/amazon-exchange", async (c) => {
-  const parsed = safeParse(amazonExchangeCreateSchema, await c.req.json());
-  if (!parsed.success) {
-    return json({ error: "Invalid body" }, 400);
-  }
-  const db = await getDb(c.env);
-  const result = await createAmazonExchangeRequest({
-    db,
-    userId: parsed.output.userId,
-    packageId: parsed.output.packageId,
-    coinAmount: parsed.output.coinAmount,
-    amazonPointYen: parsed.output.amazonPointYen
-  });
-  if (!result.ok) {
-    return json(
-      {
-        error: result.code === "PENDING_LIMIT" ? "Too many pending requests" : "Insufficient support premium coins",
-        data: {
-          remainingSlots: result.remainingSlots
-        }
-      },
-      result.code === "PENDING_LIMIT" ? 409 : 400
-    );
-  }
-  return json({
-    error: null,
-    data: {
-      requestId: result.requestId,
-      pendingCount: result.pendingCount,
-      remainingSlots: result.remainingSlots
-    }
-  });
-});
+// Amazon ギフト券への交換は 2026-11-16 に廃止（クリエイター報酬 /internal/creator-payouts に置き換え）。申請は 0 件だった
+coinsRoutes.post("/amazon-exchange", (c) => json({ error: "Amazon gift card exchange has ended. Use creator rewards instead." }, 410));
 coinsRoutes.get("/amazon-exchange/admin", async (c) => {
   const db = await getDb(c.env);
   const statusRaw = c.req.query("status")?.trim();
@@ -532,34 +513,7 @@ coinsRoutes.get("/amazon-exchange/admin", async (c) => {
   });
   return json({ error: null, data: result });
 });
-coinsRoutes.post("/amazon-exchange/:requestId/approve", async (c) => {
-  const parsed = safeParse(amazonExchangeApproveSchema, await c.req.json());
-  if (!parsed.success) {
-    return json({ error: "Invalid body" }, 400);
-  }
-  const amazonGiftCode = parsed.output.amazonGiftCode.trim();
-  if (!amazonGiftCode) {
-    return json({ error: "amazonGiftCode is required" }, 400);
-  }
-  const db = await getDb(c.env);
-  const result = await approveAmazonExchangeRequest({
-    db,
-    requestId: c.req.param("requestId"),
-    amazonGiftCode,
-    moderatorUserId: parsed.output.moderatorUserId
-  });
-  if (!result.ok) {
-    return json({ error: "Request is not approvable" }, 409);
-  }
-  return json({
-    error: null,
-    data: {
-      userId: result.userId,
-      coinAmount: result.coinAmount,
-      amazonPointYen: result.amazonPointYen
-    }
-  });
-});
+coinsRoutes.post("/amazon-exchange/:requestId/approve", (c) => json({ error: "Amazon gift card exchange has ended." }, 410));
 export var grantSupportSchema = object({
   recipientUserId: string(),
   coinType: union([literal("FREE"), literal("PREMIUM")]),

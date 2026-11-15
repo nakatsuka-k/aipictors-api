@@ -22,7 +22,12 @@ export var grantCoins = async (props) => {
     props.reason ?? null,
     props.source ?? null,
     expiresAt,
-    premiumExpiresAt
+    premiumExpiresAt,
+    // アプリ内課金のコインは STORE_PURCHASE。有料（おまけでない）の割合を残す（クリエイター報酬の対象を決める）
+    props.sourceKind === "STORE_PURCHASE" ? "STORE_PURCHASE" : "SYSTEM",
+    props.sourceKind === "STORE_PURCHASE" && premiumCoins > 0
+      ? Math.min(1000000, Math.floor((Math.max(0, Math.floor(props.paidPremiumCoins ?? 0)) * 1000000) / premiumCoins))
+      : 0
   ];
   await props.db.batch([
     {
@@ -41,8 +46,8 @@ export var grantCoins = async (props) => {
     },
   // Neon 版と同じ id の順（プレミアム → フリー）
     {
-      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at)
-        SELECT $1, 'PREMIUM', $3, $9, $4, $4
+      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, expires_at, created_at, updated_at, source_kind, paid_ratio_ppm)
+        SELECT $1, 'PREMIUM', $3, $9, $4, $4, $10, $11
          WHERE $3 > 0`,
       params
     },
@@ -236,6 +241,8 @@ export var applyCoinDelta = async (props) => {
     kind: props.kind,
     reason: props.reason ?? null,
     source: props.source ?? null,
+    sourceKind: props.sourceKind ?? null,
+    paidPremiumCoins: props.paidPremiumCoins ?? null,
     now,
     // 期限を指定したときだけ使う（指定が無ければ無料コインは当日 24:00、プレミアムは期限なし）
     ...(props.expiresAt !== void 0 && props.expiresAt !== null && { expiresAt: props.expiresAt })

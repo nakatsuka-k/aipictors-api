@@ -6,6 +6,7 @@ import { adminRoutes } from "./routes/admin"
 import { analyticsRoutes } from "./routes/analytics"
 import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
 import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
+import { creatorPayoutRoutes } from "./routes/creator-payouts"
 import { d1ProxyRoutes } from "./routes/d1-proxy"
 import { discordBotRoutes, discordRoutes } from "./routes/discord"
 import { imageGenerationRoutes } from "./routes/image-generation"
@@ -23,6 +24,7 @@ app.get("/healthz", (c) => {
   return json({ ok: true, service: "aipictors-api" });
 });
 app.route("/internal/coins", coinsRoutes);
+app.route("/internal/creator-payouts", creatorPayoutRoutes);
 app.route("/api/coins", publicCoinsRoutes);
 app.route("/internal/image-generation", imageGenerationRoutes);
 app.route("/internal/d1", d1ProxyRoutes);

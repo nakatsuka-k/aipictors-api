@@ -5,6 +5,7 @@ import { json } from "../lib/json"
 import { applyPointDelta } from "../lib/points"
 import { grantRenewalBonus } from "../lib/loyalty"
 import { createPremiumCoinPurchase, refundPremiumCoinPurchase } from "../lib/premium-coins"
+import { applyAccountUpdated, reverseEarningsForSenderRefund } from "../lib/creator-payouts"
 import { getNumber, getString } from "../lib/record-fields"
 import { verifyStripeSignature } from "../lib/stripe"
 import { disableSubscriptionByStripeId, upsertSubscription } from "../lib/subscriptions"
@@ -148,10 +149,64 @@ webhookRoutes.post("/stripe/premium-coins", async (c) => {
       stripeChargeId: getString(object2, "id")
     });
   }
+  // 返金・チャージバック: その購入者が購入後に送った推しのクリエイター報酬を、買った有料コインの枚数まで取り消す
+  if (event.type === "charge.refunded" || event.type === "charge.dispute.created") {
+    const chargeId = event.type === "charge.refunded" ? getString(object2, "id") : getString(object2, "charge");
+    const purchase = await db.queryOne(
+      `SELECT user_id, coins, created_at AS purchased_at FROM premium_coin_purchases
+        WHERE ($1 IS NOT NULL AND stripe_payment_intent_id = $1) OR ($2 IS NOT NULL AND stripe_charge_id = $2)
+        ORDER BY created_at DESC LIMIT 1`,
+      [getString(object2, "payment_intent"), chargeId]
+    );
+    if (purchase) {
+      const reversed = await reverseEarningsForSenderRefund({
+        db,
+        senderUserId: String(purchase.user_id),
+        since: Number(purchase.purchased_at),
+        maxCoins: Number(purchase.coins),
+        reason: event.type === "charge.refunded" ? "coin_refund" : "coin_dispute"
+      });
+      if (reversed.reversedCoins + reversed.clawbackCoins > 0) {
+        console.log(JSON.stringify({ event: "creator_payouts.sender_refund", stripeEvent: event.id, ...reversed }));
+      }
+    }
+  }
   await db.execute(
     "INSERT INTO webhook_events(event_id, type, processed_at) VALUES ($1, $2, $3)",
     [dedupKey, event.type, getNow()]
   );
+  return json({ error: null, data: true });
+});
+// Stripe Connect（クリエイター報酬の連結アカウント）の webhook。連結アカウントのイベントを受ける設定（connect=true）の宛先
+webhookRoutes.post("/stripe/connect", async (c) => {
+  const db = await getDb(c.env);
+  const webhookSecret = c.env.STRIPE_WEBHOOK_SECRET_CONNECT;
+  if (!webhookSecret) {
+    return json({ error: "STRIPE_WEBHOOK_SECRET_CONNECT is not configured" }, 500);
+  }
+  const signature = c.req.header("stripe-signature");
+  if (!signature) {
+    return json({ error: "Missing stripe-signature" }, 400);
+  }
+  const payload = await c.req.text();
+  const verified = await verifyStripeSignature({ payload, signatureHeader: signature, secret: webhookSecret });
+  if (!verified) {
+    return json({ error: "Invalid signature" }, 401);
+  }
+  const event = JSON.parse(payload);
+  const dedupKey = `connect:${event.id}`;
+  const existing = await db.queryOne("SELECT event_id FROM webhook_events WHERE event_id = $1", [dedupKey]);
+  if (existing) {
+    return json({ error: null, data: { deduplicated: true } });
+  }
+  if (event.type === "account.updated") {
+    await applyAccountUpdated({ db, account: event.data.object, livemode: event.livemode === true });
+  }
+  // 連結アカウントから銀行への入金の失敗（口座の誤りなど）は記録だけ（本人は Stripe のダッシュボードで直す）
+  if (event.type === "payout.failed") {
+    console.log(JSON.stringify({ event: "creator_payouts.bank_payout_failed", account: event.account, code: event.data?.object?.failure_code ?? null }));
+  }
+  await db.execute("INSERT INTO webhook_events(event_id, type, processed_at) VALUES ($1, $2, $3)", [dedupKey, event.type, getNow()]);
   return json({ error: null, data: true });
 });
 webhookRoutes.post("/stripe", async (c) => {

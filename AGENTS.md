@@ -60,3 +60,10 @@ DDL は戻らない。
 - 紹介特典を止める: wrangler の var `REFERRAL_ENABLED` を `""` か `"0"` にしてデプロイ（新しいひも付けと付与が止まる。画面は `/internal/referrals/status` を見て「受け付けていません」と出す）。
 - Stripe の画面の言語: 決済・カード変更の入口は body の `locale`（"en" / "ja"）を受け取り、"en" のときだけ Stripe に `locale=en` を渡す。契約の metadata `locale` に残し、お試しの終了前・解約のリマインドのメールの言語に使う（無ければ日英併記）。
 - `node_modules` を別の worktree へのシンボリックリンクにするときは、コミットに入っていないことを確かめる（一度入ってしまい、pull した側の node_modules が消えた）。
+
+## クリエイター報酬（推しの換金、2026-11-16）
+
+- 設計・レートの根拠・法務: `~/Documents/aipictors-coin-payout-2026-11-16/design.md`。コードは `src/lib/creator-payouts/`、入口は `/internal/creator-payouts/*`、Connect の webhook は `/webhooks/stripe/connect`。
+- 参加者が全年齢の作品で受け取った「有料・おまけ以外」のプレミアムコインは、コインでなく `creator_earnings`（円建て、0.5 円/枚）に記録する（`transferSupportCoins` の batch の中）。有料の割合は `coin_lots.paid_ratio_ppm`。
+- 締めは毎月 10 日 10:00 JST の cron（`runCreatorPayoutJob`）、送金は毎日。設定は wrangler の `CREATOR_PAYOUT_*`（design.md の 7 章）。
+- テスト: `npx tsx test/creator-payouts.d1-test.mts`。D1 では数値の引数が REAL になるので、割り算の前に `CAST(... AS INTEGER)` する。

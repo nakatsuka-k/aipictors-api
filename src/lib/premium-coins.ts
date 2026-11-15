@@ -64,8 +64,9 @@ export var createPremiumCoinPurchase = async (props) => {
     const results = await props.db.batch([
       { text: `INSERT INTO coin_balances(user_id, free_balance, premium_balance, updated_at) VALUES ($1, 0, 0, $8) ON CONFLICT (user_id) DO NOTHING`, params },
       {
-        text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at)
-          VALUES ($1, 'PREMIUM', $2, 0, 'PURCHASE', $3, NULL, $9, $8, $8)`,
+        // paid_ratio_ppm: おまけを除いた買った枚数の割合（クリエイター報酬は有料の分だけ）
+        text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at, paid_ratio_ppm)
+          VALUES ($1, 'PREMIUM', $2, 0, 'PURCHASE', $3, NULL, $9, $8, $8, CAST($10 AS INTEGER) * 1000000 / CAST($2 AS INTEGER))`,
         params
       },
       // last_insert_rowid() は直前の文で入ったロットの id
