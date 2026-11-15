@@ -339,9 +339,10 @@ export var submitPictorRunScore = async (db, props) => {
     },
     {
       text: `INSERT INTO pictor_run_scores
-               (user_id, user_name, user_login, icon_url, badge, best_score, best_coins, plays, best_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)
+               (user_id, user_name, user_login, icon_url, badge, best_score, best_coins, plays, best_at, updated_at, total_score)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8, $6)
              ON CONFLICT (user_id) DO UPDATE SET
+               total_score = pictor_run_scores.total_score + excluded.total_score,
                user_name = excluded.user_name,
                user_login = excluded.user_login,
                icon_url = excluded.icon_url,
@@ -401,13 +402,55 @@ var toRankingItem = (row, index) => ({
     badge: parseJson(row.badge)
   },
   score: Number(row.score),
-  coins: Number(row.coins ?? 0)
+  coins: Number(row.coins ?? 0),
+  ...(row.plays !== undefined ? { plays: Number(row.plays) } : {})
 })
 
-/** period: all（自己ベストの累計）/ week（今週の最高） */
+/** 累計ランキングの一覧を覚えておく秒数（本人の順位は毎回数える。索引だけで済む） */
+var PICTOR_RUN_TOTAL_CACHE_SECONDS = 180
+
+var getPictorRunTotalRanking = async (db, limit, userId) => {
+  const cache = typeof caches !== "undefined" ? caches.default : null
+  const cacheKey = new Request(`https://aipictors-api.internal/pictor-run/ranking/total?limit=${limit}`)
+  let items = null
+  if (cache) {
+    const hit = await cache.match(cacheKey).catch(() => null)
+    if (hit) items = await hit.json().catch(() => null)
+  }
+  if (!items) {
+    const rows = await db.query(
+      `SELECT user_id, user_name, user_login, icon_url, badge, total_score AS score, 0 AS coins, plays
+         FROM pictor_run_scores WHERE total_score > 0 ORDER BY total_score DESC, updated_at LIMIT $1`,
+      [limit]
+    )
+    items = rows.map(toRankingItem)
+    if (cache) {
+      await cache
+        .put(
+          cacheKey,
+          new Response(JSON.stringify(items), {
+            headers: { "content-type": "application/json", "cache-control": `max-age=${PICTOR_RUN_TOTAL_CACHE_SECONDS}` }
+          })
+        )
+        .catch(() => {})
+    }
+  }
+  let me = null
+  if (userId) {
+    const mine = await db.queryOne("SELECT total_score FROM pictor_run_scores WHERE user_id = $1", [userId])
+    if (mine && Number(mine.total_score) > 0) {
+      const above = await db.queryOne("SELECT COUNT(*) AS n FROM pictor_run_scores WHERE total_score > $1", [Number(mine.total_score)])
+      me = { rank: Number(above?.n ?? 0) + 1, score: Number(mine.total_score) }
+    }
+  }
+  return { items, me }
+}
+
+/** period: all（これまでの自己ベスト）/ week（今週の最高）/ total（累計 = 全部の回の得点の合計） */
 export var getPictorRunRanking = async (db, props) => {
   const limit = Math.min(Math.max(Number(props.limit) || PICTOR_RUN_RANKING_LIMIT, 1), PICTOR_RUN_RANKING_LIMIT)
   const userId = props.userId ? String(props.userId) : null
+  if (props.period === "total") return getPictorRunTotalRanking(db, limit, userId)
   if (props.period === "week") {
     const since = pictorRunWeekStart(props.now)
     const rows = await db.query(

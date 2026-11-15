@@ -76,15 +76,25 @@ assert.ok(afterDelete.body.data.deletedIds.includes(firstId))
 assert.equal((await call("/scores/submit", { user: alice, score: 1000, coins: 0, durationMs: 10_000 })).status, 400)
 assert.equal((await call("/scores/submit", { user: alice, score: -1, coins: 0, durationMs: 10_000 })).status, 400)
 const s1 = await call("/scores/submit", { user: alice, score: 120, coins: 5, durationMs: 20_000 })
-assert.deepEqual(s1.body.data, { best: 120, isNewBest: true, rank: 1 })
+assert.deepEqual(s1.body.data, { best: 120, isNewBest: true, rank: 1, achievements: ["special-pictor-run-play"] })
 const s2 = await call("/scores/submit", { user: alice, score: 80, coins: 2, durationMs: 15_000 })
-assert.deepEqual(s2.body.data, { best: 120, isNewBest: false, rank: 1 })
+assert.deepEqual(s2.body.data, { best: 120, isNewBest: false, rank: 1, achievements: [] })
 const s3 = await call("/scores/submit", { user: bob, score: 300, coins: 10, durationMs: 45_000 })
-assert.deepEqual(s3.body.data, { best: 300, isNewBest: true, rank: 1 })
+assert.deepEqual(s3.body.data, { best: 300, isNewBest: true, rank: 1, achievements: ["special-pictor-run-play"] })
 
 const all = await call("/scores/ranking", { period: "all", userId: "1" })
 assert.deepEqual(all.body.data.items.map((i: any) => [i.rank, i.user.name, i.score, i.coins]), [[1, "ボブ", 300, 10], [2, "アリス", 120, 5]])
 assert.deepEqual(all.body.data.me, { rank: 2, score: 120 })
+
+// 累計: 全部の回の得点の合計（アリス 120 + 80 = 200、ボブ 300）と遊んだ回数
+const total = await call("/scores/ranking", { period: "total", userId: "1" })
+assert.deepEqual(total.body.data.items.map((i: any) => [i.rank, i.user.name, i.user.login, i.score, i.plays]), [[1, "ボブ", "bob", 300, 1], [2, "アリス", "alice", 200, 2]])
+assert.deepEqual(total.body.data.me, { rank: 2, score: 200 })
+// 埋め戻しの SQL は、足してきた値と同じになる
+const { readFileSync } = await import("node:fs")
+await d1.DB.exec(readFileSync(new URL("../migrations/gen/0012_pictor_run_total_backfill.sql", import.meta.url), "utf8").split("\n").filter((l) => !l.startsWith("--")).join(" "))
+const totals = await d1.DB.prepare("SELECT user_id, total_score FROM pictor_run_scores ORDER BY user_id").all()
+assert.deepEqual(totals.results.map((r: any) => [r.user_id, r.total_score]), [["1", 200], ["2", 300]])
 
 // 今週: 先週の記録は入らない
 const weekStart = pictorRunWeekStart(Math.floor(Date.now() / 1000))

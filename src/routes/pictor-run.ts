@@ -78,7 +78,7 @@ pictorRunRoutes.post("/scores/submit", async (c) => {
 pictorRunRoutes.post("/scores/ranking", async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const data = await getPictorRunRanking(await getDb(c.env), {
-    period: body.period === "week" ? "week" : "all",
+    period: body.period === "week" || body.period === "total" ? body.period : "all",
     limit: body.limit,
     userId: body.userId ?? null,
     now: getNow()
