@@ -58,7 +58,7 @@ export const createStripeClient = ({ secretKey, fetchImpl = fetch }) => {
   return {
     livemode: secretKey.startsWith("sk_live_") || secretKey.startsWith("rk_live_"),
     /** 日本の Express アカウント（送金を受け取るだけ） */
-    createExpressAccount: ({ userId, email, siteOrigin }) =>
+    createExpressAccount: ({ userId, email, siteOrigin, replaces = null }) =>
       call(
         "POST",
         "/v1/accounts",
@@ -75,7 +75,11 @@ export const createStripeClient = ({ secretKey, fetchImpl = fetch }) => {
           },
           metadata: { aipictors_user_id: String(userId) },
         },
-        { idempotencyKey: `creator-account:${userId}:${secretKey.startsWith("sk_live_") ? "live" : "test"}` },
+        // 同じ人の二重作成を防ぐ。Stripe 側で消えたアカウントの作り直しは、消えたアカウントの ID を付けて別のキーにする
+        // （同じキーだと 24 時間は消えたアカウントがそのまま返ってくる）
+        {
+          idempotencyKey: `creator-account:${userId}:${secretKey.startsWith("sk_live_") ? "live" : "test"}${replaces ? `:${replaces}` : ""}`,
+        },
       ),
     retrieveAccount: (accountId) => call("GET", `/v1/accounts/${accountId}`),
     createAccountLink: ({ accountId, refreshUrl, returnUrl }) =>

@@ -52,7 +52,12 @@ const stripeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     return remember(account)
   }
   if (method === "GET" && url.pathname.startsWith("/v1/accounts/")) return ok(stripe.accounts.get(url.pathname.split("/")[3]))
-  if (method === "POST" && url.pathname === "/v1/account_links") return ok({ url: `https://connect.stripe.test/setup/${form.get("account")}`, expires_at: 0 })
+  if (method === "POST" && url.pathname === "/v1/account_links") {
+    if (!stripe.accounts.has(form.get("account") ?? "")) {
+      return new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "resource_missing", message: `No such account: '${form.get("account")}'` } }), { status: 400 })
+    }
+    return ok({ url: `https://connect.stripe.test/setup/${form.get("account")}`, expires_at: 0 })
+  }
   if (method === "POST" && url.pathname.endsWith("/login_links")) return ok({ url: "https://connect.stripe.test/express" })
   if (method === "GET" && url.pathname === "/v1/transfers") {
     return ok({ data: stripe.transfers.filter((t) => t.transfer_group === url.searchParams.get("transfer_group")) })
@@ -640,6 +645,18 @@ await t("口座登録: テストモードでは許可した人だけ。アカウ
   const l1 = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: a, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
   const l2 = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: a, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
   assert.equal(l1.body.data.url, l2.body.data.url)
+  // Stripe 側で消されたアカウントが残っていても、作り直して登録画面へ進める
+  {
+    const gone = await newUser()
+    await join(gone)
+    env.CREATOR_PAYOUT_TEST_USER_IDS = `${env.CREATOR_PAYOUT_TEST_USER_IDS},${gone}`
+    const first = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: gone, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
+    const oldId = first.body.data.url.split("/").pop()
+    stripe.accounts.delete(oldId)
+    const again = await call("POST", "/internal/creator-payouts/onboarding-link", { userId: gone, returnUrl: "https://www.aipictors.com/x", refreshUrl: "https://www.aipictors.com/x" })
+    assert.equal(again.status, 200, JSON.stringify(again.body))
+    assert.notEqual(again.body.data.url.split("/").pop(), oldId)
+  }
   // プロフィールのメール欄が空の人（email: ""）でも登録画面へ進める
   const noMail = await newUser()
   await join(noMail)

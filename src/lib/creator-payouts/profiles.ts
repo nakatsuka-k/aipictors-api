@@ -107,8 +107,25 @@ export const createOnboardingLink = async ({ db, env, userId, email, returnUrl, 
   if (!profile || profile.status !== "JOINED") return { ok: false, code: "NOT_JOINED" }
   const stripe = createStripeClient({ secretKey: config.stripeSecretKey, fetchImpl })
   let accountId = profile.stripeAccountId
+  let replaces = null
+  if (accountId && profile.stripeLivemode === stripe.livemode) {
+    const link = await stripe.createAccountLink({ accountId, returnUrl, refreshUrl }).catch((error) => {
+      // Stripe 側で消されたアカウント（No such account）が残っていると、ずっと口座登録に進めない
+      if (isMissingStripeAccount(error)) return null
+      throw error
+    })
+    if (link) return { ok: true, url: link.url, expiresAt: link.expires_at }
+    await db.execute(
+      `UPDATE creator_payout_profiles SET stripe_account_id = NULL, details_submitted = 0, payouts_enabled = 0,
+              payouts_enabled_at = NULL, transfers_active = 0, updated_at = $3
+        WHERE user_id = $1 AND stripe_account_id = $2`,
+      [String(userId), accountId, now],
+    )
+    replaces = accountId
+    accountId = null
+  }
   if (!accountId || profile.stripeLivemode !== stripe.livemode) {
-    const account = await stripe.createExpressAccount({ userId, email, siteOrigin: config.siteOrigin })
+    const account = await stripe.createExpressAccount({ userId, email, siteOrigin: config.siteOrigin, replaces })
     // 同じアカウントが 2 人に付かないよう、まだ無いときだけ書く（同時に 2 回押されたら先の方を使う）
     await db.execute(
       `UPDATE creator_payout_profiles SET stripe_account_id = $2, stripe_livemode = $3, details_submitted = 0,
@@ -121,6 +138,10 @@ export const createOnboardingLink = async ({ db, env, userId, email, returnUrl, 
   const link = await stripe.createAccountLink({ accountId, returnUrl, refreshUrl })
   return { ok: true, url: link.url, expiresAt: link.expires_at }
 }
+
+/** Stripe にもう無いアカウント（運営が消した・テストで作って消した等） */
+const isMissingStripeAccount = (error) =>
+  error?.code === "resource_missing" || /No such account/i.test(String(error?.message ?? ""))
 
 /** 口座の変更・入金の確認（Stripe の Express ダッシュボード） */
 export const createDashboardLink = async ({ db, env, userId, fetchImpl }) => {
