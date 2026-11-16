@@ -7,6 +7,7 @@ import { PREMIUM_SUPPORT_REJECTED_MESSAGE, getSupportRecipientStatus, isPremiumS
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
+import { isImageGenerationCoinReason, isPremiumCoinGenerationDisabled } from "../lib/coins/generation-setting"
 import { adminAdjustCoins, applyCoinDelta, consumeCoins, ensureInitialCoinGrant, getAdminCoinHistory, getCoinSummary, getConsumedCoinBreakdownBySource } from "../lib/coins"
 import { runDailyCoinJob } from "../lib/daily-coins"
 import { getDb, getNow } from "../lib/db"
@@ -33,7 +34,9 @@ export var consumeSchema = object({
   reason: optional(nullable(string())),
   source: optional(nullable(string())),
   // true: プレミアムコインだけで払う（無料コインは使わない。スペシャルのアイコン枠など）
-  premiumOnly: optional(boolean())
+  premiumOnly: optional(boolean()),
+  // true: フリーコインだけで払う。画像生成（reason が image-generation:）は本人の設定でも決まる
+  freeOnly: optional(boolean())
 });
 export var consumeBreakdownSchema = object({
   userId: string(),
@@ -171,18 +174,22 @@ coinsRoutes.post("/consume", async (c) => {
     return json({ error: "Invalid body" }, 400);
   }
   const db = await getDb(c.env);
+  // 「画像生成にプレミアムコインを使わない」設定の人の生成はフリーコインだけで払う（推し・アイコン枠などには効かない）
+  const freeOnly = parsed.output.freeOnly === true ||
+    isImageGenerationCoinReason(parsed.output.reason) && await isPremiumCoinGenerationDisabled(c.env.SYSTEM_CORE ?? null, parsed.output.userId);
   const result = await consumeCoins({
     db,
     userId: parsed.output.userId,
     amount: parsed.output.amount,
     reason: parsed.output.reason ?? null,
     source: parsed.output.source ?? null,
-    premiumOnly: parsed.output.premiumOnly ?? false
+    premiumOnly: parsed.output.premiumOnly ?? false,
+    freeOnly
   });
   if (!result.ok) {
-    const error = result.code === "INSUFFICIENT_COINS" ? "Insufficient coins" : "Invalid amount";
+    const error = result.code === "INSUFFICIENT_COINS" ? freeOnly ? "Insufficient free coins" : "Insufficient coins" : "Invalid amount";
     const status = result.code === "INSUFFICIENT_COINS" ? 409 : 400;
-    return json({ error }, status);
+    return json({ error, ...freeOnly ? { freeOnly: true } : {} }, status);
   }
   return json({
     error: null,

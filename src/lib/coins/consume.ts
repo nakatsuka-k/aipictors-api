@@ -32,6 +32,8 @@ export var consumeCoins = async (props) => {
       maxFreeSpend = Math.min(amount, allowance.remaining);
     }
   }
+  // freeOnly のときはプレミアムコインを使わない（「生成にプレミアムコインを使わない」設定。足りなければフリーだけで判定して失敗する）
+  const maxPremiumSpend = props.freeOnly && !props.premiumOnly ? 0 : amount;
   // D1: 1 つのトランザクション（batch）で実行する。使う量は「使う前のロット」から計算し、
   // 足りるときだけ d1_guard に 1 行入れて、以降の文はその行があるときだけ書く（最後に消す）。
   // プレミアムの使う量はフリーのロットから計算するので、プレミアムのロットを先に更新する。
@@ -48,9 +50,9 @@ export var consumeCoins = async (props) => {
          WHERE max($6 - (cumulative - remaining), 0) > 0`;
   const freeTotalSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${freeUpdatesSql}))`;
   const premiumUpdatesSql = `SELECT id,
-               min(remaining, max($2 - ${freeTotalSql} - (cumulative - remaining), 0)) AS spend
+               min(remaining, max(min($7, $2 - ${freeTotalSql}) - (cumulative - remaining), 0)) AS spend
           FROM (${lotsSql("PREMIUM")})
-         WHERE max($2 - ${freeTotalSql} - (cumulative - remaining), 0) > 0`;
+         WHERE max(min($7, $2 - ${freeTotalSql}) - (cumulative - remaining), 0) > 0`;
   const premiumTotalSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${premiumUpdatesSql}))`;
   const okSql = `(${freeTotalSql} + ${premiumTotalSql}) >= $2`;
   const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
@@ -60,7 +62,8 @@ export var consumeCoins = async (props) => {
     now,
     props.reason ?? null,
     props.source ?? null,
-    maxFreeSpend
+    maxFreeSpend,
+    maxPremiumSpend
   ];
   const results = await props.db.batch([
     {
