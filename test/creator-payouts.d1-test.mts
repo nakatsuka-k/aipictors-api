@@ -718,6 +718,35 @@ await t("cron: 10 日と 25 日は締めてから送る。それ以外の日は�
   assert.equal(r3.closed.period, "2027-04-25")
 })
 
+await t("プレミアムコインでの推しを受け取らない設定: プレミアムは断る・無料は届く・推す画面に状態を返す", async () => {
+  await CORE.prepare("CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, reject_premium_coin_support INTEGER)").run()
+  const sender = await newUser()
+  const creator = await newUser()
+  const work = await newWork(creator)
+  await buy(sender, 100, 0)
+  await join(creator)
+  const status = async () => (await call("POST", "/internal/coins/ensure-initial-grant", { userId: sender, supportTargetUserId: creator })).body.data.supportTarget
+  assert.deepEqual(await status(), { userId: creator, premiumAccepted: true, rewardJoined: true })
+  // 設定の行が無い・NULL は受け取る
+  assert.equal((await support(sender, creator, 1, { workId: work })).status, 200)
+  await CORE.prepare("INSERT INTO user_settings(userId, reject_premium_coin_support) VALUES (?, 1)").bind(Number(creator)).run()
+  assert.deepEqual(await status(), { userId: creator, premiumAccepted: false, rewardJoined: true })
+  const before = await premiumBalance(sender)
+  const earningsBefore = (await earnings(creator)).length
+  const rejected = await support(sender, creator, 5, { workId: work })
+  assert.equal(rejected.status, 403)
+  assert.equal(rejected.body.error, "この作者はプレミアムコインでの応援を受け付けていません")
+  assert.equal(await premiumBalance(sender), before)
+  assert.equal((await earnings(creator)).length, earningsBefore)
+  const free = await support(sender, creator, 1, { workId: work, coinType: "FREE", source: `profile-support:free-${creator}:FREE` })
+  assert.notEqual(free.status, 403)
+  // 自分自身・相手なしのときは supportTarget を返さない
+  const self = await call("POST", "/internal/coins/ensure-initial-grant", { userId: sender, supportTargetUserId: sender })
+  assert.equal(self.body.data.supportTarget, undefined)
+  await CORE.prepare("UPDATE user_settings SET reject_premium_coin_support = 0 WHERE userId = ?").bind(Number(creator)).run()
+  assert.equal((await support(sender, creator, 1, { workId: work })).status, 200)
+})
+
 console.log(`${passed} passed`)
 await coreMf.dispose()
 await d1.dispose()

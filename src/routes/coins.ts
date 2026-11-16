@@ -3,6 +3,7 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
+import { PREMIUM_SUPPORT_REJECTED_MESSAGE, getSupportRecipientStatus, isPremiumSupportRejected } from "../lib/coin-support/recipient"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
@@ -22,7 +23,9 @@ export var ensureGrantSchema = object({
   includeLedger: optional(boolean()),
   includeExpiringLots: optional(boolean()),
   includeLedgerLimit: optional(number()),
-  includeLedgerOffset: optional(number())
+  includeLedgerOffset: optional(number()),
+  // 推す画面: 相手がプレミアムコインで推せるか・報酬に参加中かを supportTarget に足す（残高と同じ 1 回で返す）
+  supportTargetUserId: optional(nullable(string()))
 });
 export var consumeSchema = object({
   userId: string(),
@@ -155,6 +158,11 @@ coinsRoutes.post("/ensure-initial-grant", async (c) => {
     includeLedgerLimit: parsed.output.includeLedgerLimit,
     includeLedgerOffset: parsed.output.includeLedgerOffset
   });
+  const supportTargetUserId = parsed.output.supportTargetUserId;
+  if (supportTargetUserId && supportTargetUserId !== parsed.output.userId) {
+    const supportTarget = await getSupportRecipientStatus({ db, core: c.env.SYSTEM_CORE ?? null, env: c.env, recipientUserId: supportTargetUserId });
+    return json({ error: null, data: { ...summary, supportTarget } });
+  }
   return json({ error: null, data: summary });
 });
 coinsRoutes.post("/consume", async (c) => {
@@ -276,6 +284,10 @@ coinsRoutes.post("/support", async (c) => {
     userId: parsed.output.senderUserId,
     planType: parsed.output.planType ?? "FREE"
   });
+  // 受け取る人が「プレミアムコインでの推しを受け取らない」設定なら断る（既に受け取った分はそのまま）
+  if (parsed.output.coinType === "PREMIUM" && await isPremiumSupportRejected(c.env.SYSTEM_CORE ?? null, parsed.output.recipientUserId)) {
+    return json({ error: PREMIUM_SUPPORT_REJECTED_MESSAGE, code: "PREMIUM_SUPPORT_REJECTED" }, 403);
+  }
   // クリエイター報酬にするか（参加者・全年齢の作品だけ。読み取りは参加者の 1 行と、参加者のときだけ作品 1 行）
   const decision = await decideSupportEarnings({
     db,
