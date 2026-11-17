@@ -27,6 +27,12 @@ binding = "SYSTEM_ACTIVITY"
 database_name = "aipictors-activity-staging"
 database_id = "563616b8-984f-43fa-a16e-20e3b8e15cfb"
 
+# 有料リクエストの実績（透かし入りの画像）を作る画像縮小 Worker（aipictors-cron の image-resize-worker、POST /internal/showcase）
+# 合言葉は secret SHOWCASE_TOKEN（両方の Worker に同じ値）
+[[services]]
+binding = "IMAGE_RESIZE"
+service = "aipictors-image-resize"
+
 # 生成の依頼・結果・予約（大きいので別の DB）
 [[d1_databases]]
 binding = "GENLOG"

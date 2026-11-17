@@ -18,6 +18,8 @@ import {
   listPlans,
   listRequests,
   listRequestsForAdmin,
+  listShowcase,
+  countShowcase,
   loadRequestUsers,
   reportPlan,
   savePlan,
@@ -77,8 +79,22 @@ coinRequestRoutes.get("/plans/:id", async (c) => {
   const plan = await getPlan({ db, planId: Number(c.req.param("id")) })
   const viewer = c.req.query("viewerUserId")
   if (!plan || (plan.status !== "ACTIVE" && plan.userId !== viewer)) return fail("PLAN_NOT_FOUND")
-  const users = await loadRequestUsers(c.env.SYSTEM_CORE, [plan.userId])
-  return json({ error: null, data: { plan, users } })
+  const [users, showcase, showcaseCount] = await Promise.all([
+    loadRequestUsers(c.env.SYSTEM_CORE, [plan.userId]),
+    listShowcase({ db, planId: plan.id, limit: 12 }),
+    countShowcase({ db, planId: plan.id }),
+  ])
+  return json({ error: null, data: { plan, users, showcase, showcaseCount } })
+})
+
+// 実績（依頼者が公開を許可した完了済みの依頼の透かし入り画像）。planId か userId（クリエイター）で絞る
+coinRequestRoutes.get("/showcase", async (c) => {
+  const q = c.req.query()
+  if (!q.planId && !q.userId) return fail("NOT_FOUND")
+  const db = await getDb(c.env)
+  const items = await listShowcase({ db, planId: q.planId || null, creatorUserId: q.planId ? null : q.userId, limit: Number(q.limit ?? 24), offset: Number(q.offset ?? 0) })
+  const users = await loadRequestUsers(c.env.SYSTEM_CORE, items.map((item) => item.creatorUserId))
+  return json({ error: null, data: { items, users } })
 })
 
 coinRequestRoutes.post("/plans", async (c) => {

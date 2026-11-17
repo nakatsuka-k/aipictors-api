@@ -24,6 +24,7 @@ import {
 } from "./config"
 import { createEscrowedRequest, refundRequest, settleRequest, transitionRequest } from "./escrow"
 import { notifyRequestEvent } from "./notify"
+import { countShowcase, ensureShowcaseImages, listShowcase, runShowcaseJob } from "./showcase"
 
 const clampInt = (value, min, max, fallback) => {
   const n = Math.floor(Number(value))
@@ -104,6 +105,10 @@ const toRequest = (row, viewerUserId) => {
             premiumCoins: Number(row.settle_premium_coins ?? 0),
           },
     reportCount: role === "ADMIN" ? Number(row.report_count ?? 0) : undefined,
+    // 実績: 依頼者の許可・クリエイターの非表示・透かし入りの画像（null = まだ作っていない）
+    showcaseAllowed: Number(row.showcase_allowed ?? 0) === 1,
+    showcaseHidden: Number(row.showcase_hidden ?? 0) === 1,
+    showcaseImageUrls: row.showcase_image_urls === null || row.showcase_image_urls === undefined ? null : parseJsonArray(row.showcase_image_urls),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   }
@@ -272,8 +277,14 @@ export const getCreatorRequestProfile = async ({ db, userId, viewerUserId = null
       [String(userId)],
     ),
   ])
-  const completed = await db.queryOne(`SELECT COUNT(*) AS n FROM coin_requests WHERE creator_user_id = $1 AND status IN ('COMPLETED', 'ADMIN_COMPLETED')`, [String(userId)])
+  const [completed, showcase, showcaseCount] = await Promise.all([
+    db.queryOne(`SELECT COUNT(*) AS n FROM coin_requests WHERE creator_user_id = $1 AND status IN ('COMPLETED', 'ADMIN_COMPLETED')`, [String(userId)]),
+    listShowcase({ db, creatorUserId: userId, limit: 12 }),
+    countShowcase({ db, creatorUserId: userId }),
+  ])
   return {
+    showcase,
+    showcaseCount,
     plans,
     settings,
     activeCount: Number(active?.n ?? 0),
@@ -345,6 +356,10 @@ export const applyRequest = async ({ db, env, core, activity, now, input }) => {
   })
   if (!result.ok) return result
   if (!result.duplicated) {
+    // 完成した作品をクリエイターの実績として公開してよいか（依頼者があとから変えられる）
+    if (input.showcaseAllowed === true) {
+      await db.execute(`UPDATE coin_requests SET showcase_allowed = 1 WHERE id = $1`, [result.requestId])
+    }
     await notifyRequestEvent({ db, env, core, activity, requestId: result.requestId, event: "APPLIED", actorUserId: requesterUserId })
   }
   return { ok: true, requestId: String(result.requestId) }
@@ -443,6 +458,10 @@ export const completeRequest = async ({ db, env, core, activity, now, request, f
   if (result.ok) {
     await addMessage(db, now, request.id, null, toStatus === "COMPLETED" ? "取引が完了しました" : "運営が取引を完了にしました")
     await notifyRequestEvent({ db, env, core, activity, requestId: request.id, event: "COMPLETED", actorUserId })
+    // 実績の許可があれば透かし入りの画像を作る（作れなければ runRequestJob がやり直す）
+    if (Number(request.showcase_allowed ?? 0) === 1) {
+      await ensureShowcaseImages({ db, env, core, now, requestId: request.id }).catch(() => null)
+    }
   }
   return result
 }
@@ -455,6 +474,8 @@ export const completeRequest = async ({ db, env, core, activity, now, request, f
  * - revise（依頼者: 納品済みで修正回数が残っているとき）
  * - complete（依頼者: 納品済みのとき）
  * - message（当事者、終わっていても 30 日まで）
+ * - showcase（依頼者: 実績として公開してよいか。input.allowed。いつでも変えられる）
+ * - showcase-hide（クリエイター: 許可された実績を自分の実績に出さない。input.hidden）
  */
 export const actOnRequest = async ({ db, env, core, activity, now, requestId, userId, action, input = {} }) => {
   const row = await db.queryOne(`SELECT * FROM coin_requests WHERE id = $1`, [requestId])
@@ -547,6 +568,26 @@ export const actOnRequest = async ({ db, env, core, activity, now, requestId, us
       if (!isRequester) return fail("FORBIDDEN")
       const r = await completeRequest({ db, env, core, activity, now, request: row, fromStatuses: ["DELIVERED"], toStatus: "COMPLETED", actorUserId: uid })
       if (!r.ok) return fail(r.code)
+      return done(null)
+    }
+    case "showcase": {
+      if (!isRequester) return fail("FORBIDDEN")
+      const allowed = input.allowed === true
+      if ((Number(row.showcase_allowed) === 1) === allowed) return done(null)
+      await db.execute(`UPDATE coin_requests SET showcase_allowed = $2, showcase_failed_at = NULL, updated_at = $3 WHERE id = $1`, [requestId, allowed ? 1 : 0, now])
+      await addMessage(
+        db,
+        now,
+        requestId,
+        null,
+        allowed ? "依頼者が、完成した作品を実績として公開することを許可しました（透かし入り）" : "依頼者が、実績としての公開の許可を取り消しました",
+      )
+      if (allowed) await ensureShowcaseImages({ db, env, core, now, requestId }).catch(() => null)
+      return done(null)
+    }
+    case "showcase-hide": {
+      if (!isCreator) return fail("FORBIDDEN")
+      await db.execute(`UPDATE coin_requests SET showcase_hidden = $2, updated_at = $3 WHERE id = $1`, [requestId, input.hidden === true ? 1 : 0, now])
       return done(null)
     }
     case "message": {
@@ -698,10 +739,12 @@ export const runRequestJob = async ({ db, env, core, activity, now }) => {
     },
     "reminded",
   )
+  // 実績の透かし入りの画像（許可されたのにまだのもの）
+  summary.showcase = await runShowcaseJob({ db, env, core, now }).catch(() => 0)
   return summary
 }
 
-export { calcSettlement }
+export { calcSettlement, countShowcase, listShowcase }
 
 // ---- 表示用のユーザー（名前・ログイン名・アイコン）。core が読めなければ空 ----
 export const loadRequestUsers = async (core, ids) => {
