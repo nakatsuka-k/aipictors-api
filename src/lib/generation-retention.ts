@@ -21,7 +21,11 @@ const PLAN_GRACE_SECONDS = 30 * DAY_SECONDS;
 /** プランごとの期限で消し始める時刻（2027/01/01 00:00 JST）。それまでは利用者が消した分だけ片付ける */
 export const RETENTION_ENFORCE_FROM = Date.parse("2026-12-31T15:00:00Z");
 
-const BATCH_SIZE = 1000;
+/**
+ * 1 回（5 分ごと）に見る行の数。画像を消した行も生成情報として残る（行が減らない）ので、1 日に 1 周できる量にする
+ * （5,000 行 × 288 回 = 1 日 144 万行。読むのは小さい列だけ）
+ */
+const BATCH_SIZE = 5000;
 
 const FILE_URL = /^https:\/\/generative[-.]files\.aipictors\.com\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.thumbnail)?)(?:\?.*)?$/;
 
