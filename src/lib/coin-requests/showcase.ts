@@ -2,14 +2,15 @@
 // 実績: 完了した依頼のうち、依頼者が「実績として公開してよい」を許可したものを、透かし入りの画像でクリエイターの実績に出す
 // - 透かし入りの画像は画像縮小 Worker（aipictors-cron image-resize-worker の POST /internal/showcase）が作り、files の showcase/ に置く。
 //   元の納品画像の URL は当事者以外に出さない
-// - 出す条件: 完了（COMPLETED / ADMIN_COMPLETED）・依頼者の許可あり・クリエイターが非表示にしていない・全年齢の依頼・画像ができている
+// - 出す条件: 完了（COMPLETED / ADMIN_COMPLETED）・依頼者の許可あり・クリエイターが非表示にしていない・画像ができている
+// - R18 の依頼は r18=true のときだけ返す（画面は年齢の確認のあとに r18=1 で読み直す）。件数は全年齢と R18 で分けて返す
 // - 画像を作るのは許可・完了のときにその場で試し、できなければ 5 分ごとの runRequestJob でやり直す
 import { parseJsonArray } from "./config"
 
 const DONE = "'COMPLETED', 'ADMIN_COMPLETED'"
 
 /** 実績に出す依頼の条件（r = coin_requests） */
-export const SHOWCASE_VISIBLE_SQL = `r.status IN (${DONE}) AND r.showcase_allowed = 1 AND r.showcase_hidden = 0 AND r.is_r18 = 0 AND r.showcase_image_urls IS NOT NULL AND r.showcase_image_urls <> '[]'`
+export const SHOWCASE_VISIBLE_SQL = `r.status IN (${DONE}) AND r.showcase_allowed = 1 AND r.showcase_hidden = 0 AND r.showcase_image_urls IS NOT NULL AND r.showcase_image_urls <> '[]'`
 
 /** 透かし入りの画像を作り直すまでの間隔（混んでいた・失敗したとき） */
 const RETRY_SECONDS = 30 * 60
@@ -23,12 +24,13 @@ const toShowcaseItem = (row) => ({
   planTitle: row.plan_title ?? null,
   creatorUserId: String(row.creator_user_id),
   imageUrls: parseJsonArray(row.showcase_image_urls),
+  isR18: Number(row.is_r18) === 1,
   completedAt: row.completed_at ? Number(row.completed_at) : null,
 })
 
 /** 実績の一覧（planId か creatorUserId で絞る。新しい完了順） */
-export const listShowcase = async ({ db, planId = null, creatorUserId = null, limit = 24, offset = 0 }) => {
-  const where = [SHOWCASE_VISIBLE_SQL]
+export const listShowcase = async ({ db, planId = null, creatorUserId = null, r18 = false, limit = 24, offset = 0 }) => {
+  const where = [SHOWCASE_VISIBLE_SQL, r18 ? "r.is_r18 = 1" : "r.is_r18 = 0"]
   const params = []
   if (planId) {
     params.push(Number(planId))
@@ -41,7 +43,7 @@ export const listShowcase = async ({ db, planId = null, creatorUserId = null, li
   if (params.length === 0) return []
   params.push(Math.min(60, Math.max(1, Math.floor(Number(limit) || 24))), Math.min(10000, Math.max(0, Math.floor(Number(offset) || 0))))
   const rows = await db.query(
-    `SELECT r.id, r.plan_id, r.creator_user_id, r.showcase_image_urls, r.completed_at, p.title AS plan_title
+    `SELECT r.id, r.plan_id, r.creator_user_id, r.showcase_image_urls, r.is_r18, r.completed_at, p.title AS plan_title
        FROM coin_requests r LEFT JOIN request_plans p ON p.id = r.plan_id
       WHERE ${where.join(" AND ")}
       ORDER BY r.completed_at DESC, r.id DESC
@@ -51,18 +53,23 @@ export const listShowcase = async ({ db, planId = null, creatorUserId = null, li
   return rows.map(toShowcaseItem)
 }
 
+/** 実績の数（{ all: 全年齢, r18: R18 }） */
 export const countShowcase = async ({ db, planId = null, creatorUserId = null }) => {
   const column = planId ? "r.plan_id" : "r.creator_user_id"
   const value = planId ? Number(planId) : String(creatorUserId)
-  const row = await db.queryOne(`SELECT COUNT(*) AS n FROM coin_requests r WHERE ${SHOWCASE_VISIBLE_SQL} AND ${column} = $1`, [value])
-  return Number(row?.n ?? 0)
+  const row = await db.queryOne(
+    `SELECT COALESCE(SUM(CASE WHEN r.is_r18 = 1 THEN 0 ELSE 1 END), 0) AS g, COALESCE(SUM(CASE WHEN r.is_r18 = 1 THEN 1 ELSE 0 END), 0) AS r18
+       FROM coin_requests r WHERE ${SHOWCASE_VISIBLE_SQL} AND ${column} = $1`,
+    [value],
+  )
+  return { all: Number(row?.g ?? 0), r18: Number(row?.r18 ?? 0) }
 }
 
 /** 作品で納品したときは、その作品の大きいサムネイルを元にする（公開中で削除されていないものだけ） */
 const workImageUrl = async (core, workId) => {
   if (!core || !workId) return null
   const row = await core
-    .prepare(`SELECT large_thumbnail_image_url AS url FROM works WHERE id = ?1 AND is_deleted = 0 AND adminViewMode = 0 AND viewMode IN (0, 1) AND ageLimit = 0`)
+    .prepare(`SELECT large_thumbnail_image_url AS url FROM works WHERE id = ?1 AND is_deleted = 0 AND adminViewMode = 0 AND viewMode IN (0, 1)`)
     .bind(Number(workId))
     .first()
     .catch(() => null)
@@ -94,11 +101,11 @@ const requestWatermark = async (env, url) => {
  */
 export const ensureShowcaseImages = async ({ db, env, core, now, requestId }) => {
   const row = await db.queryOne(
-    `SELECT id, status, is_r18, showcase_allowed, showcase_image_urls, delivery_image_urls, delivered_work_id FROM coin_requests WHERE id = $1`,
+    `SELECT id, status, showcase_allowed, showcase_image_urls, delivery_image_urls, delivered_work_id FROM coin_requests WHERE id = $1`,
     [requestId],
   )
   if (!row || row.showcase_image_urls !== null) return { ok: true, skipped: true }
-  if (!["COMPLETED", "ADMIN_COMPLETED"].includes(row.status) || Number(row.showcase_allowed) !== 1 || Number(row.is_r18) === 1) {
+  if (!["COMPLETED", "ADMIN_COMPLETED"].includes(row.status) || Number(row.showcase_allowed) !== 1) {
     return { ok: true, skipped: true }
   }
   const sources = parseJsonArray(row.delivery_image_urls).slice(0, MAX_SHOWCASE_IMAGES)
@@ -128,7 +135,7 @@ export const runShowcaseJob = async ({ db, env, core, now, limit = 5 }) => {
   if (!env.IMAGE_RESIZE || !env.SHOWCASE_TOKEN) return 0
   const rows = await db.query(
     `SELECT id FROM coin_requests
-      WHERE status IN (${DONE}) AND showcase_allowed = 1 AND is_r18 = 0 AND showcase_image_urls IS NULL
+      WHERE status IN (${DONE}) AND showcase_allowed = 1 AND showcase_image_urls IS NULL
         AND (showcase_failed_at IS NULL OR showcase_failed_at < $1)
       ORDER BY completed_at DESC LIMIT $2`,
     [now - RETRY_SECONDS, limit],

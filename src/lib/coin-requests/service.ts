@@ -277,14 +277,16 @@ export const getCreatorRequestProfile = async ({ db, userId, viewerUserId = null
       [String(userId)],
     ),
   ])
-  const [completed, showcase, showcaseCount] = await Promise.all([
+  const [completed, showcase, counts] = await Promise.all([
     db.queryOne(`SELECT COUNT(*) AS n FROM coin_requests WHERE creator_user_id = $1 AND status IN ('COMPLETED', 'ADMIN_COMPLETED')`, [String(userId)]),
     listShowcase({ db, creatorUserId: userId, limit: 12 }),
     countShowcase({ db, creatorUserId: userId }),
   ])
   return {
+    // 全年齢の実績だけ。R18 は件数だけ返し、画面が年齢の確認のあとに showcase?r18=1 で読む
     showcase,
-    showcaseCount,
+    showcaseCount: counts.all,
+    showcaseR18Count: counts.r18,
     plans,
     settings,
     activeCount: Number(active?.n ?? 0),

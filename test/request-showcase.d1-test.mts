@@ -186,7 +186,7 @@ const later = await finish("3", {})
   assert.equal((await showcaseOf("userId=1")).length, 3)
 }
 
-// ---- 5. R18 の依頼は許可していても出さない ----
+// ---- 5. R18 の依頼も透かしを作るが、ふつうの一覧には出さず r18=1 のときだけ返す。件数は分ける ----
 {
   await call("POST", "/internal/requests/settings/1", { acceptsFreeRequests: true, minCoins: 300, allowsR18: true, maxActive: 5 })
   const r18 = await apply("2", { creatorUserId: "1", priceCoins: 300, isR18: true, showcaseAllowed: true })
@@ -195,8 +195,18 @@ const later = await finish("3", {})
   await act(id, "1", "deliver", { imageUrls: ["https://image.aipictors.com/r.webp"] })
   const before = watermarkCalls.length
   await act(id, "2", "complete")
-  assert.equal(watermarkCalls.length, before, "R18 は透かしも作らない")
-  assert.equal((await showcaseOf("userId=1")).length, 3)
+  assert.equal(watermarkCalls.length, before + 1, "R18 も透かし入りを作る")
+  assert.equal((await showcaseOf("userId=1")).length, 3, "ふつうの一覧には出さない")
+  const onlyR18 = await showcaseOf("userId=1&r18=1")
+  assert.equal(onlyR18.length, 1)
+  assert.equal(onlyR18[0].isR18, true)
+  const counts = (await call("GET", "/internal/requests/showcase?userId=1")).body.data.counts
+  assert.deepEqual(counts, { all: 3, r18: 1 })
+  assert.ok(!JSON.stringify(onlyR18).includes("r.webp"), "元の画像は出さない")
+  const profile = (await call("GET", "/internal/requests/creators/1")).body.data
+  assert.equal(profile.showcaseCount, 3)
+  assert.equal(profile.showcaseR18Count, 1)
+  assert.ok(profile.showcase.every((item: any) => item.isR18 === false))
 }
 
 console.log("request-showcase: ok")
