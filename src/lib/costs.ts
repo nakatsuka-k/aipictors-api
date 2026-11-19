@@ -169,22 +169,23 @@ export var collectRunpodCost = async (apiKey, range) => {
     startTime: new Date(range.start * 1000).toISOString().replace(/\.\d+Z$/, "Z"),
     endTime: new Date(range.end * 1000).toISOString().replace(/\.\d+Z$/, "Z"),
   });
+  // REST v1（rest.runpod.io）は 2026-11-15 で終了。v2 は配列を { records: [...] } で包み、金額は totalAmount
   const get = async (path) => {
-    const response = await fetch(`https://rest.runpod.io/v1/billing/${path}?${params}`, {
+    const response = await fetch(`https://api.runpod.io/v2/billing/${path}?${params}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) throw new Error(`runpod ${path} ${response.status}`);
-    return response.json();
+    return (await response.json()).records;
   };
-  const [pods, volumes] = await Promise.all([get("pods"), get("networkvolumes")]);
+  const [pods, volumes] = await Promise.all([get("pods"), get("network-volumes")]);
   const byPod = {};
   let podUsd = 0;
   for (const row of pods ?? []) {
-    const amount = toNumber(row.amount);
+    const amount = toNumber(row.totalAmount);
     podUsd += amount;
     byPod[row.podId] = round((byPod[row.podId] ?? 0) + amount);
   }
-  const volumeUsd = (volumes ?? []).reduce((total, row) => total + toNumber(row.amount), 0);
+  const volumeUsd = (volumes ?? []).reduce((total, row) => total + toNumber(row.totalAmount), 0);
   return { usd: round(podUsd + volumeUsd), detail: { pods: round(podUsd), volumes: round(volumeUsd) }, byPod };
 };
 
