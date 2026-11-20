@@ -46,7 +46,7 @@ var cloudflareGraphql = async (token, query, variables) => {
 };
 
 /** Cloudflare の契約（Workers Paid・Stream・Pro など）を日割り。価格 0 の従量契約は数えない */
-var cloudflareFixedUsd = async (token, days) => {
+export var cloudflareFixedUsd = async (token, days) => {
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/subscriptions`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -56,7 +56,8 @@ var cloudflareFixedUsd = async (token, days) => {
   let usd = 0;
   for (const sub of body.result ?? []) {
     const price = toNumber(sub.price);
-    if (!price || sub.currency !== "USD") continue;
+    // 解約して期間が終わった契約（Pro は 2026-11-19 で更新しない）は state が空になり、次の請求日もない
+    if (!price || sub.currency !== "USD" || sub.state !== "Paid") continue;
     const perDay = sub.frequency === "yearly" ? price / 365 : price / 30;
     plans[sub.rate_plan?.public_name ?? sub.id] = round(perDay * days);
     usd += perDay * days;

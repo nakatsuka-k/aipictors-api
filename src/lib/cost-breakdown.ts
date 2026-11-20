@@ -1,5 +1,5 @@
 // @ts-nocheck -- 周りのファイルに合わせて型は付けていない
-import { fetchUsdJpy } from "./costs"
+import { cloudflareFixedUsd, fetchUsdJpy } from "./costs"
 
 /**
  * 維持費の内訳（/admin/costs）。今の構成で 1 か月動かしたらいくらかを出す
@@ -137,7 +137,7 @@ export var getCostBreakdown = async (env, db, nowSeconds, { fresh = false } = {}
     if (hit) return hit.json();
   }
   const errors = [];
-  const [fx, myself, rows] = await Promise.all([
+  const [fx, myself, rows, cloudflarePlans] = await Promise.all([
     fetchUsdJpy().catch(() => null),
     env.RUNPOD_API_KEY
       ? runpodGraphql(env.RUNPOD_API_KEY).catch((error) => {
@@ -149,11 +149,24 @@ export var getCostBreakdown = async (env, db, nowSeconds, { fresh = false } = {}
       `SELECT day, metrics FROM analytics_daily WHERE day >= date('now', '+9 hours', '-' || $1 || ' days') ORDER BY day ASC`,
       [CHART_DAYS]
     ),
+    env.CF_BILLING_TOKEN ? cloudflareFixedUsd(env.CF_BILLING_TOKEN, DAYS_PER_MONTH).catch(() => null) : null,
   ]);
   const fxUsdJpy = fx ?? FALLBACK_USD_JPY;
   const days = rows.map((row) => ({ day: row.day, ...(typeof row.metrics === "string" ? JSON.parse(row.metrics) : row.metrics) }));
   // 今日の行はまだない（00:30 に前日分を保存）ので、昨日までの直近 7 日
   const recent = averageServices(days.slice(-RECENT_DAYS));
+  // Cloudflare の契約は過去の平均ではなく今の契約で数える（解約した Pro・値下げした Stream をすぐ反映する）
+  if (cloudflarePlans) {
+    const cloudflare = recent.services.cloudflare;
+    const plansDetail = cloudflare.detail.find((part) => part.name === "plans");
+    const currentPlansJpy = Math.round(cloudflarePlans.usd * fxUsdJpy);
+    cloudflare.monthlyJpy += currentPlansJpy - (plansDetail?.monthlyJpy ?? 0);
+    cloudflare.detail = [
+      ...cloudflare.detail.filter((part) => part.name !== "plans"),
+      ...(currentPlansJpy > 0 ? [{ name: "plans", monthlyJpy: currentPlansJpy }] : []),
+    ].sort((a, b) => b.monthlyJpy - a.monthlyJpy);
+    cloudflare.plans = cloudflarePlans.plans;
+  }
   const runpod = myself ? estimateRunpod(myself) : null;
   const runpodMonthlyJpy = runpod ? Math.round(runpod.monthlyUsd * fxUsdJpy) : null;
   // RunPod が読めなかったときは日別の平均で代わりにする
