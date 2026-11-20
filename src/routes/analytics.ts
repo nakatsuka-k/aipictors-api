@@ -11,6 +11,7 @@ import {
   listAnalyticsDays,
 } from "../lib/analytics"
 import { listUsersMonths, nextMonth } from "../lib/analytics-users"
+import { getCostBreakdown } from "../lib/cost-breakdown"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 
@@ -48,6 +49,13 @@ analyticsRoutes.get("/pnl", async (c) => {
   if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
   const db = await getDb(c.env);
   return json(await getLiveProfitAndLoss(c.env, db, getNow(), { fresh: c.req.query("fresh") === "1" }));
+});
+
+/** 維持費の内訳（今の RunPod の構成と、ほかのサービスの直近 7 日の平均から月額を出す）。?fresh=1 で 5 分のキャッシュを使わない */
+analyticsRoutes.get("/costs/breakdown", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const db = await getDb(c.env);
+  return json(await getCostBreakdown(c.env, db, getNow(), { fresh: c.req.query("fresh") === "1" }));
 });
 
 /**
