@@ -3,6 +3,12 @@
 import { getNow } from "../db"
 import { SUPPORT_PT_MULTIPLIER, getBalanceColumn, getSupportWeekStartDate } from "./common"
 import { CREATOR_REWARD_HOLD_DAYS, CREATOR_REWARD_RATE_MILLIYEN } from "../creator-payouts/config"
+import { jstEndOfDay } from "../daily-coins"
+
+/** フリーコインで推された分を、受け取った人のフリーコインにする 1 日（JST）の上限。超えた分は pt だけ */
+export var SUPPORT_FREE_RECEIVE_DAILY_LIMIT = 300;
+/** 推しで受け取ったフリーコインの期限（日） */
+export var SUPPORT_FREE_RECEIVE_EXPIRE_DAYS = 30;
 export var transferSupportCoins = async (props) => {
   const now = props.now ?? getNow();
   const amount = Math.floor(Math.max(0, props.amount));
@@ -69,6 +75,12 @@ export var transferSupportCoins = async (props) => {
           ELSE 0 END)`;
   // 受け取る人にコインで渡す分
   const recipientCoinsSql = `($3 - ${earnedSql})`;
+  // フリーコインの推し: 今日（JST）すでに推しで受け取ったフリーコイン（推しのロットの台帳）を上限から引いた分だけ渡す
+  const receivedFreeTodaySql = `(SELECT COALESCE(SUM(delta), 0) FROM coin_ledger
+         WHERE user_id = $2 AND coin_type = 'FREE' AND kind = 'GRANT' AND created_at >= $15
+           AND source IN (SELECT source_ref_id FROM coin_lots
+                           WHERE user_id = $2 AND coin_type = 'FREE' AND source_kind = 'SUPPORT' AND created_at >= $15))`;
+  const recipientFreeSql = `(CASE WHEN $4 = 'FREE' THEN min($3, max($16 - ${receivedFreeTodaySql}, 0)) ELSE 0 END)`;
   const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
   const params = [
     props.senderUserId,
@@ -84,7 +96,10 @@ export var transferSupportCoins = async (props) => {
     props.earnings ? 1 : 0,
     props.earnings?.workId ?? null,
     props.earnings?.rateMilliyen ?? CREATOR_REWARD_RATE_MILLIYEN,
-    (props.earnings?.holdDays ?? CREATOR_REWARD_HOLD_DAYS) * 86400
+    (props.earnings?.holdDays ?? CREATOR_REWARD_HOLD_DAYS) * 86400,
+    jstEndOfDay(now) - 86400,
+    props.freeReceiveDailyLimit ?? SUPPORT_FREE_RECEIVE_DAILY_LIMIT,
+    now + SUPPORT_FREE_RECEIVE_EXPIRE_DAYS * 86400
   ];
   const upsertWeekly = (table, userParam) => ({
     text: `INSERT INTO ${table}(week_start_date, user_id, coin_amount, pt_amount, transfer_count, updated_at)
@@ -112,7 +127,7 @@ export var transferSupportCoins = async (props) => {
     },
     // changes() は直前の文（受付の INSERT）で入った行数
     { text: `INSERT INTO d1_guard(ok) SELECT 1 WHERE ($6 IS NULL OR changes() = 1) AND ${spentSql} = $3`, params },
-    { text: `SELECT CASE WHEN ${guarded} THEN ${earnedSql} ELSE 0 END AS earned_coins`, params },
+    { text: `SELECT CASE WHEN ${guarded} THEN ${earnedSql} ELSE 0 END AS earned_coins, CASE WHEN ${guarded} THEN ${recipientFreeSql} ELSE 0 END AS received_free_coins`, params },
     {
       text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
         SELECT $1, $4, -$3, 'CONSUME', $5, $6, $7, NULL WHERE ${guarded}`,
@@ -164,6 +179,28 @@ export var transferSupportCoins = async (props) => {
          WHERE $4 = 'PREMIUM' AND ${recipientCoinsSql} > 0 AND ${guarded}`,
       params
     },
+    // フリーコインの推し: 受け取る人に期限付きのフリーコインとして渡す（上限まで）。台帳を最後に書く（上限の計算が台帳を読むため）
+    {
+      text: `UPDATE coin_balances
+           SET free_balance = coin_balances.free_balance + ${recipientFreeSql},
+               updated_at = $7
+         WHERE user_id = $2
+           AND $4 = 'FREE'
+           AND ${guarded}`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_lots(user_id, coin_type, remaining, locked_amount, source_kind, source_ref_id, granted_by_user_id, expires_at, created_at, updated_at)
+        SELECT $2, 'FREE', ${recipientFreeSql}, 0, 'SUPPORT', $6, $1, $17, $7, $7
+         WHERE ${recipientFreeSql} > 0 AND ${guarded}`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $2, 'FREE', ${recipientFreeSql}, 'GRANT', COALESCE($5, 'coin support received'), $6, $7, $17
+         WHERE ${recipientFreeSql} > 0 AND ${guarded}`,
+      params
+    },
     {
       text: `INSERT INTO creator_earnings(user_id, kind, source, sender_user_id, work_id, coins, rate_milliyen, amount_milliyen, status, available_at, created_at, updated_at)
         SELECT $2, 'SUPPORT', $6, $1, $12, ${earnedSql}, CAST($13 AS INTEGER), ${earnedSql} * CAST($13 AS INTEGER), 'HELD', CAST($7 + $14 AS INTEGER), $7, $7
@@ -194,6 +231,7 @@ export var transferSupportCoins = async (props) => {
   ]);
   const transferred = Boolean(results[results.length - 2].rows[0]?.ok);
   const earnedCoins = transferred ? Number(results[3].rows[0]?.earned_coins ?? 0) : 0;
+  const receivedFreeCoins = transferred ? Number(results[3].rows[0]?.received_free_coins ?? 0) : 0;
   const result = transferred
     ? { transferred_amount: amount, sender_pt_added: ptAmount, recipient_pt_added: ptAmount, week_start_date: weekStartDate }
     : null;
@@ -235,7 +273,8 @@ export var transferSupportCoins = async (props) => {
     senderPtAdded: ptAmount,
     recipientPtAdded: ptAmount,
     weekStartDate,
-    earnedCoins
+    earnedCoins,
+    receivedFreeCoins
   };
 };
 
@@ -250,6 +289,8 @@ export var revertSupportTransferBySource = async (props) => {
   const premiumAmountSql = `(SELECT COALESCE(SUM(coin_amount), 0) FROM (${targetSql}) WHERE coin_type = 'PREMIUM')`;
   // クリエイター報酬になった分（受け取る人にはコインで渡していない。保留中のものだけ取り消せる）
   const earnedSql = `(SELECT COALESCE(SUM(coins), 0) FROM creator_earnings WHERE user_id = $2 AND source = $3 AND kind = 'SUPPORT' AND status = 'HELD' AND EXISTS (${targetSql}))`;
+  // フリーコインの推しで受け取る人に渡したフリーコインのうち、まだ残っている分（使った分は取り戻さない）
+  const recipientFreeSql = `(SELECT COALESCE(SUM(remaining), 0) FROM coin_lots WHERE user_id = $2 AND coin_type = 'FREE' AND source_kind = 'SUPPORT' AND source_ref_id = $3 AND EXISTS (${targetSql}))`;
   const params = [props.senderUserId, props.recipientUserId, props.source, now];
   const refundLot = (coinType, amountSql) => ({
     // 報酬になった分は有料のコインだったので、戻すロットにもその割合を残す（もう一度推したときに報酬になるように）
@@ -320,6 +361,29 @@ export var revertSupportTransferBySource = async (props) => {
                updated_at = $4
          WHERE user_id = $2
            AND ${premiumAmountSql} > 0`,
+      params
+    },
+    {
+      text: `UPDATE coin_balances
+           SET free_balance = max(coin_balances.free_balance - ${recipientFreeSql}, 0),
+               updated_at = $4
+         WHERE user_id = $2
+           AND ${recipientFreeSql} > 0`,
+      params
+    },
+    {
+      text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
+        SELECT $2, 'FREE', -${recipientFreeSql}, 'CONSUME', 'support rollback reversal', $3, $4, NULL
+         WHERE ${recipientFreeSql} > 0`,
+      params
+    },
+    {
+      text: `DELETE FROM coin_lots
+         WHERE user_id = $2
+           AND coin_type = 'FREE'
+           AND source_kind = 'SUPPORT'
+           AND source_ref_id = $3
+           AND EXISTS (${targetSql})`,
       params
     },
     refundLot("FREE", freeAmountSql),
