@@ -6,6 +6,7 @@ import { createTestD1 } from "./d1.mts"
 const API = process.env.API_SRC ?? new URL("../src", import.meta.url).pathname
 const coins = await import(`${API}/lib/coins.ts`)
 const support = await import(`${API}/lib/coin-support/transfer.ts`)
+const recipient = await import(`${API}/lib/coin-support/recipient.ts`)
 
 const d1 = await createTestD1()
 const db = d1.db
@@ -83,6 +84,32 @@ assert.equal(gone?.n, 0)
 // 取り消した分は今日の上限から外れる
 const again = await send({ from: "s2", to: "r1", coinType: "FREE", amount: 150, source: "t-5" })
 assert.equal(again.receivedFreeCoins, 100)
+
+// 「推しでフリーコインを受け取らない」設定の人（上限 0）: pt だけ付き、コインは渡さない（送る人のコインは減る）
+await prepare("r2", 0, 0)
+const [r2Free] = await balances("r2")
+const rejected = await support.transferSupportCoins({
+  db,
+  senderUserId: "s1",
+  recipientUserId: "r2",
+  coinType: "FREE",
+  amount: 40,
+  reason: "coin support",
+  source: "t-6",
+  freeReceiveDailyLimit: 0,
+})
+assert.equal(rejected.ok, true)
+assert.equal(rejected.receivedFreeCoins, 0)
+assert.equal(rejected.recipientPtAdded, 40)
+assert.deepEqual(await balances("r2"), [r2Free, 0])
+
+// 受け取る人の設定は core の user_settings から読む。読めないときは受け取る扱い
+const fakeCore = (row: unknown, fail = false) => ({
+  prepare: () => ({ bind: () => ({ first: async () => { if (fail) throw new Error("no column"); return row } }) }),
+})
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 0, free: 1 }), "12"), { rejectPremium: false, rejectFreeReceive: true })
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 1, free: null }), "12"), { rejectPremium: true, rejectFreeReceive: false })
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore(null, true), "12"), { rejectPremium: false, rejectFreeReceive: false })
 
 console.log("coin-support-free ok")
 await d1.dispose()

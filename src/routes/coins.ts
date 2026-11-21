@@ -3,7 +3,7 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
-import { PREMIUM_SUPPORT_REJECTED_MESSAGE, getSupportRecipientStatus, isPremiumSupportRejected } from "../lib/coin-support/recipient"
+import { PREMIUM_SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
@@ -291,8 +291,9 @@ coinsRoutes.post("/support", async (c) => {
     userId: parsed.output.senderUserId,
     planType: parsed.output.planType ?? "FREE"
   });
+  const recipientSettings = await getSupportRecipientSettings(c.env.SYSTEM_CORE ?? null, parsed.output.recipientUserId);
   // 受け取る人が「プレミアムコインでの推しを受け取らない」設定なら断る（既に受け取った分はそのまま）
-  if (parsed.output.coinType === "PREMIUM" && await isPremiumSupportRejected(c.env.SYSTEM_CORE ?? null, parsed.output.recipientUserId)) {
+  if (parsed.output.coinType === "PREMIUM" && recipientSettings.rejectPremium) {
     return json({ error: PREMIUM_SUPPORT_REJECTED_MESSAGE, code: "PREMIUM_SUPPORT_REJECTED" }, 403);
   }
   // クリエイター報酬にするか（参加者・全年齢の作品だけ。読み取りは参加者の 1 行と、参加者のときだけ作品 1 行）
@@ -315,7 +316,9 @@ coinsRoutes.post("/support", async (c) => {
     isAnonymous: parsed.output.isAnonymous ?? false,
     reason: parsed.output.reason ?? null,
     source: parsed.output.source ?? null,
-    earnings: decision.earnings
+    earnings: decision.earnings,
+    // 「推しでフリーコインを受け取らない」設定の人には、フリーコインの推しは pt だけ（コインは渡さない）
+    ...(recipientSettings.rejectFreeReceive ? { freeReceiveDailyLimit: 0 } : {})
   });
   if (!result.ok) {
     const status = result.code === "INSUFFICIENT_COINS" ? 409 : 400;
