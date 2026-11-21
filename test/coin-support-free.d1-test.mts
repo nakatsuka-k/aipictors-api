@@ -103,6 +103,28 @@ assert.equal(rejected.receivedFreeCoins, 0)
 assert.equal(rejected.recipientPtAdded, 40)
 assert.deepEqual(await balances("r2"), [r2Free, 0])
 
+// 推しで受け取ったフリーコインは推しには使えない（推し返して回し続けられないように）。生成などには使える
+await prepare("loopA", 0, 0)
+await prepare("loopB", 100, 0)
+const [loopAFree] = await balances("loopA")
+const toA = await send({ from: "loopB", to: "loopA", coinType: "FREE", amount: 100, source: "loop-1" })
+assert.equal(toA.receivedFreeCoins, 100)
+assert.deepEqual(await balances("loopA"), [loopAFree + 100, 0])
+assert.equal(await support.getSupportSpendableFreeBalance(db, "loopA"), loopAFree)
+const back = await send({ from: "loopA", to: "loopB", coinType: "FREE", amount: loopAFree + 1, source: "loop-2" })
+assert.equal(back.ok, false)
+assert.equal(back.code, "INSUFFICIENT_COINS")
+assert.deepEqual(await balances("loopA"), [loopAFree + 100, 0])
+if (loopAFree > 0) {
+  // 自分のフリーコインの分は今まで通り推せる（受け取った分は残る）
+  const own = await send({ from: "loopA", to: "loopB", coinType: "FREE", amount: loopAFree, source: "loop-3" })
+  assert.equal(own.ok, true)
+  assert.deepEqual(await balances("loopA"), [100, 0])
+}
+// 生成などでは使える（受け取ったロットから減る）
+const consumed = await coins.consumeCoins({ db, userId: "loopA", amount: 30, reason: "generation" })
+assert.equal(consumed.ok, true)
+
 // 受け取る人の設定は core の user_settings から読む。読めないときは受け取る扱い
 const fakeCore = (row: unknown, fail = false) => ({
   prepare: () => ({ bind: () => ({ first: async () => { if (fail) throw new Error("no column"); return row } }) }),

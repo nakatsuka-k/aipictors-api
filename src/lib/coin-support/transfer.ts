@@ -9,6 +9,21 @@ import { jstEndOfDay } from "../daily-coins"
 export var SUPPORT_FREE_RECEIVE_DAILY_LIMIT = 300;
 /** 推しで受け取ったフリーコインの期限（日） */
 export var SUPPORT_FREE_RECEIVE_EXPIRE_DAYS = 30;
+/**
+ * 推しに使えるロット。ほかの人から推しで受け取ったフリーコイン（source_kind = 'SUPPORT' で送った人がいるもの）は推しには使えない
+ * （生成などには使える）。受け取った分で推し返して、同じコインが推し合いで回り続けランキングを上げられるのを防ぐ。
+ * 運営の付与（granted_by_user_id が NULL）とプレミアムコインは今まで通り使える
+ */
+export var SUPPORT_SPENDABLE_LOT_SQL = `NOT (coin_type = 'FREE' AND source_kind = 'SUPPORT' AND granted_by_user_id IS NOT NULL)`;
+/** 推しに使えるフリーコインの残り（推す画面に出す） */
+export var getSupportSpendableFreeBalance = async (db, userId) => {
+  const row = await db.queryOne(
+    `SELECT COALESCE(SUM(remaining), 0) AS balance FROM coin_lots
+      WHERE user_id = $1 AND coin_type = 'FREE' AND remaining > 0 AND ${SUPPORT_SPENDABLE_LOT_SQL}`,
+    [String(userId)]
+  );
+  return Number(row?.balance ?? 0);
+};
 export var transferSupportCoins = async (props) => {
   const now = props.now ?? getNow();
   const amount = Math.floor(Math.max(0, props.amount));
@@ -65,6 +80,7 @@ export var transferSupportCoins = async (props) => {
              WHERE user_id = $1
                AND coin_type = $4
                AND remaining > 0
+               AND ${SUPPORT_SPENDABLE_LOT_SQL}
           )
          WHERE max($3 - (cumulative - remaining), 0) > 0`;
   const spentSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${updatesSql}))`;
