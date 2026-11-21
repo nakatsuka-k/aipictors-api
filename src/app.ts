@@ -17,6 +17,7 @@ import { referralRoutes } from "./routes/referrals"
 import { stripeRoutes } from "./routes/stripe"
 import { subscriptionRoutes } from "./routes/subscriptions"
 import { supportRoutes } from "./routes/support"
+import { translationRoutes } from "./routes/translations"
 import { userModelsRoutes } from "./routes/user-models"
 import { userModelPickupRoutes } from "./routes/user-model-pickups"
 import { webhookRoutes } from "./routes/webhooks"
@@ -40,6 +41,7 @@ app.route("/admin", adminRoutes);
 app.route("/internal/campaigns", campaignRoutes);
 app.route("/internal/analytics", analyticsRoutes);
 app.route("/internal/support", supportRoutes);
+app.route("/internal/translations", translationRoutes);
 app.route("/internal/discord", discordRoutes);
 app.route("/discord-bot", discordBotRoutes);
 app.route("/email", emailPublicRoutes);

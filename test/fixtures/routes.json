@@ -124,6 +124,7 @@
   "POST /internal/support/resolve",
   "POST /internal/support/thread",
   "POST /internal/support/unread",
+  "POST /internal/translations/translate",
   "POST /internal/user-model-pickups/admin/:weekStart/auto",
   "POST /internal/user-models/:id/disable",
   "POST /internal/user-models/:id/enable",
