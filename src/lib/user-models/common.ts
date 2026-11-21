@@ -34,7 +34,18 @@ export const USER_MODEL_PART_SIZE = 50 * 1024 * 1024
 // 放置されたアップロード（ブラウザを閉じた等）はこの時間で破棄し、上限の枠を空ける
 export const STALE_UPLOAD_SECONDS = 24 * 60 * 60
 
-export const defaultUserModelLimits: Record<CoinPlanType, number> = { FREE: 1, LITE: 3, STANDARD: 10, PREMIUM: 30 }
+// 1 か月（JST の 1 日 00:00 から）に登録できる数。登録したモデルは作者が削除できないので、枠は毎月 1 日に戻る
+export const defaultUserModelLimits: Record<CoinPlanType, number> = { FREE: 2, LITE: 5, STANDARD: 12, PREMIUM: 35 }
+
+const JST_OFFSET_SECONDS = 9 * 60 * 60
+
+/** その月（JST）の 1 日 00:00 と、次の月の 1 日 00:00（UNIX 秒） */
+export const jstMonthRange = (nowSec: number) => {
+  const jst = new Date((nowSec + JST_OFFSET_SECONDS) * 1000)
+  const start = Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), 1) / 1000 - JST_OFFSET_SECONDS
+  const end = Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() + 1, 1) / 1000 - JST_OFFSET_SECONDS
+  return { start, end }
+}
 
 export const defaultUserModelMaxBytes: Record<UserModelKind, number> = {
   LORA: 400 * 1024 * 1024,

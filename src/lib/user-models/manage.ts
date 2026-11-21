@@ -65,10 +65,15 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
   return toUserModel(updated)
 }
 
-// 論理削除。同じファイルを参照する行が残っていなければ R2 からも削除する
+// 論理削除。同じファイルを参照する行が残っていなければ R2 からも削除する。
+// 登録を終えたモデル（READY・DISABLED）は作者が削除できない（ほかの人の作品や生成で使われているため。枠は毎月 1 日に戻る）。
+// 削除できるのはアップロード中のものだけ（中止と同じ）
 export const deleteUserModel = async (deps: UserModelDeps, id: string, userIdInput: unknown) => {
   const userId = requireUserId(userIdInput)
   const row = await requireRow(deps.db, id, { userId })
+  if (row.status !== "UPLOADING") {
+    throw new UserModelError(403, "DELETE_NOT_ALLOWED", "登録したモデルは削除できません。公開をやめたいときは運営にご連絡ください")
+  }
   // 参照数は削除する行を除いて数えるので、更新の前でも後でも同じ（1 つのトランザクション）
   const [refsResult, deletedResult] = await deps.db.batch([
     {

@@ -5,6 +5,7 @@ import {
   USER_MODEL_PART_SIZE,
   UserModelError,
   getUserModelSettings,
+  jstMonthRange,
   newUserModelId,
   userModelPartCount,
   userModelPartLength,
@@ -81,7 +82,7 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
         SELECT id FROM user_models WHERE sha256 = $3 AND status = 'UPLOADING' LIMIT 1
       ),
       used AS (
-        SELECT COUNT(*) AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED'
+        SELECT COUNT(*) AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED' AND created_at >= $25
       )`
   const params = [
       id,
@@ -108,6 +109,8 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       input.source?.license ? JSON.stringify(input.source.license) : null,
       input.source?.baseModel ?? null,
       fields.recommendedSettings ? JSON.stringify(fields.recommendedSettings) : null,
+      // 上限は今月（JST）登録した数で数える
+      jstMonthRange(deps.now).start,
     ]
   // 判定に使う値は INSERT の前に読む（同じトランザクション。D1 は書き込みを 1 本ずつ順に実行するのでロックは要らない）
   const [stateResult, insertResult] = await deps.db.batch([
@@ -154,7 +157,11 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       throw new UserModelError(409, "ALREADY_REGISTERED", `同じファイルはすでに登録済みです（${result.mine_id}）`)
     }
     if (Number(result?.used ?? 0) >= limit) {
-      throw new UserModelError(409, "LIMIT_EXCEEDED", `登録できるモデルは ${limit} 個までです（${planType}）`)
+      throw new UserModelError(
+        409,
+        "LIMIT_EXCEEDED",
+        `今月登録できるモデルは ${limit} 個までです（${planType}）。枠は毎月 1 日にリセットされます`,
+      )
     }
     if (sizeMustMatch && result?.existing_id && Number(result.existing_size) !== sizeBytes) {
       throw bad("SIZE_MISMATCH", "sha256 とファイルサイズが一致しません")

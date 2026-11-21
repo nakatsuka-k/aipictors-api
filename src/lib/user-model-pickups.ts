@@ -7,8 +7,10 @@
 // - 運営は管理画面から差し替えられる（source = ADMIN。その週は cron で上書きしない）
 // - 選んだら: aipictors-system の D1 に「その週のお題（ユーザー企画の枠、主催は公式）」を作り、登録者にお知らせを送り、
 //   X 投稿の下書き（文面と添付する画像の URL）を作る。X への投稿はしない
+// - LoRA なら次の回で照合用ハッシュ（Lora hashes）を計算する。フロントがアップロードの画像の PNGInfo と照合してお題への参加を決める
 import { getUserModel, toUserModel, type UserModelRow } from "./user-models"
-import type { Db } from "./user-models/common"
+import { ensureAddnetHash } from "./user-models/addnet-hash"
+import type { Db, ModelBucket } from "./user-models/common"
 import { sourceLicenseAllowsOtherServices } from "./user-models/serialize"
 
 export const SITE_URL = "https://www.aipictors.com"
@@ -343,7 +345,24 @@ const toPickup = (row: PickupRow) => ({
   updatedAt: Number(row.updated_at),
 })
 
-export type PickupDeps = { db: Db; genlog: Db; system: SystemD1; now: number }
+export type PickupDeps = {
+  db: Db
+  genlog: Db
+  system: SystemD1
+  now: number
+  /** モデルのファイル（LoRA の照合用ハッシュの計算に使う。無ければ計算しない） */
+  bucket?: Pick<ModelBucket, "get"> | null
+}
+
+/** ピックアップの LoRA の照合用ハッシュ（Lora hashes）が無ければ計算する。失敗しても選定には影響させない */
+const ensurePickupHash = async (deps: PickupDeps, model: { id: string; kind: string; addnetHash?: string | null } | null | undefined) => {
+  if (!deps.bucket || !model || model.kind !== "LORA" || model.addnetHash) return
+  const hash = await ensureAddnetHash({ db: deps.db, bucket: deps.bucket }, model.id).catch((error) => {
+    console.log(JSON.stringify({ event: "user_models.pickup.addnet_hash_failed", modelId: model.id, message: String(error?.message ?? error) }))
+    return null
+  })
+  if (hash) console.log(JSON.stringify({ event: "user_models.pickup.addnet_hash", modelId: model.id }))
+}
 
 /** 候補（点数つき）。管理画面と自動選定で使う */
 export const listPickupCandidates = async (deps: PickupDeps, weekStart = jstWeekStart(deps.now)) => {
@@ -471,6 +490,7 @@ export const runWeeklyPickup = async (deps: PickupDeps, options: { force?: boole
       await decidePickup(deps, { weekStart, modelId: existing.modelId, source: existing.source === "ADMIN" ? "ADMIN" : "AUTO", decidedBy: existing.decidedBy })
       return { weekStart, action: "repaired", modelId: existing.modelId }
     }
+    await ensurePickupHash(deps, existing.model)
     return { weekStart, action: "kept", modelId: existing.modelId }
   }
   // 選ぶときは生成の表を 7 日分読むので、選べなかったときに 5 分ごとに読み直さないよう毎時 00〜04 分の回だけ

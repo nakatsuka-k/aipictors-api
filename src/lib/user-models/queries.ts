@@ -7,6 +7,7 @@ import {
   UserModelError,
   getUserModelSettings,
   isUserModelId,
+  jstMonthRange,
 } from "./common"
 import type { Db, UserModelStatus } from "./common"
 import { oneOf } from "./input"
@@ -79,17 +80,27 @@ export const listUserModels = async (db: Db, query: ListUserModelsQuery) => {
 }
 
 export const getUserModelLimit = async (db: Db, userId: string, callerPlan: unknown, now: number) => {
-  const [{ limits }, planType] = await Promise.all([getUserModelSettings(db), resolveCoinPlanType(db, userId, callerPlan, now)])
-  return { planType, limit: limits[planType] }
+  const { start, end } = jstMonthRange(now)
+  const [{ limits }, planType, used] = await Promise.all([
+    getUserModelSettings(db),
+    resolveCoinPlanType(db, userId, callerPlan, now),
+    // 今月登録した数（失敗・中止したアップロードは DELETED なので数えない）
+    db.queryOne<{ n: number | string }>(
+      "SELECT COUNT(*) AS n FROM user_models WHERE user_id = $1 AND status <> 'DELETED' AND created_at >= $2",
+      [userId, start],
+    ),
+  ])
+  return { planType, limit: limits[planType], usedThisMonth: Number(used?.n ?? 0), monthStart: start, resetsAt: end }
 }
 
 export const listMyUserModels = async (db: Db, userId: string, callerPlan: unknown, now: number) => {
-  const [rows, { planType, limit }] = await Promise.all([
+  const [rows, { planType, limit, usedThisMonth, resetsAt }] = await Promise.all([
     db.query<UserModelRow>(
       "SELECT * FROM user_models WHERE user_id = $1 AND status <> 'DELETED' ORDER BY created_at DESC, id DESC",
       [userId],
     ),
     getUserModelLimit(db, userId, callerPlan, now),
   ])
-  return { models: rows.map(toUserModel), limit, used: rows.length, planType }
+  // limit / usedThisMonth は今月の枠。used は持っているモデルの数（以前の画面の互換のため残す）
+  return { models: rows.map(toUserModel), limit, used: rows.length, usedThisMonth, resetsAt, planType, canDelete: false }
 }

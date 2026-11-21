@@ -67,11 +67,19 @@ class MockBucket {
       },
     }
   }
-  async get(key: string, opts?: { range?: { offset: number; length: number } }) {
+  async get(key: string, opts?: { range?: { offset: number; length?: number } }) {
     const b = this.objects.get(key)
     if (!b) return null
-    const slice = opts?.range ? b.subarray(opts.range.offset, opts.range.offset + opts.range.length) : b
-    return { key, size: b.length, httpEtag: `"obj-${b.length}"`, body: new Blob([slice]).stream() }
+    const slice = opts?.range
+      ? b.subarray(opts.range.offset, opts.range.length === undefined ? undefined : opts.range.offset + opts.range.length)
+      : b
+    return {
+      key,
+      size: b.length,
+      httpEtag: `"obj-${b.length}"`,
+      body: new Blob([slice]).stream(),
+      arrayBuffer: async () => slice.slice().buffer,
+    }
   }
   async delete(key: string) {
     this.objects.delete(key)
@@ -169,6 +177,9 @@ const bigFile = makeSafetensors(2 * PART + 12345)
 let bigId = ""
 let bigSha = ""
 
+// 以下のテストは無料プランの上限を 1 にして数える（既定の上限と月ごとのリセットは最後のテストで見る）
+await db.execute("INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit.FREE', '1', 0)")
+
 await t("トークンなしは 401", async () => {
   const res = await app.request("/internal/user-models", {}, env)
   assert.equal(res.status, 401)
@@ -209,24 +220,24 @@ await t("ファイル配信: 全体と Range（a-b / a- / -n）、不正な Rang
   assert.equal(bad.status, 416)
 })
 
-await t("無料プランは 1 個まで。2 個目は LIMIT_EXCEEDED", async () => {
+await t("上限 1 なら 2 個目は LIMIT_EXCEEDED", async () => {
   const r = await uploadAll("a1", makeSafetensors(1000, undefined, 2))
   assert.equal(r.start.status, 409)
   assert.equal(r.start.body.code, "LIMIT_EXCEEDED")
 })
 
 await t("同じユーザが同じファイルを 2 回登録しようとすると ALREADY_REGISTERED", async () => {
-  await db.execute("INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit.FREE', '5', 0)")
+  await db.execute("UPDATE pricing_settings SET value = '5' WHERE key = 'user_models.limit.FREE'")
   const r = await uploadAll("a1", bigFile)
   assert.equal(r.start.status, 409)
   assert.equal(r.start.body.code, "ALREADY_REGISTERED")
-  await db.execute("DELETE FROM pricing_settings WHERE key = 'user_models.limit.FREE'")
+  await db.execute("UPDATE pricing_settings SET value = '1' WHERE key = 'user_models.limit.FREE'")
 })
 
-await t("pricing_settings で上限を上書きでき、契約者はプランの上限（LITE 3）", async () => {
+await t("pricing_settings で上限を上書きでき、契約者はプランの上限（LITE 5）", async () => {
   await addSub("a2", "LITE")
   const mine = await callJson("GET", "/mine/a2")
-  assert.equal(mine.body.data.limit, 3)
+  assert.equal(mine.body.data.limit, 5)
   assert.equal(mine.body.data.planType, "LITE")
   await db.execute("INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit.LITE', '4', 0)")
   assert.equal((await callJson("GET", "/mine/a2")).body.data.limit, 4)
@@ -482,18 +493,22 @@ await t("GPU 側の sha256 が不一致なら同じファイルの READY をす�
   assert.equal((await call("GET", `/${r.modelId}/file`)).status, 409)
 })
 
-await t("削除: 他人は 403。参照が残る間は R2 に残し、0 になったら消す", async () => {
+await t("削除: 他人は 403。登録したモデルは作者でも削除できない（DELETE_NOT_ALLOWED）", async () => {
   const key = `models/${bigSha}.safetensors`
   const a2Model = (await db.queryOne("SELECT id FROM user_models WHERE user_id = 'a2' AND sha256 = $1", [bigSha])).id
   assert.equal((await callJson("DELETE", `/${bigId}`, { userId: "a2" })).status, 403)
   const d1 = await callJson("DELETE", `/${bigId}`, { userId: "a1" })
-  assert.equal(d1.body.data.fileDeleted, false)
-  assert.ok(bucket.objects.has(key))
-  assert.equal((await callJson("GET", `/${bigId}`)).status, 404)
+  assert.equal(d1.status, 403)
+  assert.equal(d1.body.code, "DELETE_NOT_ALLOWED")
   const d2 = await call("DELETE", `/${a2Model}?userId=a2`)
-  assert.equal(((await d2.json()) as any).data.fileDeleted, true)
-  assert.ok(!bucket.objects.has(key))
-  assert.equal((await callJson("GET", "/mine/a1")).body.data.used, 0)
+  assert.equal(d2.status, 403)
+  assert.ok(bucket.objects.has(key))
+  assert.equal((await callJson("GET", `/${bigId}`)).body.data.status, "READY")
+  assert.equal((await callJson("GET", "/mine/a1")).body.data.used, 1)
+  assert.equal((await callJson("GET", "/mine/a1")).body.data.canDelete, false)
+  // 以降のテストのために、運営が消したことにする
+  await db.execute("UPDATE user_models SET status = 'DELETED' WHERE id IN ($1, $2)", [bigId, a2Model])
+  bucket.objects.delete(key)
 })
 
 await t("通報: 5 人で自動非表示、管理者が戻すと解決済み。無効化 API は単体だけ止める", async () => {
@@ -955,6 +970,56 @@ await t("取り込みの中止: 行は DELETED、Workflow はスキップ、mult
   assert.equal(s.body.data.status, "FAILED")
   assert.equal(s.body.data.error, "取り込みを中止しました")
   assert.equal((await runImport(params)).status, "SKIPPED")
+})
+
+await t("上限は今月（JST）登録した数。既定は FREE 2 / LITE 5 / STANDARD 12 / PREMIUM 35、翌月 1 日に戻る", async () => {
+  await db.execute("DELETE FROM pricing_settings WHERE key = 'user_models.limit.FREE'")
+  const savedNow = fakeNow
+  fakeNow = Math.floor(Date.parse("2026-12-31T23:30:00+09:00") / 1000)
+  const up = (i: number) =>
+    callJson("POST", "/uploads", {
+      thumbnailUrl: "https://example.com/t.png",
+      userId: "q1", kind: "LORA", filename: "q.safetensors", sizeBytes: 1000,
+      sha256: (900 + i).toString(16).padStart(64, "e"), name: `q${i}`,
+    })
+  assert.equal((await up(1)).status, 200)
+  assert.equal((await up(2)).status, 200)
+  const third = await up(3)
+  assert.equal(third.body.code, "LIMIT_EXCEEDED")
+  assert.match(third.body.error ?? third.body.message ?? JSON.stringify(third.body), /毎月 1 日/)
+  const mine = await callJson("GET", "/mine/q1")
+  assert.equal(mine.body.data.limit, 2)
+  assert.equal(mine.body.data.usedThisMonth, 2)
+  assert.equal(mine.body.data.resetsAt, Math.floor(Date.parse("2027-01-01T00:00:00+09:00") / 1000))
+  // JST の 1 月 1 日 00:00 を過ぎると枠が戻る（前の月のモデルはそのまま残る）
+  fakeNow = Math.floor(Date.parse("2027-01-01T00:00:10+09:00") / 1000)
+  assert.equal((await up(3)).status, 200)
+  const next = await callJson("GET", "/mine/q1")
+  assert.equal(next.body.data.usedThisMonth, 1)
+  assert.equal(next.body.data.used, 3)
+  for (const [plan, limit] of [["LITE", 5], ["STANDARD", 12], ["PREMIUM", 35]] as const) {
+    await addSub(`q_${plan}`, plan)
+    assert.equal((await callJson("GET", `/mine/q_${plan}`)).body.data.limit, limit)
+  }
+  fakeNow = savedNow
+})
+
+await t("照合用ハッシュ（Lora hashes / AutoV3）: ヘッダーを除いた本体の sha256 を計算して保存する", async () => {
+  const { computeAddnetHash, ensureAddnetHash } = await import("../src/lib/user-models/addnet-hash")
+  const file = makeSafetensors(3000, undefined, 21)
+  const headerLength = Number(new DataView(file.buffer, file.byteOffset, 8).getBigUint64(0, true))
+  const expected = await sha256Hex(file.subarray(8 + headerLength))
+  bucket.objects.set("models/hashtest.safetensors", file)
+  assert.equal(await computeAddnetHash(bucket, "models/hashtest.safetensors"), expected)
+  assert.equal(await computeAddnetHash(bucket, "models/none.safetensors"), null)
+  const r = await uploadAll("h1", makeSafetensors(3100, undefined, 22))
+  const id = r.modelId!
+  const row = await db.queryOne<{ r2_key: string }>("SELECT r2_key FROM user_models WHERE id = $1", [id])
+  const stored = bucket.objects.get(row!.r2_key)!
+  const len = Number(new DataView(stored.buffer, stored.byteOffset, 8).getBigUint64(0, true))
+  const hash = await ensureAddnetHash({ db, bucket }, id)
+  assert.equal(hash, await sha256Hex(stored.subarray(8 + len)))
+  assert.equal((await callJson("GET", `/${id}`)).body.data.addnetHash, hash)
 })
 
 console.log(`\n${passed} passed`)

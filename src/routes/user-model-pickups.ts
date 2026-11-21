@@ -25,6 +25,7 @@ export const pickupDepsFromEnv = async (env: Env): Promise<PickupDeps> => {
     genlog: await getGenlogDb(env),
     system: { core: e.SYSTEM_CORE ?? null, activity: e.SYSTEM_ACTIVITY ?? null },
     now: getNow(),
+    bucket: env.USER_MODELS ?? null,
   }
 }
 

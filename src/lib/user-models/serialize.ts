@@ -36,6 +36,7 @@ export type UserModelRow = {
   import_parts_total?: number | string | null
   import_error?: string | null
   recommended_settings?: string | null
+  addnet_hash?: string | null
 }
 
 export const parseJsonArray = (value: string | null | undefined): string[] => {
@@ -185,6 +186,8 @@ export const toUserModel = (row: UserModelRow) => {
     sampleImageUrls: parseJsonArray(row.sample_image_urls),
     originalFilename: row.original_filename,
     sha256: row.sha256,
+    // ヘッダーを除いた本体の sha256（A1111 の Lora hashes / Civitai の AutoV3）。ピックアップの LoRA だけ計算する
+    addnetHash: row.addnet_hash ?? null,
     sizeBytes: Number(row.size_bytes),
     status: row.status,
     disabledReason: row.disabled_reason,
