@@ -20,6 +20,7 @@ import { supportRoutes } from "./routes/support"
 import { translationRoutes } from "./routes/translations"
 import { userModelsRoutes } from "./routes/user-models"
 import { userModelPickupRoutes } from "./routes/user-model-pickups"
+import { userRoutes } from "./routes/users"
 import { webhookRoutes } from "./routes/webhooks"
 export const app = new Hono2();
 app.get("/healthz", (c) => {
@@ -37,6 +38,7 @@ app.route("/internal/pictor-run", pictorRunRoutes);
 app.route("/internal/subscriptions", subscriptionRoutes);
 app.route("/internal/user-models", userModelsRoutes);
 app.route("/internal/user-model-pickups", userModelPickupRoutes);
+app.route("/internal/users", userRoutes);
 app.route("/admin", adminRoutes);
 app.route("/internal/campaigns", campaignRoutes);
 app.route("/internal/analytics", analyticsRoutes);
