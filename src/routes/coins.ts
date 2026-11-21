@@ -3,7 +3,6 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
-import { getSupportSpendableFreeBalance } from "../lib/coin-support/transfer"
 import { PREMIUM_SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
@@ -164,12 +163,8 @@ coinsRoutes.post("/ensure-initial-grant", async (c) => {
   });
   const supportTargetUserId = parsed.output.supportTargetUserId;
   if (supportTargetUserId && supportTargetUserId !== parsed.output.userId) {
-    const [supportTarget, supportFreeBalance] = await Promise.all([
-      getSupportRecipientStatus({ db, core: c.env.SYSTEM_CORE ?? null, env: c.env, recipientUserId: supportTargetUserId }),
-      // 推しで受け取ったフリーコインは推しに使えないので、推す画面には使える分を別に返す
-      getSupportSpendableFreeBalance(db, parsed.output.userId)
-    ]);
-    return json({ error: null, data: { ...summary, supportTarget, supportFreeBalance: Math.min(supportFreeBalance, summary.freeBalance ?? supportFreeBalance) } });
+    const supportTarget = await getSupportRecipientStatus({ db, core: c.env.SYSTEM_CORE ?? null, env: c.env, recipientUserId: supportTargetUserId });
+    return json({ error: null, data: { ...summary, supportTarget } });
   }
   return json({ error: null, data: summary });
 });

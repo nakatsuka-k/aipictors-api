@@ -10,20 +10,11 @@ export var SUPPORT_FREE_RECEIVE_DAILY_LIMIT = 300;
 /** 推しで受け取ったフリーコインの期限（日） */
 export var SUPPORT_FREE_RECEIVE_EXPIRE_DAYS = 30;
 /**
- * 推しに使えるロット。ほかの人から推しで受け取ったフリーコイン（source_kind = 'SUPPORT' で送った人がいるもの）は推しには使えない
- * （生成などには使える）。受け取った分で推し返して、同じコインが推し合いで回り続けランキングを上げられるのを防ぐ。
- * 運営の付与（granted_by_user_id が NULL）とプレミアムコインは今まで通り使える
+ * フリーコインで推された分のうち、受け取った人のフリーコインになる割合（切り捨て）。受け取った分でまた推せるが、
+ * 回すたびに 1/3 が消えるので、元の N 枚を推し合いで回し続けても pt は最大 N×(1 + 2/3 + 4/9 + …) = 3N に収まる。
+ * 1 枚の推しは 0 枚になり、少額の往復は自然に止まる。プレミアムコインの推しは今まで通り満額
  */
-export var SUPPORT_SPENDABLE_LOT_SQL = `NOT (coin_type = 'FREE' AND source_kind = 'SUPPORT' AND granted_by_user_id IS NOT NULL)`;
-/** 推しに使えるフリーコインの残り（推す画面に出す） */
-export var getSupportSpendableFreeBalance = async (db, userId) => {
-  const row = await db.queryOne(
-    `SELECT COALESCE(SUM(remaining), 0) AS balance FROM coin_lots
-      WHERE user_id = $1 AND coin_type = 'FREE' AND remaining > 0 AND ${SUPPORT_SPENDABLE_LOT_SQL}`,
-    [String(userId)]
-  );
-  return Number(row?.balance ?? 0);
-};
+export var SUPPORT_FREE_RECEIVE_RATIO = { numerator: 2, denominator: 3 };
 export var transferSupportCoins = async (props) => {
   const now = props.now ?? getNow();
   const amount = Math.floor(Math.max(0, props.amount));
@@ -80,7 +71,6 @@ export var transferSupportCoins = async (props) => {
              WHERE user_id = $1
                AND coin_type = $4
                AND remaining > 0
-               AND ${SUPPORT_SPENDABLE_LOT_SQL}
           )
          WHERE max($3 - (cumulative - remaining), 0) > 0`;
   const spentSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${updatesSql}))`;
@@ -91,12 +81,12 @@ export var transferSupportCoins = async (props) => {
           ELSE 0 END)`;
   // 受け取る人にコインで渡す分
   const recipientCoinsSql = `($3 - ${earnedSql})`;
-  // フリーコインの推し: 今日（JST）すでに推しで受け取ったフリーコイン（推しのロットの台帳）を上限から引いた分だけ渡す
+  // フリーコインの推し: 推した枚数の 2/3（切り捨て、$18）を、今日（JST）すでに推しで受け取ったフリーコイン（推しのロットの台帳）を上限から引いた分まで渡す
   const receivedFreeTodaySql = `(SELECT COALESCE(SUM(delta), 0) FROM coin_ledger
          WHERE user_id = $2 AND coin_type = 'FREE' AND kind = 'GRANT' AND created_at >= $15
            AND source IN (SELECT source_ref_id FROM coin_lots
                            WHERE user_id = $2 AND coin_type = 'FREE' AND source_kind = 'SUPPORT' AND created_at >= $15))`;
-  const recipientFreeSql = `(CASE WHEN $4 = 'FREE' THEN min($3, max($16 - ${receivedFreeTodaySql}, 0)) ELSE 0 END)`;
+  const recipientFreeSql = `(CASE WHEN $4 = 'FREE' THEN min($18, max($16 - ${receivedFreeTodaySql}, 0)) ELSE 0 END)`;
   const guarded = "EXISTS (SELECT 1 FROM d1_guard)";
   const params = [
     props.senderUserId,
@@ -115,7 +105,8 @@ export var transferSupportCoins = async (props) => {
     (props.earnings?.holdDays ?? CREATOR_REWARD_HOLD_DAYS) * 86400,
     jstEndOfDay(now) - 86400,
     props.freeReceiveDailyLimit ?? SUPPORT_FREE_RECEIVE_DAILY_LIMIT,
-    now + SUPPORT_FREE_RECEIVE_EXPIRE_DAYS * 86400
+    now + SUPPORT_FREE_RECEIVE_EXPIRE_DAYS * 86400,
+    Math.floor(amount * SUPPORT_FREE_RECEIVE_RATIO.numerator / SUPPORT_FREE_RECEIVE_RATIO.denominator)
   ];
   const upsertWeekly = (table, userParam) => ({
     text: `INSERT INTO ${table}(week_start_date, user_id, coin_amount, pt_amount, transfer_count, updated_at)
