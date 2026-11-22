@@ -10,6 +10,7 @@ import { getGeminiAllowance } from "../lib/gemini-allowance";
 import { isImageGenerationCoinReason, isPremiumCoinGenerationDisabled } from "../lib/coins/generation-setting"
 import { adminAdjustCoins, applyCoinDelta, consumeCoins, ensureInitialCoinGrant, getAdminCoinHistory, getCoinSummary, getConsumedCoinBreakdownBySource } from "../lib/coins"
 import { runDailyCoinJob } from "../lib/daily-coins"
+import { getLiteDayTrial, startLiteDayTrial } from "../lib/lite-day-trial"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 export var planTypeSchema = union([
@@ -126,6 +127,33 @@ coinsRoutes.get("/gemini-allowance/:userId", async (c) => {
   const db = await getDb(c.env);
   const allowance = await getGeminiAllowance({ db, userId: c.req.param("userId") });
   return json({ error: null, data: allowance });
+});
+// カード登録なしの「ライト1日体験」（lib/lite-day-trial.ts）。/:userId より前に置く
+coinsRoutes.get("/lite-day-trial/:userId", async (c) => {
+  const db = await getDb(c.env);
+  return json({ error: null, data: await getLiteDayTrial(db, c.env, c.req.param("userId"), getNow()) });
+});
+export var liteDayTrialStartSchema = object({
+  userId: string(),
+  source: optional(nullable(string()))
+});
+coinsRoutes.post("/lite-day-trial/start", async (c) => {
+  const parsed = safeParse(liteDayTrialStartSchema, await c.req.json());
+  if (!parsed.success) {
+    return json({ error: "Invalid body" }, 400);
+  }
+  const db = await getDb(c.env);
+  const result = await startLiteDayTrial({
+    db,
+    env: c.env,
+    userId: parsed.output.userId,
+    source: parsed.output.source ?? null,
+    now: getNow()
+  });
+  if (result.error !== null) {
+    return json({ error: result.error, data: { trial: result.trial } }, 409);
+  }
+  return json({ error: null, data: { trial: result.trial, summary: result.summary } });
 });
 coinsRoutes.get("/:userId", async (c) => {
   const db = await getDb(c.env);
