@@ -14,14 +14,14 @@ var RECENT_DAYS = 7;
 var CHART_DAYS = 30;
 var CACHE_SECONDS = 300;
 
-/** 夜だけ動く Pod の 1 日の時間（aipictors-cron の cron-gpu-night: 17:30〜2:00 JST） */
-export var NIGHT_HOURS_PER_DAY = 8.5;
+/** 夜だけ動く Pod の 1 日の時間（aipictors-cron の cron-gpu-night: 19:00〜2:00 JST。安い GPU が借りられない夜は動かない） */
+export var NIGHT_HOURS_PER_DAY = 7;
 
 /** Pod 名の頭 → 役割（cron-gpu-night が付ける名前） */
 var ROLES = [
   { prefix: "aipictors-free-", role: "free", label: "無料用", hoursPerDay: 24 },
   { prefix: "aipictors-paid-", role: "paid", label: "有料用", hoursPerDay: 24 },
-  { prefix: "aipictors-night-", role: "night", label: "夜間（17:30〜2:00）", hoursPerDay: NIGHT_HOURS_PER_DAY },
+  { prefix: "aipictors-night-", role: "night", label: "夜間（19:00〜2:00）", hoursPerDay: NIGHT_HOURS_PER_DAY },
 ];
 
 var SERVICE_KEYS = ["cloudflare", "google", "xai", "openai"];
