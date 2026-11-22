@@ -32,6 +32,8 @@ const clampInt = (value, min, max, fallback) => {
   return Math.min(max, Math.max(min, n))
 }
 const text = (value, max) => String(value ?? "").trim().slice(0, max)
+/** true/false を 1/0 に。送られてこなかったときは null（保存では今の値のまま） */
+const toOptionalFlag = (value) => (value === true ? 1 : value === false ? 0 : null)
 const inList = (values) => values.map((v) => `'${v}'`).join(", ")
 
 // ---- 表示用の形 ----
@@ -51,6 +53,7 @@ export const toPlan = (row, extra = {}) =>
     maxActive: Number(row.max_active),
     isAccepting: Number(row.is_accepting) === 1,
     allowsR18: Number(row.allows_r18) === 1,
+    premiumOnly: Number(row.premium_only ?? 0) === 1,
     status: row.status,
     orderCount: Number(row.order_count ?? 0),
     completedCount: Number(row.completed_count ?? 0),
@@ -123,6 +126,7 @@ export const getRequestSettings = async ({ db, userId }) => {
     acceptsFreeRequests: Number(row?.accepts_free_requests ?? 0) === 1,
     minCoins: Number(row?.min_coins ?? 500),
     allowsR18: Number(row?.allows_r18 ?? 0) === 1,
+    premiumOnly: Number(row?.premium_only ?? 0) === 1,
     maxActive: Number(row?.max_active ?? 3),
     note: row?.note ?? "",
   }
@@ -130,10 +134,12 @@ export const getRequestSettings = async ({ db, userId }) => {
 
 export const saveRequestSettings = async ({ db, now, userId, input }) => {
   await db.execute(
-    `INSERT INTO creator_request_settings(user_id, accepts_free_requests, min_coins, allows_r18, max_active, note, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    // premiumOnly を送ってこない画面（古いアプリ）からの保存では、今の設定を変えない
+    `INSERT INTO creator_request_settings(user_id, accepts_free_requests, min_coins, allows_r18, max_active, note, updated_at, premium_only)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 0))
      ON CONFLICT (user_id) DO UPDATE SET accepts_free_requests = EXCLUDED.accepts_free_requests, min_coins = EXCLUDED.min_coins,
-       allows_r18 = EXCLUDED.allows_r18, max_active = EXCLUDED.max_active, note = EXCLUDED.note, updated_at = EXCLUDED.updated_at`,
+       allows_r18 = EXCLUDED.allows_r18, max_active = EXCLUDED.max_active, note = EXCLUDED.note, updated_at = EXCLUDED.updated_at,
+       premium_only = COALESCE($8, creator_request_settings.premium_only)`,
     [
       String(userId),
       input.acceptsFreeRequests ? 1 : 0,
@@ -142,6 +148,7 @@ export const saveRequestSettings = async ({ db, now, userId, input }) => {
       clampInt(input.maxActive, 1, 10, 3),
       text(input.note, 500),
       now,
+      toOptionalFlag(input.premiumOnly),
     ],
   )
   return getRequestSettings({ db, userId })
@@ -212,6 +219,8 @@ export const validatePlanInput = (input) => {
       maxActive: clampInt(input.maxActive, 1, 10, 3),
       isAccepting: input.isAccepting !== false,
       allowsR18: input.allowsR18 === true,
+      // null = 送られてこなかった（古いアプリ）。編集では今の設定のまま、新規はフリーコインもOK
+      premiumOnly: toOptionalFlag(input.premiumOnly),
       status: input.status === "HIDDEN" ? "HIDDEN" : "ACTIVE",
     },
   }
@@ -236,12 +245,14 @@ export const savePlan = async ({ db, now, userId, planId = null, input }) => {
     v.status,
     now,
     String(userId),
+    v.premiumOnly,
   ]
   if (planId) {
     const result = await db.executeResult(
       `UPDATE request_plans SET title = $1, description = $2, category = $3, sample_image_urls = $4, price_coins = $5, delivery_days = $6,
-              image_count = $7, revision_count = $8, max_active = $9, is_accepting = $10, allows_r18 = $11, status = $12, updated_at = $13
-        WHERE id = $15 AND user_id = $14 AND status <> 'DELETED'`,
+              image_count = $7, revision_count = $8, max_active = $9, is_accepting = $10, allows_r18 = $11, status = $12, updated_at = $13,
+              premium_only = COALESCE($15, premium_only)
+        WHERE id = $16 AND user_id = $14 AND status <> 'DELETED'`,
       [...values, planId],
     )
     if (result.rowCount !== 1) return { ok: false, code: "PLAN_NOT_FOUND" }
@@ -251,8 +262,8 @@ export const savePlan = async ({ db, now, userId, planId = null, input }) => {
   if (Number(count?.n ?? 0) >= 20) return { ok: false, code: "TOO_MANY_PLANS" }
   const result = await db.executeResult(
     `INSERT INTO request_plans(title, description, category, sample_image_urls, price_coins, delivery_days, image_count, revision_count, max_active,
-            is_accepting, allows_r18, status, created_at, updated_at, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $14)`,
+            is_accepting, allows_r18, status, created_at, updated_at, user_id, premium_only)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $14, COALESCE($15, 0))`,
     values,
   )
   return { ok: true, plan: await getPlan({ db, planId: result.lastRowId }) }
@@ -313,6 +324,7 @@ export const applyRequest = async ({ db, env, core, activity, now, input }) => {
   let deliveryDays = clampInt(input.deliveryDays, 1, 90, 14)
   let revisionCount = clampInt(input.revisionCount, 0, 3, 1)
   let planTitle = null
+  let premiumOnly = false
   if (planId) {
     const plan = await getPlan({ db, planId })
     if (!plan || plan.status !== "ACTIVE") return { ok: false, code: "PLAN_NOT_FOUND" }
@@ -320,10 +332,12 @@ export const applyRequest = async ({ db, env, core, activity, now, input }) => {
     deliveryDays = plan.deliveryDays
     revisionCount = plan.revisionCount
     planTitle = plan.title
+    premiumOnly = plan.premiumOnly
     // 値段は画面で見た値段（変わっていたら受け付けない）
     if (!Number.isFinite(priceCoins)) priceCoins = plan.priceCoins
   }
   if (!creatorUserId) return { ok: false, code: "CREATOR_REQUIRED" }
+  if (!planId) premiumOnly = (await getRequestSettings({ db, userId: creatorUserId })).premiumOnly
   if (creatorUserId === requesterUserId) return { ok: false, code: "SELF_REQUEST" }
   if (!Number.isFinite(priceCoins) || priceCoins < REQUEST_MIN_COINS || priceCoins > REQUEST_MAX_COINS) return { ok: false, code: "INVALID_PRICE" }
   if (core) {
@@ -354,6 +368,9 @@ export const applyRequest = async ({ db, env, core, activity, now, input }) => {
       priceCoins,
       deliveryDays,
       revisionCount,
+      // 払うコイン（FREE / PREMIUM のどちらか一方）。指定がなければ預かりの処理が決める
+      coinType: input.coinType,
+      premiumOnly,
     },
   })
   if (!result.ok) return result

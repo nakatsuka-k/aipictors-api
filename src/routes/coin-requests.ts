@@ -39,6 +39,7 @@ const STATUS = {
   FULL: 409,
   NOT_ACCEPTING: 409,
   TOO_MANY_PENDING: 409,
+  PREMIUM_ONLY: 409,
 }
 const fail = (code) => json({ error: code, data: null }, STATUS[code] ?? 400)
 const deps = (c) => ({ env: c.env, core: c.env.SYSTEM_CORE ?? null, activity: c.env.SYSTEM_ACTIVITY ?? null })

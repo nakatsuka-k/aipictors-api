@@ -21,15 +21,22 @@ const lotsSql = (coinType) => `SELECT id, remaining, paid_ratio_ppm,
                SUM(remaining) OVER (ORDER BY expires_at ASC NULLS LAST, id ASC) AS cumulative
           FROM coin_lots
          WHERE user_id = $1 AND coin_type = '${coinType}' AND remaining > 0`
-// 無料コインを先に使い、足りない分をプレミアムコイン（ふだんの消費と同じ順）
-const freeUpdatesSql = `SELECT id, min(remaining, max($2 - (cumulative - remaining), 0)) AS spend
-          FROM (${lotsSql("FREE")}) WHERE max($2 - (cumulative - remaining), 0) > 0`
-const freeTotalSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${freeUpdatesSql}))`
-const premiumUpdatesSql = `SELECT id, paid_ratio_ppm, min(remaining, max($2 - ${freeTotalSql} - (cumulative - remaining), 0)) AS spend
-          FROM (${lotsSql("PREMIUM")}) WHERE max($2 - ${freeTotalSql} - (cumulative - remaining), 0) > 0`
-const premiumTotalSql = `(SELECT COALESCE(SUM(spend), 0) FROM (${premiumUpdatesSql}))`
-const paidTotalSql = `(SELECT CAST(COALESCE(SUM(spend * paid_ratio_ppm), 0) AS INTEGER) / 1000000 FROM (${premiumUpdatesSql}))`
-const enoughSql = `(${freeTotalSql} + ${premiumTotalSql}) >= $2`
+// 1 つの依頼はフリーコインかプレミアムコインのどちらか一方だけで払う（混ぜない）。期限の近いロットから使う
+const COIN_TYPES = ["FREE", "PREMIUM"]
+const spendUpdatesSql = (coinType) => `SELECT id, paid_ratio_ppm, min(remaining, max($2 - (cumulative - remaining), 0)) AS spend
+          FROM (${lotsSql(coinType)}) WHERE max($2 - (cumulative - remaining), 0) > 0`
+const spendTotalSql = (coinType) => `(SELECT COALESCE(SUM(spend), 0) FROM (${spendUpdatesSql(coinType)}))`
+const paidTotalSql = `(SELECT CAST(COALESCE(SUM(spend * paid_ratio_ppm), 0) AS INTEGER) / 1000000 FROM (${spendUpdatesSql("PREMIUM")}))`
+
+/**
+ * 払うコインの種類。指定がなければ（古いアプリなど）、プレミアムコインのみでなく、フリーコインで足りればフリーコイン、足りなければプレミアムコイン
+ */
+const resolveCoinType = async ({ db, input }) => {
+  if (COIN_TYPES.includes(input.coinType)) return input.coinType
+  if (input.premiumOnly) return "PREMIUM"
+  const row = await db.queryOne(`SELECT free_balance FROM coin_balances WHERE user_id = $1`, [input.requesterUserId])
+  return Number(row?.free_balance ?? 0) >= Number(input.priceCoins) ? "FREE" : "PREMIUM"
+}
 
 const recalcBalance = (userParam, nowParam) => ({
   text: `UPDATE coin_balances
@@ -45,6 +52,11 @@ const recalcBalance = (userParam, nowParam) => ({
  */
 export const createEscrowedRequest = async ({ db, now, input }) => {
   await expireAvailableCoins(db, input.requesterUserId, now)
+  const coinType = await resolveCoinType({ db, input })
+  const isPremium = coinType === "PREMIUM"
+  const spendTotal = spendTotalSql(coinType)
+  // プレミアムコインのみのプラン・受付には、フリーコインで申し込めない（coinType は COIN_TYPES のどちらかなので文に埋め込める）
+  const coinOk = (alias) => `(${alias}.premium_only = 0 OR '${coinType}' = 'PREMIUM')`
   const respondBy = now + RESPOND_DAYS * DAY
   const params = [
     input.requesterUserId, // $1
@@ -66,13 +78,13 @@ export const createEscrowedRequest = async ({ db, now, input }) => {
   // プランで申し込むときは、プランが受付中・値段が同じ・そのプランの同時受付数に空きがある
   const planOk = `($5 IS NULL OR EXISTS (
         SELECT 1 FROM request_plans p
-         WHERE p.id = $5 AND p.user_id = $4 AND p.status = 'ACTIVE' AND p.is_accepting = 1 AND p.price_coins = $2
+         WHERE p.id = $5 AND p.user_id = $4 AND p.status = 'ACTIVE' AND p.is_accepting = 1 AND p.price_coins = $2 AND ${coinOk("p")}
            AND ($10 = 0 OR p.allows_r18 = 1)
            AND (SELECT COUNT(*) FROM coin_requests r WHERE r.plan_id = $5 AND r.status IN (${active})) < p.max_active))`
   // 自由リクエストは受付がオン・最低コイン以上・自由リクエストの同時受付数に空きがある
   const freeOk = `($5 IS NOT NULL OR EXISTS (
         SELECT 1 FROM creator_request_settings s
-         WHERE s.user_id = $4 AND s.accepts_free_requests = 1 AND $2 >= s.min_coins AND ($10 = 0 OR s.allows_r18 = 1)
+         WHERE s.user_id = $4 AND s.accepts_free_requests = 1 AND ${coinOk("s")} AND $2 >= s.min_coins AND ($10 = 0 OR s.allows_r18 = 1)
            AND (SELECT COUNT(*) FROM coin_requests r WHERE r.creator_user_id = $4 AND r.plan_id IS NULL AND r.status IN (${active})) < s.max_active))`
   const capacityOk = `(SELECT COUNT(*) FROM coin_requests r WHERE r.creator_user_id = $4 AND r.status IN (${active})) < ${CREATOR_ACTIVE_MAX}
         AND (SELECT COUNT(*) FROM coin_requests r WHERE r.creator_user_id = $4 AND r.requester_user_id = $1 AND r.status = 'PENDING') < ${REQUESTER_PENDING_MAX}`
@@ -83,31 +95,20 @@ export const createEscrowedRequest = async ({ db, now, input }) => {
       {
         text: `INSERT INTO coin_requests(plan_id, requester_user_id, creator_user_id, client_key, title, body, reference_image_urls, is_r18,
                  price_coins, delivery_days, revision_left, free_spent, premium_spent, paid_coins, status, respond_by, created_at, updated_at)
-               SELECT $5, $1, $4, $6, $7, $8, $9, $10, $2, $11, $12, ${freeTotalSql}, ${premiumTotalSql}, ${paidTotalSql}, 'PENDING', $13, $3, $3
-                WHERE $1 <> $4 AND ${enoughSql} AND ${planOk} AND ${freeOk} AND ${capacityOk}
+               SELECT $5, $1, $4, $6, $7, $8, $9, $10, $2, $11, $12, ${isPremium ? 0 : spendTotal}, ${isPremium ? spendTotal : 0}, ${isPremium ? paidTotalSql : 0}, 'PENDING', $13, $3, $3
+                WHERE $1 <> $4 AND ${spendTotal} >= $2 AND ${planOk} AND ${freeOk} AND ${capacityOk}
                ON CONFLICT (requester_user_id, client_key) DO NOTHING`,
         params,
       },
       guard("changes() = 1"),
       {
         text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-               SELECT $1, 'FREE', -${freeTotalSql}, 'CONSUME', 'coin request escrow', ${source}, $3, NULL WHERE ${freeTotalSql} > 0`,
-        params,
-      },
-      {
-        text: `INSERT INTO coin_ledger(user_id, coin_type, delta, kind, reason, source, created_at, expires_at)
-               SELECT $1, 'PREMIUM', -${premiumTotalSql}, 'CONSUME', 'coin request escrow', ${source}, $3, NULL WHERE ${premiumTotalSql} > 0`,
-        params,
-      },
-      // プレミアムの使う量は無料のロットから計算するので、プレミアムを先に減らす
-      {
-        text: `UPDATE coin_lots SET remaining = coin_lots.remaining - updates.spend, updated_at = $3
-                 FROM (${premiumUpdatesSql}) AS updates WHERE coin_lots.id = updates.id`,
+               SELECT $1, '${coinType}', -${spendTotal}, 'CONSUME', 'coin request escrow', ${source}, $3, NULL WHERE ${spendTotal} > 0`,
         params,
       },
       {
         text: `UPDATE coin_lots SET remaining = coin_lots.remaining - updates.spend, updated_at = $3
-                 FROM (${freeUpdatesSql}) AS updates WHERE coin_lots.id = updates.id`,
+                 FROM (${spendUpdatesSql(coinType)}) AS updates WHERE coin_lots.id = updates.id`,
         params,
       },
       { ...recalcBalance("$1", "$3"), params },
@@ -121,12 +122,12 @@ export const createEscrowedRequest = async ({ db, now, input }) => {
     // 同じ申し込みがもう入っている（二度押し）なら、その依頼を返す
     const existing = await db.queryOne(`SELECT id FROM coin_requests WHERE requester_user_id = $1 AND client_key = $2`, [input.requesterUserId, input.clientKey])
     if (existing) return { ok: true, requestId: Number(existing.id), duplicated: true }
-    return { ok: false, code: await diagnoseRejection({ db, input }) }
+    return { ok: false, code: await diagnoseRejection({ db, input, coinType }) }
   }
 }
 
 /** 申し込みを受け付けなかった理由（受付の batch と同じ条件を順に見る） */
-const diagnoseRejection = async ({ db, input }) => {
+const diagnoseRejection = async ({ db, input, coinType }) => {
   if (String(input.requesterUserId) === String(input.creatorUserId)) return "SELF_REQUEST"
   const active = inList(ACTIVE_STATUSES)
   if (input.planId) {
@@ -135,6 +136,7 @@ const diagnoseRejection = async ({ db, input }) => {
     if (Number(plan.is_accepting) !== 1) return "NOT_ACCEPTING"
     if (Number(plan.price_coins) !== Number(input.priceCoins)) return "PRICE_CHANGED"
     if (input.isR18 && Number(plan.allows_r18) !== 1) return "R18_NOT_ALLOWED"
+    if (Number(plan.premium_only) === 1 && coinType !== "PREMIUM") return "PREMIUM_ONLY"
     const count = await db.queryOne(`SELECT COUNT(*) AS n FROM coin_requests WHERE plan_id = $1 AND status IN (${active})`, [input.planId])
     if (Number(count?.n ?? 0) >= Number(plan.max_active)) return "FULL"
   } else {
@@ -142,6 +144,7 @@ const diagnoseRejection = async ({ db, input }) => {
     if (!s || Number(s.accepts_free_requests) !== 1) return "NOT_ACCEPTING"
     if (Number(input.priceCoins) < Number(s.min_coins)) return "BELOW_MINIMUM"
     if (input.isR18 && Number(s.allows_r18) !== 1) return "R18_NOT_ALLOWED"
+    if (Number(s.premium_only) === 1 && coinType !== "PREMIUM") return "PREMIUM_ONLY"
     const count = await db.queryOne(`SELECT COUNT(*) AS n FROM coin_requests WHERE creator_user_id = $1 AND plan_id IS NULL AND status IN (${active})`, [input.creatorUserId])
     if (Number(count?.n ?? 0) >= Number(s.max_active)) return "FULL"
   }

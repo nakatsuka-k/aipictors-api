@@ -1,4 +1,4 @@
-// 有料リクエストとプラン: コインの預かり（無料→プレミアム、有料分の記録）・残高不足・二度押し・自分への依頼・同時申し込みと同時受付数、
+// 有料リクエストとプラン: コインの預かり（フリーかプレミアムのどちらか一方・プレミアムコインのみの受付、有料分の記録）・残高不足・二度押し・自分への依頼・同時申し込みと同時受付数、
 // お断り/キャンセル/期限切れの全額返却（有料の割合を残す）・二重の返却なし、確定（手数料・報酬・R18・不参加）・二重の確定なし・確定とキャンセルの競合、
 // 修正回数、期限の cron、通知、コインの総量が合うこと
 import assert from "node:assert/strict"
@@ -142,19 +142,19 @@ const total0 = await totalCoins()
   assert.equal((await db.queryOne<any>(`SELECT COUNT(*) AS n FROM coin_requests`)).n, 0)
 }
 
-// ---- 4. 預かり（無料→プレミアム）・二度押し ----
+// ---- 4. 預かり（混ぜない: フリー 50 では足りないのでプレミアムだけで払う）・二度押し ----
 const key = "double-click"
 const first = await call("POST", "/internal/requests", { requesterUserId: "2", clientKey: key, body: "お願いします", planId: plan.id, priceCoins: 500 })
 const second = await call("POST", "/internal/requests", { requesterUserId: "2", clientKey: key, body: "お願いします", planId: plan.id, priceCoins: 500 })
 assert.equal(first.status, 200)
 assert.equal(second.body.data.requestId, first.body.data.requestId, "二度押しは同じ依頼")
 const req1 = first.body.data.requestId
-assert.deepEqual(await balance("2"), { free: 0, premium: 550 }, "無料 50 → プレミアム 450 の順に 1 回だけ")
+assert.deepEqual(await balance("2"), { free: 50, premium: 500 }, "プレミアム 500 だけを 1 回だけ（フリー 50 は使わない）")
 {
   const row = await db.queryOne<any>(`SELECT * FROM coin_requests WHERE id = $1`, [req1])
-  assert.equal(row.free_spent, 50)
-  assert.equal(row.premium_spent, 450)
-  assert.equal(row.paid_coins, 360, "有料分 = 450 × 80%")
+  assert.equal(row.free_spent, 0)
+  assert.equal(row.premium_spent, 500)
+  assert.equal(row.paid_coins, 400, "有料分 = 500 × 80%")
   assert.equal(row.status, "PENDING")
   const n = await notifications(1)
   assert.equal(n.length, 1)
@@ -344,6 +344,64 @@ assert.equal(await totalCoins(), total0 + 2900 + 1000)
   assert.ok(admin.body.data.totals.feeCoins > 0)
   const profile = await call("GET", "/internal/requests/creators/4")
   assert.equal(profile.body.data.settings.acceptsFreeRequests, true)
+}
+
+// ---- 11. 払うコインはどちらか一方・プレミアムコインのみの受付 ----
+{
+  const creator = "6"
+  const requester = "3"
+  const made = await call("POST", "/internal/requests/plans", { userId: creator, title: "プレミアム限定", description: "d", priceCoins: 600, premiumOnly: true })
+  const premiumPlan = made.body.data.plan
+  assert.equal(premiumPlan.premiumOnly, true)
+  // 古いアプリは premiumOnly を送らない: 編集してもプレミアムコインのみのまま
+  const edited = await call("POST", "/internal/requests/plans", { userId: creator, planId: premiumPlan.id, title: "プレミアム限定（編集）", description: "d", priceCoins: 600 })
+  assert.equal(edited.body.data.plan.premiumOnly, true, "送られてこなければ設定は変えない")
+  const anyPlan = (await call("POST", "/internal/requests/plans", { userId: creator, title: "どちらでも", description: "d", priceCoins: 600 })).body.data.plan
+  assert.equal(anyPlan.premiumOnly, false, "新規の既定はフリーコインもOK")
+
+  await giveLot(requester, "FREE", 700, 0, NOW + 86400)
+  const before = await balance(requester)
+  const t0 = await totalCoins()
+  // プレミアムコインのみのプランにフリーコインで申し込めない
+  const freeToPremium = await apply(requester, { planId: premiumPlan.id, priceCoins: 600, coinType: "FREE" })
+  assert.equal(freeToPremium.body.error, "PREMIUM_ONLY")
+  assert.deepEqual(await balance(requester), before, "断られたらコインは動かない")
+  // フリーコインで足りるならフリーだけ
+  const byFree = await apply(requester, { planId: anyPlan.id, priceCoins: 600, coinType: "FREE" })
+  assert.equal(byFree.status, 200)
+  const freeRow = await db.queryOne<any>(`SELECT free_spent, premium_spent, paid_coins FROM coin_requests WHERE id = $1`, [byFree.body.data.requestId])
+  assert.deepEqual([freeRow.free_spent, freeRow.premium_spent, freeRow.paid_coins], [600, 0, 0])
+  assert.deepEqual(await balance(requester), { free: before.free - 600, premium: before.premium })
+  // フリーが足りないとき、プレミアムで補わない（混ぜない）
+  const short = await apply(requester, { planId: anyPlan.id, priceCoins: 600, coinType: "FREE" })
+  assert.equal(short.body.error, "INSUFFICIENT_COINS")
+  // プレミアムを選べばプレミアムだけ
+  const premiumBefore = await balance(requester)
+  const byPremium = await apply(requester, { planId: premiumPlan.id, priceCoins: 600, coinType: "PREMIUM" })
+  assert.equal(byPremium.status, 200)
+  const premiumRow = await db.queryOne<any>(`SELECT free_spent, premium_spent FROM coin_requests WHERE id = $1`, [byPremium.body.data.requestId])
+  assert.deepEqual([premiumRow.free_spent, premiumRow.premium_spent], [0, 600])
+  assert.deepEqual(await balance(requester), { free: premiumBefore.free, premium: premiumBefore.premium - 600 }, "フリーコインは残る")
+  assert.equal(await totalCoins(), t0, "コインの総量は同じ")
+
+  // 自由リクエストの受付もプレミアムコインのみにできる。指定なしの申し込みはプレミアムで払う
+  await call("POST", "/internal/requests/settings/6", { acceptsFreeRequests: true, minCoins: 300, maxActive: 3, premiumOnly: true })
+  const settings = await call("GET", "/internal/requests/settings/6")
+  assert.equal(settings.body.data.premiumOnly, true)
+  await call("POST", "/internal/requests/settings/6", { acceptsFreeRequests: true, minCoins: 300, maxActive: 3 })
+  assert.equal((await call("GET", "/internal/requests/settings/6")).body.data.premiumOnly, true, "送られてこなければ設定は変えない")
+  const freeReqByFree = await apply("2", { creatorUserId: creator, priceCoins: 300, coinType: "FREE" })
+  assert.equal(freeReqByFree.body.error, "PREMIUM_ONLY")
+  const freeReqAuto = await apply("2", { creatorUserId: creator, priceCoins: 300 })
+  assert.equal(freeReqAuto.status, 200)
+  const autoRow = await db.queryOne<any>(`SELECT free_spent, premium_spent FROM coin_requests WHERE id = $1`, [freeReqAuto.body.data.requestId])
+  assert.deepEqual([autoRow.free_spent, autoRow.premium_spent], [0, 300], "指定なし + プレミアムコインのみ → プレミアム")
+  // 指定なし（古いアプリ）でフリーコインが足りるならフリーだけ
+  await giveLot("1", "FREE", 600, 0, NOW + 86400)
+  const legacy = await apply("1", { planId: anyPlan.id, priceCoins: 600 })
+  assert.equal(legacy.status, 200)
+  const legacyRow = await db.queryOne<any>(`SELECT free_spent, premium_spent FROM coin_requests WHERE id = $1`, [legacy.body.data.requestId])
+  assert.deepEqual([legacyRow.free_spent, legacyRow.premium_spent], [600, 0], "指定なし + フリーで足りる → フリー")
 }
 
 console.log("coin-requests: ok")
