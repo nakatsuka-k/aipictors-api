@@ -131,6 +131,7 @@ const sha256Hex = async (bytes: Uint8Array) =>
   Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex")
 
 const PART = um.USER_MODEL_PART_SIZE
+const GB = 1024 * 1024 * 1024
 
 // アップロードを最後まで行う
 const uploadAll = async (userId: string, file: Uint8Array, extra: Record<string, unknown> = {}) => {
@@ -177,8 +178,10 @@ const bigFile = makeSafetensors(2 * PART + 12345)
 let bigId = ""
 let bigSha = ""
 
-// 以下のテストは無料プランの上限を 1 にして数える（既定の上限と月ごとのリセットは最後のテストで見る）
-await db.execute("INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit.FREE', '1', 0)")
+// 以下のテストは無料プランの上限を 0.0977GB（約 100MB、bigFile 1 つがぎりぎり入る）にして数える
+// （既定の上限と月ごとのリセットは最後のテストで見る）
+const SMALL_FREE_GB = "0.0977"
+await db.execute(`INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit_gb.FREE', '${SMALL_FREE_GB}', 0)`)
 
 await t("トークンなしは 401", async () => {
   const res = await app.request("/internal/user-models", {}, env)
@@ -220,28 +223,29 @@ await t("ファイル配信: 全体と Range（a-b / a- / -n）、不正な Rang
   assert.equal(bad.status, 416)
 })
 
-await t("上限 1 なら 2 個目は LIMIT_EXCEEDED", async () => {
-  const r = await uploadAll("a1", makeSafetensors(1000, undefined, 2))
+await t("今月の合計サイズが上限を超えるファイルは LIMIT_EXCEEDED（残りより大きい）", async () => {
+  const r = await uploadAll("a1", makeSafetensors(100_000, undefined, 2))
   assert.equal(r.start.status, 409)
   assert.equal(r.start.body.code, "LIMIT_EXCEEDED")
 })
 
 await t("同じユーザが同じファイルを 2 回登録しようとすると ALREADY_REGISTERED", async () => {
-  await db.execute("UPDATE pricing_settings SET value = '5' WHERE key = 'user_models.limit.FREE'")
+  await db.execute("UPDATE pricing_settings SET value = '1' WHERE key = 'user_models.limit_gb.FREE'")
   const r = await uploadAll("a1", bigFile)
   assert.equal(r.start.status, 409)
   assert.equal(r.start.body.code, "ALREADY_REGISTERED")
-  await db.execute("UPDATE pricing_settings SET value = '1' WHERE key = 'user_models.limit.FREE'")
+  await db.execute(`UPDATE pricing_settings SET value = '${SMALL_FREE_GB}' WHERE key = 'user_models.limit_gb.FREE'`)
 })
 
-await t("pricing_settings で上限を上書きでき、契約者はプランの上限（LITE 5）", async () => {
+await t("pricing_settings（GB）で上限を上書きでき、契約者はプランの上限（LITE 30GB）", async () => {
   await addSub("a2", "LITE")
   const mine = await callJson("GET", "/mine/a2")
-  assert.equal(mine.body.data.limit, 5)
+  assert.equal(mine.body.data.limitBytes, 30 * GB)
+  assert.equal(mine.body.data.limit, null)
   assert.equal(mine.body.data.planType, "LITE")
-  await db.execute("INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit.LITE', '4', 0)")
-  assert.equal((await callJson("GET", "/mine/a2")).body.data.limit, 4)
-  await db.execute("DELETE FROM pricing_settings WHERE key = 'user_models.limit.LITE'")
+  await db.execute("INSERT INTO pricing_settings(key, value, updated_at) VALUES ('user_models.limit_gb.LITE', '4.5', 0)")
+  assert.equal((await callJson("GET", "/mine/a2")).body.data.limitBytes, Math.floor(4.5 * GB))
+  await db.execute("DELETE FROM pricing_settings WHERE key = 'user_models.limit_gb.LITE'")
 })
 
 await t("同じ sha256 の READY があれば他のユーザは即 READY（重複排除）", async () => {
@@ -270,10 +274,13 @@ await t("拡張子・サイズ上限・sha256 の形式をチェックする", a
     (await callJson("POST", "/uploads", { ...base, filename: "x.safetensors", sizeBytes: 401 * 1024 * 1024 })).body.code,
     "TOO_LARGE",
   )
+  // 401MB はテスト用の無料枠（約 100MB）を超えるので、この確認だけ枠を広げる
+  await db.execute("UPDATE pricing_settings SET value = '1' WHERE key = 'user_models.limit_gb.FREE'")
   const ckpt = await callJson("POST", "/uploads", {
     thumbnailUrl: "https://example.com/t.png",
     ...base, kind: "CHECKPOINT", filename: "x.safetensors", sizeBytes: 401 * 1024 * 1024, sha256: "b".repeat(64),
   })
+  await db.execute(`UPDATE pricing_settings SET value = '${SMALL_FREE_GB}' WHERE key = 'user_models.limit_gb.FREE'`)
   assert.equal(ckpt.status, 200)
   assert.equal(ckpt.body.data.partCount, 9)
   await callJson("POST", `/uploads/${ckpt.body.data.modelId}/abort`, { userId: "a3" })
@@ -333,12 +340,12 @@ await t("パートのサイズ違い・範囲外の partNumber・欠けた parts
   await callJson("POST", `/uploads/${id}/abort`, {})
 })
 
-await t("無料ユーザが 10 並列でアップロードを始めても 1 個だけ通る", async () => {
+await t("無料ユーザが 60MB を 10 並列でアップロードし始めても（上限約 100MB）1 個だけ通る", async () => {
   const rs = await Promise.all(
     Array.from({ length: 10 }, (_, i) =>
       callJson("POST", "/uploads", {
         thumbnailUrl: "https://example.com/t.png",
-        userId: "a7", kind: "LORA", filename: "x.safetensors", sizeBytes: 1000,
+        userId: "a7", kind: "LORA", filename: "x.safetensors", sizeBytes: 60 * 1024 * 1024,
         sha256: (i + 1).toString(16).padStart(64, "c"), name: `x${i}`,
       }),
     ),
@@ -881,6 +888,8 @@ await t("取り込み: 同じファイルが保存済みなら転送せずに即
 })
 
 await t("取り込み: 上限（進行中も数える）・ログインが必要・未対応の種類・Workflow なし", async () => {
+  // 上限を約 8.6KB にして、5000 バイトの後の 6000 バイトを止める
+  await db.execute("UPDATE pricing_settings SET value = '0.000008' WHERE key = 'user_models.limit_gb.FREE'")
   const f2 = makeSafetensors(5000, undefined, 11)
   await addCivitaiModel({ id: 110, versionId: 211, file: f2 })
   const first = await icall("POST", "/imports", { userId: "imp3", url: "https://civitai.com/models/110" })
@@ -890,6 +899,7 @@ await t("取り込み: 上限（進行中も数える）・ログインが必要
   const second = await icall("POST", "/imports", { userId: "imp3", url: "https://civitai.com/models/120" })
   assert.equal(second.status, 409)
   assert.equal(second.body.code, "LIMIT_EXCEEDED")
+  await db.execute(`UPDATE pricing_settings SET value = '${SMALL_FREE_GB}' WHERE key = 'user_models.limit_gb.FREE'`)
 
   await addCivitaiModel({ id: 130, versionId: 231, file: makeSafetensors(7000, undefined, 13), loginRequired: true })
   const rowsBefore = (await db.queryOne("SELECT COUNT(*) AS n FROM user_models")).n
@@ -972,34 +982,47 @@ await t("取り込みの中止: 行は DELETED、Workflow はスキップ、mult
   assert.equal((await runImport(params)).status, "SKIPPED")
 })
 
-await t("上限は今月（JST）登録した数。既定は FREE 2 / LITE 5 / STANDARD 12 / PREMIUM 35、翌月 1 日に戻る", async () => {
-  await db.execute("DELETE FROM pricing_settings WHERE key = 'user_models.limit.FREE'")
+await t("上限は今月（JST）登録したファイルの合計サイズ。既定は FREE 10GB / LITE 30GB / STANDARD 60GB / PREMIUM 150GB、個数は無制限、翌月 1 日に戻る", async () => {
+  await db.execute("DELETE FROM pricing_settings WHERE key = 'user_models.limit_gb.FREE'")
   const savedNow = fakeNow
   fakeNow = Math.floor(Date.parse("2026-12-31T23:30:00+09:00") / 1000)
-  const up = (i: number) =>
+  const up = (i: number, userId = "q1", kind = "CHECKPOINT", sizeBytes = 4 * GB) =>
     callJson("POST", "/uploads", {
       thumbnailUrl: "https://example.com/t.png",
-      userId: "q1", kind: "LORA", filename: "q.safetensors", sizeBytes: 1000,
+      userId, kind, filename: "q.safetensors", sizeBytes,
       sha256: (900 + i).toString(16).padStart(64, "e"), name: `q${i}`,
     })
+  // 4GB + 4GB は入り、3 つ目（合計 12GB）は止まる
   assert.equal((await up(1)).status, 200)
   assert.equal((await up(2)).status, 200)
   const third = await up(3)
   assert.equal(third.body.code, "LIMIT_EXCEEDED")
-  assert.match(third.body.error ?? third.body.message ?? JSON.stringify(third.body), /毎月 1 日/)
+  assert.match(third.body.error ?? third.body.message ?? JSON.stringify(third.body), /合計 10GB.*残り 2GB.*毎月 1 日/)
+  // 残り 2GB に収まるファイルは入る
+  assert.equal((await up(4, "q1", "CHECKPOINT", 2 * GB)).status, 200)
   const mine = await callJson("GET", "/mine/q1")
-  assert.equal(mine.body.data.limit, 2)
-  assert.equal(mine.body.data.usedThisMonth, 2)
+  assert.equal(mine.body.data.limit, null)
+  assert.equal(mine.body.data.limitBytes, 10 * GB)
+  assert.equal(mine.body.data.usedBytesThisMonth, 10 * GB)
+  assert.equal(mine.body.data.remainingBytes, 0)
+  assert.equal(mine.body.data.usedThisMonth, 3)
   assert.equal(mine.body.data.resetsAt, Math.floor(Date.parse("2027-01-01T00:00:00+09:00") / 1000))
   // JST の 1 月 1 日 00:00 を過ぎると枠が戻る（前の月のモデルはそのまま残る）
   fakeNow = Math.floor(Date.parse("2027-01-01T00:00:10+09:00") / 1000)
   assert.equal((await up(3)).status, 200)
   const next = await callJson("GET", "/mine/q1")
   assert.equal(next.body.data.usedThisMonth, 1)
-  assert.equal(next.body.data.used, 3)
-  for (const [plan, limit] of [["LITE", 5], ["STANDARD", 12], ["PREMIUM", 35]] as const) {
+  assert.equal(next.body.data.usedBytesThisMonth, 4 * GB)
+  assert.equal(next.body.data.used, 4)
+  // 小さい LoRA なら個数はいくつでも登録できる
+  for (let i = 0; i < 20; i++) {
+    const r = await up(100 + i, "q2", "LORA", 1000)
+    assert.equal(r.status, 200, JSON.stringify(r.body))
+  }
+  assert.equal((await callJson("GET", "/mine/q2")).body.data.usedThisMonth, 20)
+  for (const [plan, gb] of [["LITE", 30], ["STANDARD", 60], ["PREMIUM", 150]] as const) {
     await addSub(`q_${plan}`, plan)
-    assert.equal((await callJson("GET", `/mine/q_${plan}`)).body.data.limit, limit)
+    assert.equal((await callJson("GET", `/mine/q_${plan}`)).body.data.limitBytes, gb * GB)
   }
   fakeNow = savedNow
 })

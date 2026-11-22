@@ -4,6 +4,7 @@ import {
   USER_MODEL_KINDS,
   USER_MODEL_PART_SIZE,
   UserModelError,
+  formatGb,
   getUserModelSettings,
   jstMonthRange,
   newUserModelId,
@@ -57,7 +58,8 @@ export type ReserveUserModelInput = {
   sha256: string
   sizeBytes: number
   filename: string
-  limit: number
+  /** 今月登録できる合計サイズ（バイト） */
+  limitBytes: number
   planType: string
   fields: Omit<ReturnType<typeof parseEditable>, "name"> & { name: string }
   source?: {
@@ -70,7 +72,7 @@ export type ReserveUserModelInput = {
 }
 
 export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUserModelInput): Promise<"READY" | "UPLOADING"> => {
-  const { id, userId, sha256, sizeBytes, limit, planType, fields } = input
+  const { id, userId, sha256, sizeBytes, limitBytes, planType, fields } = input
   const sizeMustMatch = input.existingSizeMustMatch ?? true
   const ctes = `WITH existing AS (
         SELECT id, size_bytes FROM user_models WHERE sha256 = $3 AND status = 'READY' ORDER BY created_at, id LIMIT 1
@@ -82,7 +84,7 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
         SELECT id FROM user_models WHERE sha256 = $3 AND status = 'UPLOADING' LIMIT 1
       ),
       used AS (
-        SELECT COUNT(*) AS n FROM user_models WHERE user_id = $2 AND status <> 'DELETED' AND created_at >= $25
+        SELECT COALESCE(SUM(size_bytes), 0) AS bytes FROM user_models WHERE user_id = $2 AND status <> 'DELETED' AND created_at >= $25
       )`
   const params = [
       id,
@@ -102,21 +104,21 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       sizeBytes,
       userModelR2Key(sha256),
       deps.now,
-      limit,
+      limitBytes,
       sizeMustMatch,
       input.source?.url ?? null,
       input.source?.creator ?? null,
       input.source?.license ? JSON.stringify(input.source.license) : null,
       input.source?.baseModel ?? null,
       fields.recommendedSettings ? JSON.stringify(fields.recommendedSettings) : null,
-      // 上限は今月（JST）登録した数で数える
+      // 上限は今月（JST）登録したファイルの合計サイズで数える
       jstMonthRange(deps.now).start,
     ]
   // 判定に使う値は INSERT の前に読む（同じトランザクション。D1 は書き込みを 1 本ずつ順に実行するのでロックは要らない）
   const [stateResult, insertResult] = await deps.db.batch([
     {
       text: `${ctes}
-      SELECT (SELECT n FROM used) AS used,
+      SELECT (SELECT bytes FROM used) AS used_bytes,
              (SELECT id FROM mine) AS mine_id,
              (SELECT id FROM uploading) AS uploading_id,
              (SELECT id FROM existing) AS existing_id,
@@ -136,7 +138,8 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
                $20, $21, $22, $23,
                CASE WHEN $20 IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
                $24
-         WHERE (SELECT n FROM used) < $18
+         WHERE (SELECT bytes FROM used)
+               + CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END <= $18
            AND NOT EXISTS (SELECT 1 FROM mine)
            AND (EXISTS (SELECT 1 FROM existing) OR NOT EXISTS (SELECT 1 FROM uploading))
            AND (NOT $19 OR NOT EXISTS (SELECT 1 FROM existing) OR (SELECT size_bytes FROM existing) = $15)
@@ -145,7 +148,7 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
     },
   ])
   const result = { ...stateResult.rows[0], inserted_status: insertResult.rows[0]?.status ?? null } as {
-    used: number | string
+    used_bytes: number | string
     mine_id: string | null
     uploading_id: string | null
     existing_id: string | null
@@ -156,11 +159,13 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
     if (result?.mine_id) {
       throw new UserModelError(409, "ALREADY_REGISTERED", `同じファイルはすでに登録済みです（${result.mine_id}）`)
     }
-    if (Number(result?.used ?? 0) >= limit) {
+    const usedBytes = Number(result?.used_bytes ?? 0)
+    const fileBytes = result?.existing_id ? Number(result.existing_size) : sizeBytes
+    if (usedBytes + fileBytes > limitBytes) {
       throw new UserModelError(
         409,
         "LIMIT_EXCEEDED",
-        `今月登録できるモデルは ${limit} 個までです（${planType}）。枠は毎月 1 日にリセットされます`,
+        `今月登録できるモデルは合計 ${formatGb(limitBytes)} までです（${planType}・残り ${formatGb(Math.max(0, limitBytes - usedBytes))}、このファイル ${formatGb(fileBytes)}）。枠は毎月 1 日にリセットされます`,
       )
     }
     if (sizeMustMatch && result?.existing_id && Number(result.existing_size) !== sizeBytes) {
@@ -210,7 +215,7 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
     throw bad("THUMBNAIL_REQUIRED", "サムネイルにする画像を選んでください")
   }
 
-  const { planType, limit } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
+  const { planType, limitBytes } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
   await cleanupStaleUploads(deps, userId)
 
   const id = newUserModelId()
@@ -222,7 +227,7 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
     sha256,
     sizeBytes,
     filename,
-    limit,
+    limitBytes,
     planType,
     fields: {
       ...editable,

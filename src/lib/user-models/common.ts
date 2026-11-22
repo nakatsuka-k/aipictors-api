@@ -34,8 +34,19 @@ export const USER_MODEL_PART_SIZE = 50 * 1024 * 1024
 // 放置されたアップロード（ブラウザを閉じた等）はこの時間で破棄し、上限の枠を空ける
 export const STALE_UPLOAD_SECONDS = 24 * 60 * 60
 
-// 1 か月（JST の 1 日 00:00 から）に登録できる数。登録したモデルは作者が削除できないので、枠は毎月 1 日に戻る
-export const defaultUserModelLimits: Record<CoinPlanType, number> = { FREE: 2, LITE: 5, STANDARD: 12, PREMIUM: 35 }
+const GB = 1024 * 1024 * 1024
+
+// 1 か月（JST の 1 日 00:00 から）に登録できる合計サイズ（バイト）。個数は数えない。
+// 登録したモデルは作者が削除できないので、枠は毎月 1 日に戻る
+export const defaultUserModelLimitBytes: Record<CoinPlanType, number> = {
+  FREE: 10 * GB,
+  LITE: 30 * GB,
+  STANDARD: 60 * GB,
+  PREMIUM: 150 * GB,
+}
+
+/** 枠の表示用（例: 10GB、2.35GB、0.4GB） */
+export const formatGb = (bytes: number) => `${Number((bytes / GB).toFixed(2))}GB`
 
 const JST_OFFSET_SECONDS = 9 * 60 * 60
 
@@ -67,21 +78,22 @@ const parseIntSetting = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
-// pricing_settings の user_models.limit.<PLAN> / user_models.max_bytes.<KIND> で上書きできる
+// pricing_settings の user_models.limit_gb.<PLAN>（GB、小数可）/ user_models.max_bytes.<KIND> で上書きできる
 export const getUserModelSettings = async (db: Db) => {
   const rows = await db.query<{ key: string; value: string }>(
     "SELECT key, value FROM pricing_settings WHERE key LIKE 'user_models.%'",
   )
   const map = new Map(rows.map((row) => [row.key, row.value]))
-  const limits = { ...defaultUserModelLimits }
-  for (const plan of Object.keys(limits) as CoinPlanType[]) {
-    limits[plan] = parseIntSetting(map.get(`user_models.limit.${plan}`), limits[plan])
+  const limitBytes = { ...defaultUserModelLimitBytes }
+  for (const plan of Object.keys(limitBytes) as CoinPlanType[]) {
+    const gb = Number.parseFloat(map.get(`user_models.limit_gb.${plan}`) ?? "")
+    if (Number.isFinite(gb) && gb >= 0) limitBytes[plan] = Math.floor(gb * GB)
   }
   const maxBytes = { ...defaultUserModelMaxBytes }
   for (const kind of USER_MODEL_KINDS) {
     maxBytes[kind] = parseIntSetting(map.get(`user_models.max_bytes.${kind}`), maxBytes[kind])
   }
-  return { limits, maxBytes }
+  return { limitBytes, maxBytes }
 }
 
 // 12 文字の英小文字＋数字（LoRA のファイル名 user_<id> に使うので記号と大文字を避ける）

@@ -441,7 +441,7 @@ export const startUserModelImport = async (
   }
   const { maxBytes } = await getUserModelSettings(deps.db)
   if (plan.sizeBytes > maxBytes[plan.kind]) throw new UserModelError(400, "TOO_LARGE", tooLargeMessage(plan.kind, maxBytes[plan.kind]))
-  const { planType, limit } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
+  const { planType, limitBytes } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
   await cleanupStaleUploads(deps, userId)
 
   const existing = await deps.db.queryOne<{ id: string }>(
@@ -464,7 +464,7 @@ export const startUserModelImport = async (
     sha256: plan.sha256,
     sizeBytes: plan.sizeBytes,
     filename: plan.filename,
-    limit,
+    limitBytes,
     planType,
     existingSizeMustMatch: false,
     fields: {

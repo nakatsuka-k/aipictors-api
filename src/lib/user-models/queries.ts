@@ -81,26 +81,48 @@ export const listUserModels = async (db: Db, query: ListUserModelsQuery) => {
 
 export const getUserModelLimit = async (db: Db, userId: string, callerPlan: unknown, now: number) => {
   const { start, end } = jstMonthRange(now)
-  const [{ limits }, planType, used] = await Promise.all([
+  const [{ limitBytes }, planType, used] = await Promise.all([
     getUserModelSettings(db),
     resolveCoinPlanType(db, userId, callerPlan, now),
-    // 今月登録した数（失敗・中止したアップロードは DELETED なので数えない）
-    db.queryOne<{ n: number | string }>(
-      "SELECT COUNT(*) AS n FROM user_models WHERE user_id = $1 AND status <> 'DELETED' AND created_at >= $2",
+    // 今月登録した数と合計サイズ（失敗・中止したアップロードは DELETED なので数えない）
+    db.queryOne<{ n: number | string; bytes: number | string | null }>(
+      "SELECT COUNT(*) AS n, SUM(size_bytes) AS bytes FROM user_models WHERE user_id = $1 AND status <> 'DELETED' AND created_at >= $2",
       [userId, start],
     ),
   ])
-  return { planType, limit: limits[planType], usedThisMonth: Number(used?.n ?? 0), monthStart: start, resetsAt: end }
+  const usedBytesThisMonth = Number(used?.bytes ?? 0)
+  return {
+    planType,
+    limitBytes: limitBytes[planType],
+    usedBytesThisMonth,
+    remainingBytes: Math.max(0, limitBytes[planType] - usedBytesThisMonth),
+    usedThisMonth: Number(used?.n ?? 0),
+    monthStart: start,
+    resetsAt: end,
+  }
 }
 
 export const listMyUserModels = async (db: Db, userId: string, callerPlan: unknown, now: number) => {
-  const [rows, { planType, limit, usedThisMonth, resetsAt }] = await Promise.all([
+  const [rows, quota] = await Promise.all([
     db.query<UserModelRow>(
       "SELECT * FROM user_models WHERE user_id = $1 AND status <> 'DELETED' ORDER BY created_at DESC, id DESC",
       [userId],
     ),
     getUserModelLimit(db, userId, callerPlan, now),
   ])
-  // limit / usedThisMonth は今月の枠。used は持っているモデルの数（以前の画面の互換のため残す）
-  return { models: rows.map(toUserModel), limit, used: rows.length, usedThisMonth, resetsAt, planType, canDelete: false }
+  // limitBytes / usedBytesThisMonth が今月の枠（サイズ）。usedThisMonth は今月登録した数、used は持っているモデルの数。
+  // 個数の上限はないので limit は null（以前の画面の互換のため項目だけ残す）
+  const { planType, limitBytes, usedBytesThisMonth, remainingBytes, usedThisMonth, resetsAt } = quota
+  return {
+    models: rows.map(toUserModel),
+    limit: null,
+    limitBytes,
+    usedBytesThisMonth,
+    remainingBytes,
+    used: rows.length,
+    usedThisMonth,
+    resetsAt,
+    planType,
+    canDelete: false,
+  }
 }
