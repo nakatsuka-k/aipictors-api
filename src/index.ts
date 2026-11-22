@@ -16,6 +16,7 @@ import { pickupDepsFromEnv } from "./routes/user-model-pickups"
 import { runUserEventDigest } from "./lib/user-event-digest"
 import { runCreatorPayoutJob } from "./lib/creator-payouts"
 import { runRequestJob } from "./lib/coin-requests/service"
+import { runOpenRequestJob } from "./lib/open-requests/service"
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
 const scheduled = async (controller, env, ctx) => {
   ctx.waitUntil(
@@ -37,6 +38,14 @@ const scheduled = async (controller, env, ctx) => {
         });
         if (requestJob && Object.values(requestJob).some((n) => n > 0)) {
           console.log(JSON.stringify({ event: "coin_requests.job_done", ...requestJob }));
+        }
+        // 募集リクエストの締切（いいね最多の自動採用・提案なしの全額返却・締切が近い知らせ）
+        const openRequestJob = await runOpenRequestJob({ db, env, core: env.SYSTEM_CORE ?? null, activity: env.SYSTEM_ACTIVITY ?? null, now: getNow() }).catch((error) => {
+          console.log(JSON.stringify({ event: "open_requests.job_failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (openRequestJob && Object.values(openRequestJob).some((n) => n > 0)) {
+          console.log(JSON.stringify({ event: "open_requests.job_done", ...openRequestJob }));
         }
         // Discord 連携の反映（準備が済むまでは何もしない）
         if (env.DISCORD_BOT_TOKEN) {
