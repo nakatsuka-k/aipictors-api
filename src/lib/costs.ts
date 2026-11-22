@@ -11,6 +11,22 @@
  */
 
 var ACCOUNT_ID = "7f2a200bf2994f36f45e733751a30be6";
+var ZONE_ID = "e24f556403c24f96875f6466349b048f";
+
+/**
+ * ほかの Worker から Service Binding で呼ばれる Worker と、外から入るホスト。
+ * Service Binding の呼び出しはリクエスト料金がかからないが、実行回数（workersInvocationsAdaptive）には入る
+ * （aipictors-api は 1 日 110 万回のほぼすべてが system からの呼び出し）。この Worker の fetch は、ホストへの外からの要求数で数える。
+ * 外の入口がない Worker はホストを空にする（0 回）
+ */
+var BINDING_WORKER_HOSTS = {
+  "aipictors-api": ["backend.aipictors.com"],
+  "aipictors-system": ["api.aipictors.com"],
+  "aipictors-image-tagger": [],
+};
+
+/** WAF で止めた要求は Worker まで届かない */
+var NOT_REACHING_WORKER = new Set(["block", "managed_challenge", "challenge", "js_challenge", "jschallenge"]);
 var GCP_PROJECT = "gen-lang-client-0028298935";
 var GCP_DATASET = "billing_export";
 var FALLBACK_USD_JPY = 155;
@@ -65,6 +81,64 @@ export var cloudflareFixedUsd = async (token, days) => {
   return { usd, plans };
 };
 
+/**
+ * 課金される Workers のリクエスト数。Service Binding で呼ばれる Worker の fetch を、ホストへの外からの要求数に置き換える。
+ * ゾーンを読めなければ null（呼び出し側は全部の実行回数で数える）
+ */
+var billableWorkerRequests = async (token, variables, invocations) => {
+  const hosts = [...new Set(Object.values(BINDING_WORKER_HOSTS).flat())];
+  const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: `query($z: String!, $s: Time!, $e: Time!, $h: [string!]) { viewer { zones(filter: { zoneTag: $z }) {
+        http: httpRequestsAdaptiveGroups(limit: 1000, filter: { datetime_geq: $s, datetime_lt: $e, clientRequestHTTPHost_in: $h }) {
+          count dimensions { clientRequestHTTPHost securityAction }
+        }
+      } } }`,
+      variables: { z: ZONE_ID, s: variables.s, e: variables.e, h: hosts },
+    }),
+  });
+  const body = await response.json();
+  if (body.errors?.length) throw new Error(`cloudflare zone graphql: ${body.errors[0].message}`);
+  const external = {};
+  for (const row of body.data?.viewer?.zones?.[0]?.http ?? []) {
+    if (NOT_REACHING_WORKER.has(row.dimensions.securityAction)) continue;
+    external[row.dimensions.clientRequestHTTPHost] = (external[row.dimensions.clientRequestHTTPHost] ?? 0) + toNumber(row.count);
+  }
+  let total = 0;
+  for (const row of invocations ?? []) {
+    const hostsOf = BINDING_WORKER_HOSTS[row.dimensions?.scriptName];
+    if (hostsOf && row.dimensions?.eventType === "fetch") continue;
+    total += toNumber(row.sum.requests);
+  }
+  for (const host of hosts) total += external[host] ?? 0;
+  return total;
+};
+
+/**
+ * Containers（pictorchan-bot・自動判定の image-tagger）。割り当てたメモリ・ディスクの時間と、実際に使った CPU の時間で数える
+ * （メモリ $0.0000025/GiB 秒・無料 25 GiB 時間、CPU $0.00002/vCPU 秒・無料 375 vCPU 分、ディスク $0.00000007/GB 秒・無料 200 GB 時間。月あたり）
+ */
+var collectContainersCost = async (token, variables, days) => {
+  const usage = await cloudflareGraphql(
+    token,
+    `query($a: String!, $s: Time!, $e: Time!) { viewer { accounts(filter: { accountTag: $a }) {
+      containers: cloudchamberMetricsAdaptiveGroups(limit: 1000, filter: { datetime_geq: $s, datetime_lt: $e }) { sum { allocatedMemory allocatedDisk cpuTimeSec } }
+    } } }`,
+    variables
+  );
+  const rows = usage.containers ?? [];
+  const memoryGibSeconds = rows.reduce((total, row) => total + toNumber(row.sum.allocatedMemory), 0) / 2 ** 30;
+  const diskGbSeconds = rows.reduce((total, row) => total + toNumber(row.sum.allocatedDisk), 0) / 1e9;
+  const cpuSeconds = rows.reduce((total, row) => total + toNumber(row.sum.cpuTimeSec), 0);
+  const usd =
+    over(memoryGibSeconds, 25 * 3600, days) * 0.0000025 +
+    over(cpuSeconds, 375 * 60, days) * 0.00002 +
+    over(diskGbSeconds, 200 * 3600, days) * 0.00000007;
+  return { usd, memoryGibHours: memoryGibSeconds / 3600, cpuSeconds };
+};
+
 /** Stream の再生分数（1,000 分 $1）。請求の使用量 API から時間ごとに読む */
 var streamMinutesViewed = async (token, range) => {
   const params = new URLSearchParams({
@@ -91,7 +165,7 @@ export var collectCloudflareCost = async (token, range) => {
   const usage = await cloudflareGraphql(
     token,
     `query($a: String!, $s: Time!, $e: Time!) { viewer { accounts(filter: { accountTag: $a }) {
-      workers: workersInvocationsAdaptive(limit: 10000, filter: { datetime_geq: $s, datetime_lt: $e }) { sum { requests cpuTimeUs } }
+      workers: workersInvocationsAdaptive(limit: 10000, filter: { datetime_geq: $s, datetime_lt: $e }) { sum { requests cpuTimeUs } dimensions { scriptName eventType } }
       r2ops: r2OperationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $s, datetime_lt: $e }) { sum { requests } dimensions { actionType } }
       r2storage: r2StorageAdaptiveGroups(limit: 1000, filter: { datetime_geq: $s, datetime_lt: $e }) { max { payloadSize metadataSize } dimensions { bucketName } }
       d1: d1AnalyticsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $s, datetime_lt: $e }) { sum { rowsRead rowsWritten } }
@@ -106,7 +180,14 @@ export var collectCloudflareCost = async (token, range) => {
 
   const workerRequests = sum(usage.workers, (r) => r.sum.requests);
   const workerCpuMs = sum(usage.workers, (r) => r.sum.cpuTimeUs) / 1000;
-  const workers = (over(workerRequests, 10e6, days) * 0.3 + over(workerCpuMs, 30e6, days) * 0.02) / 1e6;
+
+  const [fixed, minutes, billableRequests, containerUsage] = await Promise.all([
+    cloudflareFixedUsd(token, days),
+    streamMinutesViewed(token, range).catch(() => 0),
+    billableWorkerRequests(token, variables, usage.workers).catch(() => null),
+    collectContainersCost(token, variables, days).catch(() => null),
+  ]);
+  const workers = (over(billableRequests ?? workerRequests, 10e6, days) * 0.3 + over(workerCpuMs, 30e6, days) * 0.02) / 1e6;
 
   let classA = 0;
   let classB = 0;
@@ -137,11 +218,8 @@ export var collectCloudflareCost = async (token, range) => {
   }
   const kv = (over(kvReads, 10e6, days) * 0.5 + over(kvWrites, 1e6, days) * 5) / 1e6;
 
-  const [fixed, minutes] = await Promise.all([
-    cloudflareFixedUsd(token, days),
-    streamMinutesViewed(token, range).catch(() => 0),
-  ]);
   const stream = minutes / 1000;
+  const containers = containerUsage?.usd ?? 0;
 
   const detail = {
     workers: round(workers),
@@ -151,14 +229,25 @@ export var collectCloudflareCost = async (token, range) => {
     durableObjects: round(durableObjects),
     kv: round(kv),
     stream: round(stream),
+    containers: round(containers),
     plans: round(fixed.usd),
   };
-  const usd = workers + r2Ops + r2Storage + d1 + durableObjects + kv + stream + fixed.usd;
+  const usd = workers + r2Ops + r2Storage + d1 + durableObjects + kv + stream + containers + fixed.usd;
   return {
     usd: round(usd),
     detail,
     plans: fixed.plans,
-    usage: { workerRequests, workerCpuMs: Math.round(workerCpuMs), r2Gb: round(r2Gb, 1), d1Read, d1Written, streamMinutes: minutes },
+    usage: {
+      workerRequests,
+      workerRequestsBillable: billableRequests,
+      workerCpuMs: Math.round(workerCpuMs),
+      r2Gb: round(r2Gb, 1),
+      d1Read,
+      d1Written,
+      streamMinutes: minutes,
+      containerMemoryGibHours: containerUsage ? round(containerUsage.memoryGibHours, 1) : null,
+      containerCpuSeconds: containerUsage ? Math.round(containerUsage.cpuSeconds) : null,
+    },
   };
 };
 

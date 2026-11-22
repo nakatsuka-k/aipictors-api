@@ -151,3 +151,43 @@ export const runGenerationRetention = async (env, nowMs = Date.now()) => {
     .run();
   return { scanned: rows.length, expired: expired.length, deleted: deleted.length, cleared: cleared.length, finished, enforce };
 };
+
+/**
+ * 生成の依頼の記録（generated_queues）を残す日数。履歴の画面は image_generation_results を読み、
+ * generated_queues は生成中・待ちの一覧と、その日・その月の使った量の集計にしか使わないので、終わった依頼は 45 日で消す
+ * （1 行 約 4KB・索引 9 本で、残すと genlog の 3 分の 1 を占めていた）
+ */
+export const QUEUE_KEEP_DAYS = 45;
+
+/** 1 回（5 分ごと）に消す行の数。genlog は生成のワーカーも使うので、1 回の削除を小さく保つ */
+const QUEUE_PURGE_BATCH = 500;
+
+const ACTIVE_QUEUE_STATUSES = new Set(["wait", "generating"]);
+
+/** 古い順に見て、消してよい依頼の id（期限内の行に着いたら止める。待ち・生成中のまま残った行は消さない） */
+export const pickPurgeableQueueIds = (rows, cutoff) => {
+  const ids = [];
+  for (const row of rows) {
+    if (!row.request_time || String(row.request_time) >= cutoff) break;
+    if (ACTIVE_QUEUE_STATUSES.has(row.status)) continue;
+    ids.push(row.id);
+  }
+  return ids;
+};
+
+export const purgeOldGenerationQueues = async (env, nowMs = Date.now()) => {
+  if (!env.GENLOG) return null;
+  const cutoff = toSqlTime(nowMs - QUEUE_KEEP_DAYS * DAY_SECONDS * 1000);
+  // 主キーの順に先頭から読む（索引の範囲だけで済む）
+  const { results: rows } = await env.GENLOG
+    .prepare("SELECT id, request_time, status FROM generated_queues ORDER BY id LIMIT ?1")
+    .bind(QUEUE_PURGE_BATCH)
+    .all();
+  const ids = pickPurgeableQueueIds(rows, cutoff);
+  if (ids.length === 0) return { purged: 0 };
+  await env.GENLOG
+    .prepare("DELETE FROM generated_queues WHERE id IN (SELECT value FROM json_each(?1))")
+    .bind(JSON.stringify(ids))
+    .run();
+  return { purged: ids.length };
+};

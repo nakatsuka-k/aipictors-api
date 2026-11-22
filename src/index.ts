@@ -1,4 +1,4 @@
-import { runGenerationRetention } from "./lib/generation-retention"
+import { purgeOldGenerationQueues, runGenerationRetention } from "./lib/generation-retention"
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { app } from "./app"
 import { fillRecommendedSettings } from "./lib/user-model-recommendations";
@@ -30,6 +30,14 @@ const scheduled = async (controller, env, ctx) => {
         });
         if (retention && retention.expired > 0) {
           console.log(JSON.stringify({ event: "generation.retention.done", ...retention }));
+        }
+        // 終わった生成の依頼の記録を 45 日で消す（D1 の保存量を減らす。履歴は image_generation_results に残る）
+        const queuePurge = await purgeOldGenerationQueues(env).catch((error) => {
+          console.log(JSON.stringify({ event: "generation.queue_purge.failed", message: String(error?.message ?? error) }));
+          return null;
+        });
+        if (queuePurge && queuePurge.purged > 0) {
+          console.log(JSON.stringify({ event: "generation.queue_purge.done", ...queuePurge }));
         }
         // 有料リクエストの期限（承諾待ちの期限切れ・納期超過の自動キャンセル・自動確定・期限が近い知らせ）
         const requestJob = await runRequestJob({ db, env, core: env.SYSTEM_CORE ?? null, activity: env.SYSTEM_ACTIVITY ?? null, now: getNow() }).catch((error) => {
