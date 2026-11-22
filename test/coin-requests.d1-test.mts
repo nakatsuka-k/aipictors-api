@@ -126,6 +126,32 @@ assert.equal(listed.body.data.plans.length, 1)
 const otherEdit = await call("POST", "/internal/requests/plans", { userId: "2", planId: plan.id, title: "乗っ取り", description: "d", priceCoins: 500 })
 assert.equal(otherEdit.body.error, "PLAN_NOT_FOUND", "他人のプランは編集できない")
 
+// 見本の画像がないプランは、クリエイターの投稿作品（公開中・全年齢）のサムネイルを workImageUrls で返す（sampleImageUrls は空のまま）
+{
+  await CORE.prepare(
+    "CREATE TABLE works (id INTEGER PRIMARY KEY, userId INTEGER, ageLimit INTEGER, is_deleted INTEGER DEFAULT 0, adminViewMode INTEGER DEFAULT 0, viewMode INTEGER DEFAULT 0, time INTEGER, large_thumbnail_image_url TEXT)",
+  ).run()
+  const rows: Array<[number, number, number, number, string]> = [
+    [1, 0, 0, 100, "https://image.aipictors.com/w-old.webp"],
+    [1, 0, 0, 200, "https://image.aipictors.com/w-new.webp"],
+    [1, 1, 0, 300, "https://image.aipictors.com/w-r18.webp"],
+    [1, 0, 1, 400, "https://image.aipictors.com/w-deleted.webp"],
+  ]
+  for (const [userId, ageLimit, deleted, time, url] of rows) {
+    await CORE.prepare("INSERT INTO works (userId, ageLimit, is_deleted, time, large_thumbnail_image_url) VALUES (?1, ?2, ?3, ?4, ?5)").bind(userId, ageLimit, deleted, time, url).run()
+  }
+  const noSample = await call("POST", "/internal/requests/plans", { userId: "1", title: "見本なし", description: "d", priceCoins: 300, status: "HIDDEN" })
+  const id = noSample.body.data.plan.id
+  const detail = await call("GET", `/internal/requests/plans/${id}?viewerUserId=1`)
+  assert.deepEqual(detail.body.data.plan.sampleImageUrls, [])
+  assert.deepEqual(detail.body.data.plan.workImageUrls, ["https://image.aipictors.com/w-new.webp", "https://image.aipictors.com/w-old.webp"], "新しい順・R18 と削除済みは除く")
+  const withSample = await call("GET", `/internal/requests/plans/${plan.id}`)
+  assert.equal(withSample.body.data.plan.workImageUrls, undefined, "見本があるプランには付けない")
+  const creator = await call("GET", "/internal/requests/creators/1?viewerUserId=1")
+  assert.equal(creator.body.data.plans.find((p: any) => p.id === id).workImageUrls.length, 2)
+  await call("POST", `/internal/requests/plans/${id}/delete`, { userId: "1" })
+}
+
 // ---- 3. 残高不足・自分への依頼 ----
 await giveLot("2", "FREE", 50)
 await giveLot("2", "PREMIUM", 1000, 800000) // 有料 80%（Web の購入でおまけ 25%）

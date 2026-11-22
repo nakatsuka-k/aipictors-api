@@ -7,6 +7,7 @@ import { json } from "../lib/json"
 import { getRequestConfig, PLAN_CATEGORIES, REQUEST_MAX_COINS, REQUEST_MIN_COINS } from "../lib/coin-requests/config"
 import {
   actOnRequest,
+  attachPlanWorkImages,
   adminActOnRequest,
   applyRequest,
   deletePlan,
@@ -71,8 +72,11 @@ coinRequestRoutes.get("/plans", async (c) => {
     limit: Number(q.limit ?? 30),
     offset: Number(q.offset ?? 0),
   })
-  const users = await loadRequestUsers(c.env.SYSTEM_CORE, plans.map((p) => p.userId))
-  return json({ error: null, data: { plans, users } })
+  const [users, withImages] = await Promise.all([
+    loadRequestUsers(c.env.SYSTEM_CORE, plans.map((p) => p.userId)),
+    attachPlanWorkImages(c.env.SYSTEM_CORE, plans),
+  ])
+  return json({ error: null, data: { plans: withImages, users } })
 })
 
 coinRequestRoutes.get("/plans/:id", async (c) => {
@@ -80,12 +84,13 @@ coinRequestRoutes.get("/plans/:id", async (c) => {
   const plan = await getPlan({ db, planId: Number(c.req.param("id")) })
   const viewer = c.req.query("viewerUserId")
   if (!plan || (plan.status !== "ACTIVE" && plan.userId !== viewer)) return fail("PLAN_NOT_FOUND")
-  const [users, showcase, counts] = await Promise.all([
+  const [users, showcase, counts, [withImages]] = await Promise.all([
     loadRequestUsers(c.env.SYSTEM_CORE, [plan.userId]),
     listShowcase({ db, planId: plan.id, limit: 12 }),
     countShowcase({ db, planId: plan.id }),
+    attachPlanWorkImages(c.env.SYSTEM_CORE, [plan]),
   ])
-  return json({ error: null, data: { plan, users, showcase, showcaseCount: counts.all, showcaseR18Count: counts.r18 } })
+  return json({ error: null, data: { plan: withImages, users, showcase, showcaseCount: counts.all, showcaseR18Count: counts.r18 } })
 })
 
 // 実績（依頼者が公開を許可した完了済みの依頼の透かし入り画像）。planId か userId（クリエイター）で絞る。r18=1 で R18 の実績
@@ -128,8 +133,11 @@ coinRequestRoutes.post("/plans/:id/report", async (c) => {
 coinRequestRoutes.get("/creators/:userId", async (c) => {
   const db = await getDb(c.env)
   const data = await getCreatorRequestProfile({ db, userId: c.req.param("userId"), viewerUserId: c.req.query("viewerUserId") ?? null })
-  const users = await loadRequestUsers(c.env.SYSTEM_CORE, [c.req.param("userId")])
-  return json({ error: null, data: { ...data, users } })
+  const [users, plans] = await Promise.all([
+    loadRequestUsers(c.env.SYSTEM_CORE, [c.req.param("userId")]),
+    attachPlanWorkImages(c.env.SYSTEM_CORE, data.plans),
+  ])
+  return json({ error: null, data: { ...data, plans, users } })
 })
 
 coinRequestRoutes.get("/settings/:userId", async (c) => {

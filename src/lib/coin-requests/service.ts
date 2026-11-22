@@ -765,6 +765,41 @@ export const runRequestJob = async ({ db, env, core, activity, now }) => {
 
 export { calcSettlement, countShowcase, listShowcase }
 
+// ---- 見本の画像がないプランは、クリエイターの投稿作品のサムネイルを使う ----
+
+/** プランに出す投稿作品のサムネイルの数 */
+const PLAN_WORK_IMAGES = 6
+
+/**
+ * 見本の画像（sampleImageUrls）が空のプランに workImageUrls（クリエイターの新しい公開中・全年齢の作品のサムネイル）を付ける。
+ * sampleImageUrls は変えない（編集画面で保存されないように）。core が読めなければそのまま返す
+ */
+export const attachPlanWorkImages = async (core, plans) => {
+  const userIds = [...new Set(plans.filter((p) => p && p.sampleImageUrls.length === 0).map((p) => p.userId))]
+    .filter((id) => /^\d+$/.test(String(id)))
+    .slice(0, 60)
+  if (!core || userIds.length === 0) return plans
+  try {
+    const results = await core.batch(
+      userIds.map((id) =>
+        core
+          .prepare(
+            `SELECT large_thumbnail_image_url AS url FROM works
+              WHERE userId = ?1 AND ageLimit = 0 AND is_deleted = 0 AND adminViewMode = 0 AND viewMode = 0
+                AND large_thumbnail_image_url LIKE 'https://%'
+              ORDER BY time DESC LIMIT ${PLAN_WORK_IMAGES}`,
+          )
+          .bind(Number(id)),
+      ),
+    )
+    const byUser = new Map(userIds.map((id, i) => [String(id), (results[i]?.results ?? []).map((r) => r.url)]))
+    return plans.map((p) => (p && p.sampleImageUrls.length === 0 ? { ...p, workImageUrls: byUser.get(String(p.userId)) ?? [] } : p))
+  } catch (error) {
+    console.error(JSON.stringify({ event: "coin_requests.work_images_failed", message: String(error?.message ?? error) }))
+    return plans
+  }
+}
+
 // ---- 表示用のユーザー（名前・ログイン名・アイコン）。core が読めなければ空 ----
 export const loadRequestUsers = async (core, ids) => {
   const unique = [...new Set(ids.filter((id) => id !== null && id !== undefined && /^\d+$/.test(String(id))).map(String))].slice(0, 100)
