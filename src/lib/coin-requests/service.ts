@@ -386,6 +386,22 @@ export const applyRequest = async ({ db, env, core, activity, now, input }) => {
 
 // ---- 依頼の取得 ----
 
+/** メッセージに付けられるリアクション（相手のメッセージに 1 人 1 つ） */
+export const MESSAGE_REACTIONS = ["👍", "❤️", "🙏", "😊", "🎉", "👀"]
+
+/** { "<userId>": "👍" } を [{ userId, emoji }] にする（壊れた値や許可していない絵文字は捨てる） */
+const parseReactions = (value) => {
+  try {
+    const parsed = JSON.parse(value ?? "{}")
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return []
+    return Object.entries(parsed)
+      .filter(([, emoji]) => MESSAGE_REACTIONS.includes(String(emoji)))
+      .map(([userId, emoji]) => ({ userId: String(userId), emoji: String(emoji) }))
+  } catch {
+    return []
+  }
+}
+
 const REQUEST_SELECT = `SELECT r.*, p.title AS plan_title FROM coin_requests r LEFT JOIN request_plans p ON p.id = r.plan_id`
 
 export const getRequest = async ({ db, requestId, viewerUserId, isModerator = false }) => {
@@ -394,7 +410,7 @@ export const getRequest = async ({ db, requestId, viewerUserId, isModerator = fa
   const isParty = String(row.requester_user_id) === String(viewerUserId) || String(row.creator_user_id) === String(viewerUserId)
   if (!isParty && !isModerator) return null
   const messages = await db.query(
-    `SELECT id, sender_user_id, body, image_urls, created_at FROM coin_request_messages WHERE request_id = $1 ORDER BY id ASC LIMIT 300`,
+    `SELECT id, sender_user_id, body, image_urls, reactions, created_at FROM coin_request_messages WHERE request_id = $1 ORDER BY id ASC LIMIT 300`,
     [requestId],
   )
   return {
@@ -404,6 +420,7 @@ export const getRequest = async ({ db, requestId, viewerUserId, isModerator = fa
       senderUserId: m.sender_user_id === null ? null : String(m.sender_user_id),
       body: m.body,
       imageUrls: parseJsonArray(m.image_urls),
+      reactions: parseReactions(m.reactions),
       createdAt: Number(m.created_at),
     })),
   }
@@ -493,6 +510,7 @@ export const completeRequest = async ({ db, env, core, activity, now, request, f
  * - revise（依頼者: 納品済みで修正回数が残っているとき）
  * - complete（依頼者: 納品済みのとき）
  * - message（当事者、終わっていても 30 日まで）
+ * - react（当事者: 相手のメッセージにリアクションを 1 つ付ける。input.messageId・input.emoji。emoji が空なら外す。通知はしない）
  * - showcase（依頼者: 実績として公開してよいか。input.allowed。いつでも変えられる）
  * - showcase-hide（クリエイター: 許可された実績を自分の実績に出さない。input.hidden）
  */
@@ -618,6 +636,21 @@ export const actOnRequest = async ({ db, env, core, activity, now, requestId, us
       await addMessage(db, now, requestId, uid, body, images)
       await db.execute(`UPDATE coin_requests SET updated_at = $2 WHERE id = $1`, [requestId, now])
       return done("MESSAGE", { body })
+    }
+    case "react": {
+      const emoji = input.emoji ? String(input.emoji) : ""
+      if (emoji && !MESSAGE_REACTIONS.includes(emoji)) return fail("INVALID_REACTION")
+      const message = await db.queryOne(`SELECT id, sender_user_id, reactions FROM coin_request_messages WHERE id = $1 AND request_id = $2`, [
+        Number(input.messageId),
+        requestId,
+      ])
+      // 自分のメッセージと運営・システムのお知らせには付けない
+      if (!message || message.sender_user_id === null || String(message.sender_user_id) === uid) return fail("MESSAGE_NOT_FOUND")
+      const reactions = Object.fromEntries(parseReactions(message.reactions).map((r) => [r.userId, r.emoji]))
+      if (emoji) reactions[uid] = emoji
+      else delete reactions[uid]
+      await db.execute(`UPDATE coin_request_messages SET reactions = $2 WHERE id = $1`, [message.id, JSON.stringify(reactions)])
+      return done(null)
     }
     case "report": {
       const reason = text(input.reason, 1000)
