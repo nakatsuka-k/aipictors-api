@@ -23,7 +23,7 @@ import {
   parseJsonArray,
 } from "./config"
 import { createEscrowedRequest, refundRequest, settleRequest, transitionRequest } from "./escrow"
-import { notifyRequestEvent } from "./notify"
+import { notifyRequestEvent, removeMessageNotification } from "./notify"
 import { countShowcase, ensureShowcaseImages, listShowcase, runShowcaseJob } from "./showcase"
 
 const clampInt = (value, min, max, fallback) => {
@@ -402,6 +402,9 @@ const parseReactions = (value) => {
   }
 }
 
+/** 送信を取り消したメッセージの代わりに出す文（取り消しを知らない古いアプリでもこの文が出る） */
+export const UNSENT_MESSAGE_BODY = "メッセージの送信を取り消しました"
+
 const REQUEST_SELECT = `SELECT r.*, p.title AS plan_title FROM coin_requests r LEFT JOIN request_plans p ON p.id = r.plan_id`
 
 export const getRequest = async ({ db, requestId, viewerUserId, isModerator = false }) => {
@@ -410,19 +413,24 @@ export const getRequest = async ({ db, requestId, viewerUserId, isModerator = fa
   const isParty = String(row.requester_user_id) === String(viewerUserId) || String(row.creator_user_id) === String(viewerUserId)
   if (!isParty && !isModerator) return null
   const messages = await db.query(
-    `SELECT id, sender_user_id, body, image_urls, reactions, created_at FROM coin_request_messages WHERE request_id = $1 ORDER BY id ASC LIMIT 300`,
+    `SELECT id, sender_user_id, body, image_urls, reactions, created_at, deleted_at FROM coin_request_messages WHERE request_id = $1 ORDER BY id ASC LIMIT 300`,
     [requestId],
   )
   return {
     ...toRequest(row, isParty ? viewerUserId : null),
-    messages: messages.map((m) => ({
-      id: String(m.id),
-      senderUserId: m.sender_user_id === null ? null : String(m.sender_user_id),
-      body: m.body,
-      imageUrls: parseJsonArray(m.image_urls),
-      reactions: parseReactions(m.reactions),
-      createdAt: Number(m.created_at),
-    })),
+    messages: messages.map((m) => {
+      // 取り消したメッセージは当事者には中身を見せない（運営は通報の確認のため元の内容を見られる）
+      const hidden = m.deleted_at != null && isParty
+      return {
+        id: String(m.id),
+        senderUserId: m.sender_user_id === null ? null : String(m.sender_user_id),
+        body: hidden ? UNSENT_MESSAGE_BODY : m.body,
+        imageUrls: hidden ? [] : parseJsonArray(m.image_urls),
+        reactions: hidden ? [] : parseReactions(m.reactions),
+        createdAt: Number(m.created_at),
+        deletedAt: m.deleted_at == null ? null : Number(m.deleted_at),
+      }
+    }),
   }
 }
 
@@ -640,16 +648,37 @@ export const actOnRequest = async ({ db, env, core, activity, now, requestId, us
     case "react": {
       const emoji = input.emoji ? String(input.emoji) : ""
       if (emoji && !MESSAGE_REACTIONS.includes(emoji)) return fail("INVALID_REACTION")
-      const message = await db.queryOne(`SELECT id, sender_user_id, reactions FROM coin_request_messages WHERE id = $1 AND request_id = $2`, [
+      const message = await db.queryOne(`SELECT id, sender_user_id, reactions, deleted_at FROM coin_request_messages WHERE id = $1 AND request_id = $2`, [
         Number(input.messageId),
         requestId,
       ])
-      // 自分のメッセージと運営・システムのお知らせには付けない
-      if (!message || message.sender_user_id === null || String(message.sender_user_id) === uid) return fail("MESSAGE_NOT_FOUND")
+      // 自分のメッセージ・取り消したメッセージと運営・システムのお知らせには付けない
+      if (!message || message.sender_user_id === null || String(message.sender_user_id) === uid || message.deleted_at != null) return fail("MESSAGE_NOT_FOUND")
       const reactions = Object.fromEntries(parseReactions(message.reactions).map((r) => [r.userId, r.emoji]))
       if (emoji) reactions[uid] = emoji
       else delete reactions[uid]
       await db.execute(`UPDATE coin_request_messages SET reactions = $2 WHERE id = $1`, [message.id, JSON.stringify(reactions)])
+      return done(null)
+    }
+    case "unsend": {
+      // 自分が送ったメッセージの送信取り消し。納品と修正のお願いは依頼の記録なので取り消せない
+      const message = await db.queryOne(
+        `SELECT id, sender_user_id, body, image_urls, created_at, deleted_at FROM coin_request_messages WHERE id = $1 AND request_id = $2`,
+        [Number(input.messageId), requestId],
+      )
+      if (!message || message.sender_user_id === null || String(message.sender_user_id) !== uid) return fail("MESSAGE_NOT_FOUND")
+      if (message.deleted_at != null) return done(null)
+      const isRevision = String(message.body).startsWith("修正をお願いしました\n")
+      const isDelivery =
+        isCreator &&
+        row.delivered_at !== null &&
+        Number(message.created_at) === Number(row.delivered_at) &&
+        String(message.image_urls) === String(row.delivery_image_urls ?? "[]")
+      if (isRevision || isDelivery) return fail("CANNOT_UNSEND")
+      const closedAt = Number(row.closed_at ?? row.completed_at ?? 0)
+      if (closedAt && now - closedAt > 30 * DAY) return fail("CLOSED")
+      await db.execute(`UPDATE coin_request_messages SET deleted_at = $2, reactions = '{}' WHERE id = $1 AND deleted_at IS NULL`, [message.id, now])
+      await removeMessageNotification({ activity, requestId, body: message.body })
       return done(null)
     }
     case "report": {

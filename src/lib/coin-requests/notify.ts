@@ -92,6 +92,21 @@ export const buildRequestMessages = ({ event, request, names, extra = {} }) => {
   }
 }
 
+/** 送信を取り消したメッセージのサイト内通知を消す（本文の書き出しが通知に出ているため。プッシュは届いた後なので消せない） */
+export const removeMessageNotification = async ({ activity, requestId, body }) => {
+  const head = shorten(body, 40)
+  if (!activity || !head) return
+  const tail = `にメッセージ: ${head}`
+  try {
+    await activity
+      .prepare(`DELETE FROM notifications WHERE notifyType = ?1 AND commentId = ?2 AND substr(comment, -length(?3)) = ?3`)
+      .bind(REQUEST_NOTIFY_TYPE, Number(requestId), tail)
+      .run()
+  } catch (error) {
+    console.error(JSON.stringify({ event: "coin_requests.unsend_notify_failed", requestId, message: String(error?.message ?? error) }))
+  }
+}
+
 export const notifyRequestEvent = async ({ db, env, core, activity, requestId, event, actorUserId = null, extra = {} }) => {
   try {
     const request = await db.queryOne(`SELECT * FROM coin_requests WHERE id = $1`, [requestId])
