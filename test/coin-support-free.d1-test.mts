@@ -126,9 +126,10 @@ assert.deepEqual(await balances("loopA"), [0, 0])
 const fakeCore = (row: unknown, fail = false) => ({
   prepare: () => ({ bind: () => ({ first: async () => { if (fail) throw new Error("no column"); return row } }) }),
 })
-assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 0, free: 1 }), "12"), { rejectPremium: false, rejectFreeReceive: true })
-assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 1, free: null }), "12"), { rejectPremium: true, rejectFreeReceive: false })
-assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore(null, true), "12"), { rejectPremium: false, rejectFreeReceive: false })
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 0, free: 1 }), "12"), { rejectPremium: false, rejectFreeReceive: true, rejectAll: false })
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 1, free: null }), "12"), { rejectPremium: true, rejectFreeReceive: false, rejectAll: false })
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore(null, true), "12"), { rejectPremium: false, rejectFreeReceive: false, rejectAll: false })
+assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 0, free: 0, all_support: 1 }), "12"), { rejectPremium: false, rejectFreeReceive: false, rejectAll: true })
 
 console.log("coin-support-free ok")
 await d1.dispose()

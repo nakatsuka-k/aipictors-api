@@ -3,7 +3,7 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
-import { PREMIUM_SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
+import { PREMIUM_SUPPORT_REJECTED_MESSAGE, SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
@@ -320,6 +320,10 @@ coinsRoutes.post("/support", async (c) => {
     planType: parsed.output.planType ?? "FREE"
   });
   const recipientSettings = await getSupportRecipientSettings(c.env.SYSTEM_CORE ?? null, parsed.output.recipientUserId);
+  // 受け取る人が「推しを受け付けない」設定なら、コインの種類にかかわらず断る（既に受け取った分はそのまま）
+  if (recipientSettings.rejectAll) {
+    return json({ error: SUPPORT_REJECTED_MESSAGE, code: "SUPPORT_REJECTED" }, 403);
+  }
   // 受け取る人が「プレミアムコインでの推しを受け取らない」設定なら断る（既に受け取った分はそのまま）
   if (parsed.output.coinType === "PREMIUM" && recipientSettings.rejectPremium) {
     return json({ error: PREMIUM_SUPPORT_REJECTED_MESSAGE, code: "PREMIUM_SUPPORT_REJECTED" }, 403);

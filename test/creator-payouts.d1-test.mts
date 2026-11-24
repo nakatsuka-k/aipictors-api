@@ -719,18 +719,18 @@ await t("cron: 10 日と 25 日は締めてから送る。それ以外の日は�
 })
 
 await t("プレミアムコインでの推しを受け取らない設定: プレミアムは断る・無料は届く・推す画面に状態を返す", async () => {
-  await CORE.prepare("CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, reject_premium_coin_support INTEGER, reject_free_coin_support_receive INTEGER)").run()
+  await CORE.prepare("CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, reject_premium_coin_support INTEGER, reject_free_coin_support_receive INTEGER, reject_coin_support INTEGER)").run()
   const sender = await newUser()
   const creator = await newUser()
   const work = await newWork(creator)
   await buy(sender, 100, 0)
   await join(creator)
   const status = async () => (await call("POST", "/internal/coins/ensure-initial-grant", { userId: sender, supportTargetUserId: creator })).body.data.supportTarget
-  assert.deepEqual(await status(), { userId: creator, premiumAccepted: true, freeReceiveAccepted: true, rewardJoined: true })
+  assert.deepEqual(await status(), { userId: creator, supportAccepted: true, premiumAccepted: true, freeReceiveAccepted: true, rewardJoined: true })
   // 設定の行が無い・NULL は受け取る
   assert.equal((await support(sender, creator, 1, { workId: work })).status, 200)
   await CORE.prepare("INSERT INTO user_settings(userId, reject_premium_coin_support) VALUES (?, 1)").bind(Number(creator)).run()
-  assert.deepEqual(await status(), { userId: creator, premiumAccepted: false, freeReceiveAccepted: true, rewardJoined: true })
+  assert.deepEqual(await status(), { userId: creator, supportAccepted: true, premiumAccepted: false, freeReceiveAccepted: true, rewardJoined: true })
   const before = await premiumBalance(sender)
   const earningsBefore = (await earnings(creator)).length
   const rejected = await support(sender, creator, 5, { workId: work })
@@ -744,6 +744,27 @@ await t("プレミアムコインでの推しを受け取らない設定: プレ
   const self = await call("POST", "/internal/coins/ensure-initial-grant", { userId: sender, supportTargetUserId: sender })
   assert.equal(self.body.data.supportTarget, undefined)
   await CORE.prepare("UPDATE user_settings SET reject_premium_coin_support = 0 WHERE userId = ?").bind(Number(creator)).run()
+  assert.equal((await support(sender, creator, 1, { workId: work })).status, 200)
+})
+
+await t("推しを受け付けない設定: プレミアム・無料とも断り、コインは動かない・推す画面に状態を返す", async () => {
+  const sender = await newUser()
+  const creator = await newUser()
+  const work = await newWork(creator)
+  await buy(sender, 100, 0)
+  await CORE.prepare("INSERT INTO user_settings(userId, reject_coin_support) VALUES (?, 1)").bind(Number(creator)).run()
+  const status = (await call("POST", "/internal/coins/ensure-initial-grant", { userId: sender, supportTargetUserId: creator })).body.data.supportTarget
+  assert.equal(status.supportAccepted, false)
+  assert.equal(status.premiumAccepted, false)
+  const before = await premiumBalance(sender)
+  const premium = await support(sender, creator, 5, { workId: work })
+  assert.equal(premium.status, 403)
+  assert.equal(premium.body.code, "SUPPORT_REJECTED")
+  assert.equal(premium.body.error, "この作者は推しを受け付けていません")
+  const free = await support(sender, creator, 1, { workId: work, coinType: "FREE", source: `profile-support:free-${creator}:FREE` })
+  assert.equal(free.status, 403)
+  assert.equal(await premiumBalance(sender), before)
+  await CORE.prepare("UPDATE user_settings SET reject_coin_support = 0 WHERE userId = ?").bind(Number(creator)).run()
   assert.equal((await support(sender, creator, 1, { workId: work })).status, 200)
 })
 
