@@ -42,6 +42,7 @@
   "GET /internal/subscriptions/has-previous/:userId",
   "GET /internal/subscriptions/pause/:userId",
   "GET /internal/subscriptions/unpaid/:userId",
+  "GET /internal/subscriptions/upgrade-offer/:userId",
   "GET /internal/user-model-pickups",
   "GET /internal/user-model-pickups/admin",
   "GET /internal/user-models",

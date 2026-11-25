@@ -9,6 +9,7 @@ import { getPlanAmount, getPricingSettings } from "../lib/pricing"
 import { saveCancelReason } from "../lib/retention"
 import { isPrepaidSubscriptionId, isStripeSubscriptionId } from "../lib/prepaid-pass"
 import { getActivePause, pauseSubscription, toPauseResponse, unpauseSubscription } from "../lib/subscription-pause"
+import { applyStandardUpgradeOffer, getStandardUpgradeCouponId, getStandardUpgradeOffer, markStandardUpgradeOfferUsed } from "../lib/standard-upgrade-offer"
 import { sendSubscriptionCancellationEmail } from "../lib/subscription-cancellation-email"
 import {
   disableSubscriptionByStripeId,
@@ -486,9 +487,15 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   form.set("expand[]", "latest_invoice.payment_intent");
   form.set("items[0][id]", stripeSubscriptionItemId);
   setPlanPriceData(form, parsed.output.passType, nextAmount, interval);
+  const isTrialing = getString(stripeSubscription, "status") === "trialing";
   // 無料お試し中のプラン変更は、お試しをその場で終えて新しいプランの料金を請求する（お試しのまま上のプランを無料で使えないように）
-  if (getString(stripeSubscription, "status") === "trialing") {
+  if (isTrialing) {
     form.set("trial_end", "now");
+  }
+  // ライト → スタンダードの初月割引（lib/standard-upgrade-offer.ts）
+  const upgradeOffer = await getUpgradeOfferFor(db, c.env, parsed.output.userId, currentType, parsed.output.passType, interval);
+  if (upgradeOffer) {
+    applyStandardUpgradeOffer(form, upgradeOffer.couponId, { trialing: isTrialing });
   }
   form.set("metadata[pass_type]", parsed.output.passType);
   form.set("metadata[user_id]", parsed.output.userId);
@@ -516,9 +523,16 @@ subscriptionRoutes.post("/change-plan", async (c) => {
   const hostedInvoiceUrl = getString(latestInvoice ?? {}, "hosted_invoice_url");
   const paymentIntentStatus = getString(paymentIntent ?? {}, "status");
   const updatedStatus = typeof stripeUpdate.status === "string" ? stripeUpdate.status : "active";
-  const updatedPeriodStart = getNumber(stripeUpdate, "current_period_start") ?? getNumber(current, "current_period_start") ?? Math.floor(Date.now() / 1e3);
-  const updatedPeriodEnd = getNumber(stripeUpdate, "current_period_end") ?? getNumber(current, "current_period_end") ?? Math.floor(Date.now() / 1e3);
+  // 新しい API では期間が契約の項目の側にある（初月割引で請求日を置き直したとき、古い期間のままだと期限前にプランが切れる）
+  const updatedPeriodStart = getNumber(stripeUpdate, "current_period_start") ?? getNumber(updatedFirstItem ?? {}, "current_period_start") ?? getNumber(current, "current_period_start") ?? Math.floor(Date.now() / 1e3);
+  const updatedPeriodEnd = getNumber(stripeUpdate, "current_period_end") ?? getNumber(updatedFirstItem ?? {}, "current_period_end") ?? getNumber(current, "current_period_end") ?? Math.floor(Date.now() / 1e3);
   const paymentPending = !isInvoicePaid(latestInvoice);
+  // 割引を当てたら（カードの追加認証待ちでも）使ったことにする。クーポンは once なので、認証をやめたときに次の請求で使われることはない
+  if (upgradeOffer) {
+    await markStandardUpgradeOfferUsed(db, parsed.output.userId, stripeSubscriptionId).catch((error) => {
+      console.error("Failed to mark standard upgrade offer used", error);
+    });
+  }
   if (paymentPending) {
     return json({
       error: null,
@@ -530,7 +544,8 @@ subscriptionRoutes.post("/change-plan", async (c) => {
         status: updatedStatus,
         requiresAction: true,
         paymentPageUrl: hostedInvoiceUrl,
-        paymentIntentStatus
+        paymentIntentStatus,
+        upgradeOffer: upgradeOffer ? upgradeOffer.offer : null
       }
     });
   }
@@ -566,7 +581,8 @@ subscriptionRoutes.post("/change-plan", async (c) => {
       status: updatedStatus,
       requiresAction: false,
       paymentPageUrl: null,
-      paymentIntentStatus
+      paymentIntentStatus,
+      upgradeOffer: upgradeOffer ? upgradeOffer.offer : null
     }
   });
 });
@@ -625,8 +641,13 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
   form.set("subscription_details[proration_date]", String(prorationDate));
   form.set("subscription_details[items][0][id]", stripeSubscriptionItemId);
   setPreviewPlanPriceData(form, parsed.output.passType, nextAmount, interval);
-  if (getString(stripeSubscription, "status") === "trialing") {
+  const isTrialing = getString(stripeSubscription, "status") === "trialing";
+  if (isTrialing) {
     form.set("subscription_details[trial_end]", "now");
+  }
+  const upgradeOffer = await getUpgradeOfferFor(db, c.env, parsed.output.userId, currentType, parsed.output.passType, interval);
+  if (upgradeOffer) {
+    applyStandardUpgradeOffer(form, upgradeOffer.couponId, { preview: true, trialing: isTrialing });
   }
   const previewInvoice = await postStripeForm2(
     c.env.STRIPE_SECRET_KEY,
@@ -643,8 +664,28 @@ subscriptionRoutes.post("/change-plan-preview", async (c) => {
       passType: parsed.output.passType,
       renewalAmountJpy: nextAmount,
       interval,
-      chargedNowAmountJpy: getPreviewProrationAmount(previewInvoice),
-      prorationDate
+      chargedNowAmountJpy: upgradeOffer ? getPreviewTotal(previewInvoice) : getPreviewProrationAmount(previewInvoice),
+      prorationDate,
+      upgradeOffer: upgradeOffer ? { offer: upgradeOffer.offer, firstMonthYen: upgradeOffer.firstMonthYen, regularYen: upgradeOffer.regularYen } : null
     }
   });
+});
+
+// 割引を当てるときは請求日を置き直すので、請求額はプレビューの請求書の合計（クーポン・ライトの残りの差し引き込み）
+var getPreviewTotal = (previewInvoice) => {
+  const total = getNumber(previewInvoice ?? {}, "amount_due") ?? getNumber(previewInvoice ?? {}, "total") ?? 0;
+  return Math.max(0, total);
+};
+// ライトの月払いからスタンダードへ変えるときだけ、対象なら割引を返す
+var getUpgradeOfferFor = async (db, env, userId, currentType, nextType, interval) => {
+  if (currentType !== "LITE" || nextType !== "STANDARD" || interval !== "month") return null;
+  const couponId = getStandardUpgradeCouponId(env);
+  if (!couponId) return null;
+  const offer = await getStandardUpgradeOffer(db, env, userId);
+  return offer.eligible ? { ...offer, couponId } : null;
+};
+// ライト → スタンダードの初月割引の対象か（画面の表示用。最後はプラン変更のときに決める）
+subscriptionRoutes.get("/upgrade-offer/:userId", async (c) => {
+  const db = await getDb(c.env);
+  return json({ error: null, data: await getStandardUpgradeOffer(db, c.env, c.req.param("userId")) });
 });

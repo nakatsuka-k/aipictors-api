@@ -44,6 +44,9 @@ migrations_dir = "migrations/genlog"
 STRIPE_WEBHOOK_PATH = "/webhooks/stripe"
 # 今プランに入っていない人（はじめて・おかえり）の初月半額（Stripe のクーポン ID。空にすると止まる）
 FIRST_MONTH_COUPON_ID = "AIPICTORS_FIRST_MONTH_HALF"
+# ライトからスタンダードへ上げる人の初月割引（Stripe のクーポン ID、1,000 円引き・1 回だけ = 初月 980 円。空にすると止まる。lib/standard-upgrade-offer.ts）
+STANDARD_UPGRADE_COUPON_ID = "AIPICTORS_STANDARD_UPGRADE_980"
+STANDARD_UPGRADE_DISCOUNT_JPY = "1000"
 # ライトプランの無料お試しの日数（はじめてプランに入る人だけ・1 人 1 回。空にすると止まる。lib/subscription-trial.ts）
 LITE_TRIAL_DAYS = "7"
 # カード登録なしの「ライト1日体験」を受け付けるか（"1" で受け付ける。空や "0" で新しく始められなくなる。lib/lite-day-trial.ts）
