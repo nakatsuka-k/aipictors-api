@@ -156,7 +156,7 @@ const b64url = (input) => {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
-const getAccessToken = async (env) => {
+export const getAccessToken = async (env) => {
   const now = Math.floor(Date.now() / 1000)
   if (cachedToken && cachedToken.expiresAt - 60 > now) return cachedToken.token
   const pem = String(env.FIREBASE_PRIVATE_KEY ?? "").replace(/\\n/g, "\n")

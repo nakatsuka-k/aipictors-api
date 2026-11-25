@@ -4,6 +4,7 @@ import { Hono as Hono2 } from "hono"
 import { json } from "./lib/json"
 import { adminRoutes } from "./routes/admin"
 import { analyticsRoutes } from "./routes/analytics"
+import { appPushRoutes } from "./routes/app-push"
 import { campaignRoutes, emailPublicRoutes } from "./routes/campaigns"
 import { coinsRoutes, publicCoinsRoutes } from "./routes/coins"
 import { creatorPayoutRoutes } from "./routes/creator-payouts"
@@ -33,6 +34,7 @@ app.route("/internal/creator-payouts", creatorPayoutRoutes);
 app.route("/internal/requests", coinRequestRoutes);
 app.route("/internal/open-requests", openRequestRoutes);
 app.route("/internal/comment-reactions", commentReactionRoutes);
+app.route("/internal/app-push", appPushRoutes);
 app.route("/api/coins", publicCoinsRoutes);
 app.route("/internal/image-generation", imageGenerationRoutes);
 app.route("/internal/d1", d1ProxyRoutes);

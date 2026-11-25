@@ -17,6 +17,7 @@ import { runUserEventDigest } from "./lib/user-event-digest"
 import { runCreatorPayoutJob } from "./lib/creator-payouts"
 import { runRequestJob } from "./lib/coin-requests/service"
 import { runOpenRequestJob } from "./lib/open-requests/service"
+import { runRankingPush, runWeeklyDigestPush } from "./lib/app-push"
 // 毎日 00:00 JST（15:00 UTC）に日次コインの失効・付与。00:30 JST に再実行して取りこぼしを拾う（何度実行しても同じ結果）
 const scheduled = async (controller, env, ctx) => {
   ctx.waitUntil(
@@ -24,6 +25,23 @@ const scheduled = async (controller, env, ctx) => {
       const db = await getDb(env);
       // 5 分ごと: おすすめ設定のないチェックポイントに自動で入れる
       if (controller?.cron === "*/5 * * * *") {
+        // アプリの通知: 12:00 JST に朝のランキングに入った人へ（1 日 1 通）、日曜 19:00 JST に 1 週間の反応のまとめ（週 1 通）。
+        // 送ったことは push_sends に残すので、同じ時間帯の 5 分ごとの回が重なっても 2 通目は送らない
+        const jstNow = new Date((getNow() + 9 * 3600) * 1000);
+        if (jstNow.getUTCHours() === 12 && jstNow.getUTCMinutes() < 10) {
+          const ranking = await runRankingPush({ env, db, core: env.SYSTEM_CORE ?? null, now: getNow() }).catch((error) => {
+            console.log(JSON.stringify({ event: "app_push.ranking_failed", message: String(error?.message ?? error) }));
+            return null;
+          });
+          if (ranking && (ranking.sent ?? 0) > 0) console.log(JSON.stringify({ event: "app_push.ranking_done", ...ranking }));
+        }
+        if (jstNow.getUTCDay() === 0 && jstNow.getUTCHours() === 19 && jstNow.getUTCMinutes() < 10) {
+          const digest = await runWeeklyDigestPush({ env, db, core: env.SYSTEM_CORE ?? null, activity: env.SYSTEM_ACTIVITY ?? null, now: getNow() }).catch((error) => {
+            console.log(JSON.stringify({ event: "app_push.digest_failed", message: String(error?.message ?? error) }));
+            return null;
+          });
+          if (digest && (digest.sent ?? 0) > 0) console.log(JSON.stringify({ event: "app_push.digest_done", ...digest }));
+        }
         const retention = await runGenerationRetention(env).catch((error) => {
           console.log(JSON.stringify({ event: "generation.retention.failed", message: String(error?.message ?? error) }));
           return null;
