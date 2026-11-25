@@ -3,7 +3,8 @@ import { cloudflareFixedUsd, fetchUsdJpy } from "./costs"
 
 /**
  * 維持費の内訳（/admin/costs）。今の構成で 1 か月動かしたらいくらかを出す
- * - RunPod: 今ある Pod を GraphQL で読み、役割（名前の頭）ごとの 1 日の稼働時間 × 時間単価で月額にする。保存領域・止めた Pod のディスクは今の消費額から Pod の分を引いた残り
+ * - RunPod: 今ある Pod を GraphQL で読み、役割（名前の頭）ごとの 1 日の稼働時間 × 時間単価で月額にする。保存領域・止めた Pod のディスクは今の消費額から Pod の分を引いた残り。
+ *   夜の台・試験用の台（昼は一覧にない）は直近 7 日の請求の Pod 別の実額の平均
  * - ほかのサービス: 保存済みの日別（analytics_daily.metrics.costs）の直近 7 日の平均 × 30
  */
 
@@ -95,6 +96,47 @@ export var estimateRunpod = (myself) => {
   };
 };
 
+/**
+ * 夜の Pod は毎晩作って 2 時に消すので、昼に読むと一覧にない（名前も夜ごとに変わる）。
+ * 直近の日別の請求（runpod.byPod）のうち、今一覧にある夜以外の Pod を除いた分（夜の台・試験用の一時的な台）の 1 日平均で数える。
+ * 今動いている夜の Pod があれば、その行の月額をこの平均に置き換える（二重に数えない）
+ */
+export var addRecentNightPods = (runpod, recentDays) => {
+  const listed = new Set(runpod.pods.filter((pod) => pod.role !== "night").map((pod) => pod.id));
+  const withPods = recentDays.filter((day) => day.costs?.items?.runpod?.byPod);
+  if (!withPods.length) return runpod;
+  let usd = 0;
+  for (const day of withPods) {
+    for (const [podId, amount] of Object.entries(day.costs.items.runpod.byPod)) {
+      if (!listed.has(podId)) usd += toNumber(amount);
+    }
+  }
+  const dailyUsd = usd / withPods.length;
+  const monthlyUsd = round(dailyUsd * DAYS_PER_MONTH);
+  const nightPods = runpod.pods.filter((pod) => pod.role === "night");
+  const others = runpod.pods.filter((pod) => pod.role !== "night");
+  const current = nightPods[0];
+  const row = {
+    id: current?.id ?? "night-recent",
+    name: `${current ? `${current.name}・` : ""}直近 ${withPods.length} 日の実額の平均（毎晩作って消す台・試験用の台）`,
+    role: "night",
+    roleLabel: "夜間・一時的な台",
+    status: current?.status ?? "EXITED",
+    gpu: current?.gpu ?? null,
+    gpuCount: current?.gpuCount ?? 1,
+    costPerHr: round(dailyUsd / NIGHT_HOURS_PER_DAY, 3),
+    hoursPerDay: NIGHT_HOURS_PER_DAY,
+    startedAt: current?.startedAt ?? null,
+    monthlyUsd,
+  };
+  const removed = nightPods.reduce((total, pod) => total + pod.monthlyUsd, 0);
+  return {
+    ...runpod,
+    pods: [...others, row].sort((a, b) => b.monthlyUsd - a.monthlyUsd),
+    monthlyUsd: round(runpod.monthlyUsd - removed + monthlyUsd),
+  };
+};
+
 /** 日別の費用の直近 N 日の平均（1 日あたり円）と、細目（Cloudflare の項目・Google の SKU・xAI のモデル）の平均 */
 export var averageServices = (days) => {
   const withCosts = days.filter((day) => day.costs?.items);
@@ -167,7 +209,7 @@ export var getCostBreakdown = async (env, db, nowSeconds, { fresh = false } = {}
     ].sort((a, b) => b.monthlyJpy - a.monthlyJpy);
     cloudflare.plans = cloudflarePlans.plans;
   }
-  const runpod = myself ? estimateRunpod(myself) : null;
+  const runpod = myself ? addRecentNightPods(estimateRunpod(myself), days.slice(-RECENT_DAYS)) : null;
   const runpodMonthlyJpy = runpod ? Math.round(runpod.monthlyUsd * fxUsdJpy) : null;
   // RunPod が読めなかったときは日別の平均で代わりにする
   const runpodFallbackJpy = (() => {

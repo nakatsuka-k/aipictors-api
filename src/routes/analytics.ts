@@ -9,6 +9,7 @@ import {
   getLiveProfitAndLoss,
   jstDayBefore,
   listAnalyticsDays,
+  recollectCostItems,
 } from "../lib/analytics"
 import { listUsersMonths, nextMonth } from "../lib/analytics-users"
 import { getCostBreakdown } from "../lib/cost-breakdown"
@@ -77,6 +78,25 @@ analyticsRoutes.post("/collect", async (c) => {
   for (const day of days) {
     const { metrics } = await collectAnalyticsDay(c.env, db, day);
     results.push({ day, errors: metrics.errors });
+  }
+  return json({ results });
+});
+
+/**
+ * 費用だけを集め直す（数え方を直したとき。生成数・利用者などは読まない）
+ * { from: "YYYY-MM-DD", to: "YYYY-MM-DD", only: ["openai"] }。1 回 31 日まで
+ */
+analyticsRoutes.post("/costs/collect", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const body = await c.req.json().catch(() => ({}));
+  const pattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!pattern.test(body.from ?? "") || !pattern.test(body.to ?? "") || !Array.isArray(body.only)) {
+    return json({ error: "Invalid range" }, 400);
+  }
+  const db = await getDb(c.env);
+  const results = [];
+  for (let t = Date.parse(`${body.from}T00:00:00Z`); t <= Date.parse(`${body.to}T00:00:00Z`) && results.length < 31; t += 86400000) {
+    results.push(await recollectCostItems(c.env, db, new Date(t).toISOString().slice(0, 10), body.only));
   }
   return json({ results });
 });

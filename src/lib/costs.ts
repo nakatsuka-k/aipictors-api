@@ -5,7 +5,7 @@
  * - Cloudflare: 使用量 × 定価（無料枠は月の量を 30 で割って日ごとに引く）＋契約（月額は 30 日、年額は 365 日で割る）
  * - RunPod: 請求 API の時間ごとの実額（Pod と保存領域）
  * - Google（Gemini API）: BigQuery の請求エクスポートの実額（クレジット差し引き後）
- * - OpenAI（組織 techpage）: Costs API の実額。日ごとの区切りが UTC なので、同じ日付の UTC の 1 日分を入れる
+ * - OpenAI（組織 techpage）: Costs API の実額のうち Aipictors のキーの分だけ。日ごとの区切りが UTC なので、同じ日付の UTC の 1 日分を入れる
  * - xAI（Grok）: 管理 API の利用額（USD）。日本時間の範囲で聞ける
  * どれかが失敗しても取れたところだけ返す（errors に理由）
  */
@@ -30,6 +30,12 @@ var NOT_REACHING_WORKER = new Set(["block", "managed_challenge", "challenge", "j
 var GCP_PROJECT = "gen-lang-client-0028298935";
 var GCP_DATASET = "billing_export";
 var FALLBACK_USD_JPY = 155;
+
+/**
+ * OpenAI の組織 techpage はほかの案件・OpenClaw と共用なので、Aipictors のキーだけ数える（キーの id は管理画面の API keys で見る）。
+ * OPENAI_AIPICTORS_KEY_IDS（カンマ区切り）で上書きできる
+ */
+var OPENAI_AIPICTORS_KEY_IDS = ["key_WzzNWEEDQaebONu8"]; // Aipictors-お題提案機能
 
 var toNumber = (value) => {
   const n = Number(value ?? 0);
@@ -358,11 +364,13 @@ export var collectGoogleCost = async (serviceAccountJson, range) => {
   return { pending: false, amount: round(amount, 2), currency, bySku };
 };
 
-/** OpenAI: 組織の費用（Costs API は UTC の 1 日ごと） */
-export var collectOpenaiCost = async (adminKey, day) => {
+/**
+ * OpenAI: Aipictors のキーの費用（Costs API は UTC の 1 日ごと）。otherUsd は組織のほかのキーの分（合計には入れない）
+ */
+export var collectOpenaiCost = async (adminKey, day, keyIds = OPENAI_AIPICTORS_KEY_IDS) => {
   if (!adminKey) return null;
   const start = Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000);
-  const params = new URLSearchParams({ start_time: String(start), end_time: String(start + 86400), bucket_width: "1d", limit: "1" });
+  const params = new URLSearchParams({ start_time: String(start), end_time: String(start + 86400), bucket_width: "1d", limit: "1", group_by: "api_key_id" });
   // Costs API は 1 分 10 回まで。まとめて集め直すときに当たるので少し待って取り直す
   let response;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -375,11 +383,21 @@ export var collectOpenaiCost = async (adminKey, day) => {
   }
   const body = await response.json();
   if (!response.ok) throw new Error(`openai costs ${response.status}: ${body.error?.message ?? ""}`.slice(0, 160));
+  const ours = new Set(keyIds);
   let usd = 0;
+  let otherUsd = 0;
   for (const bucket of body.data ?? []) {
-    for (const result of bucket.results ?? []) usd += toNumber(result.amount?.value);
+    for (const result of bucket.results ?? []) {
+      if (ours.has(result.api_key_id)) usd += toNumber(result.amount?.value);
+      else otherUsd += toNumber(result.amount?.value);
+    }
   }
-  return { usd: round(usd) };
+  return { usd: round(usd), otherUsd: round(otherUsd), keyIds: [...ours] };
+};
+
+var openaiKeyIds = (env) => {
+  const ids = String(env.OPENAI_AIPICTORS_KEY_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  return ids.length ? ids : OPENAI_AIPICTORS_KEY_IDS;
 };
 
 var toTokyoText = (seconds) =>
@@ -427,6 +445,8 @@ export var fetchUsdJpy = async () => {
  * 返り値の jpy が円の合計。各サービスの jpy も付ける
  */
 export var collectCosts = async (env, day, range, options = {}) => {
+  // options.only: 指定したサービスだけ取る（集め直し用）
+  const want = (name) => !options.only || options.only.includes(name);
   const errors = [];
   const safe = async (name, run) => {
     try {
@@ -438,11 +458,11 @@ export var collectCosts = async (env, day, range, options = {}) => {
   };
   const [fx, cloudflare, runpod, google, openai, xai] = await Promise.all([
     options.fxUsdJpy ? options.fxUsdJpy : safe("fx", fetchUsdJpy),
-    safe("cloudflare", () => collectCloudflareCost(env.CF_BILLING_TOKEN, range)),
-    safe("runpod", () => collectRunpodCost(env.RUNPOD_API_KEY, range)),
-    safe("google", () => collectGoogleCost(env.GCP_BILLING_SA_JSON, range)),
-    options.skipOpenai ? null : safe("openai", () => collectOpenaiCost(env.OPENAI_ADMIN_KEY, day)),
-    safe("xai", () => collectXaiCost(env.XAI_MANAGEMENT_KEY, env.XAI_TEAM_ID, range)),
+    want("cloudflare") ? safe("cloudflare", () => collectCloudflareCost(env.CF_BILLING_TOKEN, range)) : null,
+    want("runpod") ? safe("runpod", () => collectRunpodCost(env.RUNPOD_API_KEY, range)) : null,
+    want("google") ? safe("google", () => collectGoogleCost(env.GCP_BILLING_SA_JSON, range)) : null,
+    options.skipOpenai || !want("openai") ? null : safe("openai", () => collectOpenaiCost(env.OPENAI_ADMIN_KEY, day, openaiKeyIds(env))),
+    want("xai") ? safe("xai", () => collectXaiCost(env.XAI_MANAGEMENT_KEY, env.XAI_TEAM_ID, range)) : null,
   ]);
   const fxUsdJpy = fx ?? FALLBACK_USD_JPY;
   const toJpy = (usd) => Math.round(usd * fxUsdJpy);

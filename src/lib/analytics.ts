@@ -305,6 +305,37 @@ export var collectAnalyticsDay = async (env, db, day) => {
 };
 
 /**
+ * 保存済みの日の費用のうち、指定したサービスだけを取り直す（数え方を直したときの集め直し用。生成数・利用者などは読まない）
+ * 為替は保存したときの値を使う。行がない日・取れなかったサービスはそのまま
+ */
+var COST_SERVICES = ["cloudflare", "runpod", "google", "openai", "xai"];
+
+export var recollectCostItems = async (env, db, day, only) => {
+  const services = (only ?? []).filter((name) => COST_SERVICES.includes(name));
+  if (!services.length) return { day, skipped: "no services" };
+  const stored = await db.queryOne(`SELECT metrics FROM analytics_daily WHERE day = $1`, [day]);
+  if (!stored) return { day, skipped: "no row" };
+  const metrics = typeof stored.metrics === "string" ? JSON.parse(stored.metrics) : stored.metrics;
+  const costs = metrics.costs ?? { items: {}, errors: [] };
+  const fresh = await collectCosts(env, day, toJstDayRange(day), { only: services, fxUsdJpy: costs.fxUsdJpy });
+  const updated = [];
+  for (const name of services) {
+    if (!fresh.items[name]) continue;
+    costs.items = { ...costs.items, [name]: fresh.items[name] };
+    updated.push(name);
+  }
+  costs.fxUsdJpy = costs.fxUsdJpy ?? fresh.fxUsdJpy;
+  costs.jpy = Object.values(costs.items ?? {}).reduce((total, item) => total + toNumber(item.jpy), 0);
+  metrics.costs = costs;
+  await db.execute(`UPDATE analytics_daily SET metrics = $1, updated_at = $2 WHERE day = $3`, [
+    JSON.stringify(metrics),
+    Math.floor(Date.now() / 1000),
+    day,
+  ]);
+  return { day, updated, jpy: costs.jpy, errors: fresh.errors };
+};
+
+/**
  * 利用者の数字だけを集め直す（始める前の日を埋めるとき。Stripe や費用は呼ばない）
  * 行がない日は作らない
  */
