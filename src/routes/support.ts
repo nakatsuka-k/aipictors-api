@@ -2,6 +2,7 @@
 import { Hono as Hono2 } from "hono"
 import { requireInternalAuth } from "../lib/auth"
 import { getDb, getGenlogDb, getNow } from "../lib/db"
+import { postStaffNotice } from "../lib/discord"
 import { json } from "../lib/json"
 import {
   SUPPORT_AI_DAILY_LIMIT,
@@ -214,6 +215,57 @@ supportRoutes.post("/feedback", async (c) => {
     [messageId, userId, body.helpful === true ? 1 : -1]
   );
   return json({ error: null, data: { ok: true } });
+});
+
+/**
+ * 生成画像の報告（アプリの生成結果の「報告」）。新しいお問い合わせとして運営の確認待ちに入れ、運営チャンネルにも知らせる
+ */
+var GENERATION_REPORT_REASONS = {
+  SEXUAL: "性的な内容",
+  MINOR: "未成年に見える人物の性的・不適切な描写",
+  VIOLENCE: "暴力的・グロテスク",
+  HATE: "差別・ヘイト",
+  REAL_PERSON: "実在の人物",
+  ILLEGAL: "違法・危険な内容",
+  OTHER: "その他",
+};
+
+supportRoutes.post("/report-generation", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const userId = body.userId ? String(body.userId) : null;
+  const reason = typeof body.reason === "string" ? body.reason : "";
+  const nanoid = typeof body.nanoid === "string" ? body.nanoid.trim().slice(0, 64) : "";
+  const imageUrl = typeof body.imageUrl === "string" && /^https:\/\/[^\s]+$/.test(body.imageUrl) ? body.imageUrl.slice(0, 500) : "";
+  const detail = typeof body.detail === "string" ? body.detail.trim().slice(0, 1000) : "";
+  if (!userId) return json({ error: "userId is required" }, 400);
+  if (!GENERATION_REPORT_REASONS[reason]) return json({ error: "報告の理由を選んでください" }, 400);
+  if (!nanoid && !imageUrl) return json({ error: "報告する画像がわかりません" }, 400);
+  const db = await loadDb(c);
+  const ticket = await createTicket(db, {
+    userId,
+    userName: body.userName ?? null,
+    passType: body.passType ?? null,
+    contactEmail: body.contactEmail ?? null
+  });
+  const label = GENERATION_REPORT_REASONS[reason];
+  const text = [
+    `【生成画像の報告】${label}`,
+    nanoid ? `生成ID: ${nanoid}` : null,
+    imageUrl ? `画像: ${imageUrl}` : null,
+    detail ? `詳細: ${detail}` : null
+  ].filter(Boolean).join("\n");
+  const created = [await addMessage(db, { ticketId: ticket.id, userId, role: "user", body: text })];
+  created.push(
+    await addMessage(db, {
+      ticketId: ticket.id,
+      userId,
+      role: "system",
+      body: "生成画像の報告を受け付けました。運営が確認し、必要に応じて対応します。ご協力ありがとうございます。"
+    })
+  );
+  await markEscalated(db, ticket.id, { category: "generation_report", summary: `生成画像の報告: ${label}` });
+  await postStaffNotice(c.env, `🚩 アプリから生成画像の報告（${label}）ユーザー ${userId}${nanoid ? ` / 生成ID ${nanoid}` : ""}${detail ? `\n詳細: ${detail.slice(0, 300)}` : ""}\nお問い合わせ #${ticket.id}（/admin/support）`);
+  return json({ error: null, data: { ticket: await getTicket(db, ticket.id), messages: created } });
 });
 
 /**

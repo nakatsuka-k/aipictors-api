@@ -146,6 +146,25 @@ export const discordFetch = async (props) => {
 const botFetch = (env, props) =>
   discordFetch({ ...props, auth: `Bot ${env.DISCORD_BOT_TOKEN}`, fetch: env.__fetch })
 
+/** 運営チャンネル（🔒運営）。生成画像の報告などを知らせる */
+export const DISCORD_STAFF_CHANNEL_ID = "1134466158360281170"
+
+/** 運営チャンネルに知らせる（失敗しても呼び出し元は止めない） */
+export const postStaffNotice = async (env, content) => {
+  if (!env.DISCORD_BOT_TOKEN) return false
+  try {
+    await botFetch(env, {
+      method: "POST",
+      path: `/channels/${env.DISCORD_STAFF_CHANNEL_ID ?? DISCORD_STAFF_CHANNEL_ID}/messages`,
+      body: { allowed_mentions: { parse: [] }, content: String(content).slice(0, 1900) },
+    })
+    return true
+  } catch (error) {
+    console.log(JSON.stringify({ event: "discord.staff_notice_failed", message: String(error?.message ?? error) }))
+    return false
+  }
+}
+
 const postOAuthToken = async (env, params) => {
   const fetcher = env.__fetch ?? fetch
   const response = await fetcher(`${DISCORD_API}/oauth2/token`, {
