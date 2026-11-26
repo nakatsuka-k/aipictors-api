@@ -37,6 +37,8 @@ export type UserModelRow = {
   import_error?: string | null
   recommended_settings?: string | null
   addnet_hash?: string | null
+  // 登録者が作者か（1 / 0 / NULL = 未申告）
+  is_original?: number | string | null
 }
 
 export const parseJsonArray = (value: string | null | undefined): string[] => {
@@ -202,6 +204,10 @@ export const toUserModel = (row: UserModelRow) => {
     sourceLicense: parseSourceLicense(row.source_license),
     sourceLicenseAllowsOtherServices: sourceLicenseAllowsOtherServices(parseSourceLicense(row.source_license)),
     sourceBaseModel: row.source_base_model ?? null,
+    // 登録者が作者か（未申告は null）
+    isOriginal: row.is_original === null || row.is_original === undefined ? null : Number(row.is_original) === 1,
+    // 出典を登録者が直せるか（Civitai から自動で入れたものは直せない）
+    sourceEditable: !row.source_license && !row.import_status,
     importStatus: row.import_status ?? null,
     // 登録者が勧める生成設定（未設定は null）
     recommendedSettings: readRecommendedSettings(row.recommended_settings),

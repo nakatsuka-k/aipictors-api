@@ -77,6 +77,31 @@ export const parseEditable = (input: Record<string, unknown>) => {
   }
 }
 
+// 作者の申告（自分で作った / 他の人のモデルなら元の URL と作者名）。送られなかった項目は undefined
+export const parseAuthorship = (input: Record<string, unknown>) => {
+  const isOriginal = input.isOriginal
+  if (isOriginal !== undefined && isOriginal !== null && typeof isOriginal !== "boolean") {
+    throw bad("INVALID_INPUT", "isOriginal は true / false で指定してください")
+  }
+  const sourceUrl = input.sourceUrl === null ? null : optionalString(input.sourceUrl, "sourceUrl", 2000)?.trim()
+  if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) {
+    throw bad("INVALID_INPUT", "元のモデルの URL は http(s):// から始まる URL を入力してください")
+  }
+  const sourceCreator =
+    input.sourceCreator === null ? null : optionalString(input.sourceCreator, "sourceCreator", 100)?.trim()
+  return {
+    isOriginal: isOriginal as boolean | null | undefined,
+    sourceUrl: sourceUrl || (sourceUrl === undefined ? undefined : null),
+    sourceCreator: sourceCreator || (sourceCreator === undefined ? undefined : null),
+  }
+}
+
+export const sourceRequiredError = () =>
+  bad(
+    "SOURCE_REQUIRED",
+    "他の人が作ったモデルは、元のモデルの URL と作者名を入力してください（自分で作ったモデルは「自分で作った」を選んでください）",
+  )
+
 export const requireUserId = (value: unknown) => {
   if (typeof value !== "string" || value.length === 0 || value.length > 200) {
     throw bad("INVALID_INPUT", "userId が必要です")

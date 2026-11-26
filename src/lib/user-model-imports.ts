@@ -265,17 +265,34 @@ const pickSafeImages = (images: CivitaiImage[] | undefined) =>
   )
 
 /**
- * ファイルのハッシュから Civitai の全年齢の作例を探す（見つからなければ null）
- * サムネイルなしの登録を減らすためのものなので、通信に失敗しても登録の処理は止めない
+ * ファイルのハッシュから Civitai の元のモデル（出典・作者・ライセンス）と全年齢の作例を探す（見つからなければ null）
+ * アップロードされた他の人のモデルに作者を表示するためと、サムネイルなしの登録を減らすためのもの。
+ * 通信に失敗しても登録の処理は止めない
  */
-export const findCivitaiImagesBySha256 = async (deps: ImportSourceDeps, sha256: string) => {
+export const findCivitaiBySha256 = async (deps: ImportSourceDeps, sha256: string) => {
   try {
     const version = await fetchCivitaiJson<CivitaiVersion>(deps, `/model-versions/by-hash/${sha256}`)
     const images = pickSafeImages(version.images)
-    if (images.length === 0) return null
+    const model =
+      typeof version.modelId === "number"
+        ? await fetchCivitaiJson<CivitaiModel>(deps, `/models/${version.modelId}`).catch(() => null)
+        : null
     return {
-      thumbnailUrl: civitaiImageUrl(images[0].url!, 450),
-      sampleImageUrls: images.slice(0, 8).map((image) => civitaiImageUrl(image.url!, 1024)),
+      images:
+        images.length === 0
+          ? null
+          : {
+              thumbnailUrl: civitaiImageUrl(images[0].url!, 450),
+              sampleImageUrls: images.slice(0, 8).map((image) => civitaiImageUrl(image.url!, 1024)),
+            },
+      source: model
+        ? {
+            url: `https://civitai.com/models/${model.id}?modelVersionId=${version.id}`,
+            creator: model.creator?.username?.trim() || null,
+            license: normalizeCivitaiLicense(model),
+            baseModel: version.baseModel?.trim() || null,
+          }
+        : null,
     }
   } catch {
     return null

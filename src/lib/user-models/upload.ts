@@ -13,7 +13,7 @@ import {
   userModelR2Key,
 } from "./common"
 import type { Db, ModelBucket, UserModelDeps, UserModelKind, UserModelStatus } from "./common"
-import { bad, oneOf, optionalString, parseEditable, requireUserId } from "./input"
+import { bad, oneOf, optionalString, parseAuthorship, parseEditable, requireUserId, sourceRequiredError } from "./input"
 import { getRow, getUserModelLimit, requireRow } from "./queries"
 import { createSafetensorsValidator } from "./safetensors"
 import { toUserModel } from "./serialize"
@@ -68,6 +68,10 @@ export type ReserveUserModelInput = {
     license: UserModelSourceLicense | null
     baseModel: string | null
   }
+  /** URL からの取り込み（import_status を入れる）。アップロードで出典を入れるときは false */
+  isImport?: boolean
+  /** 登録者が作者か（未申告は null） */
+  isOriginal?: boolean | null
   existingSizeMustMatch?: boolean
 }
 
@@ -113,6 +117,8 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
       fields.recommendedSettings ? JSON.stringify(fields.recommendedSettings) : null,
       // 上限は今月（JST）登録したファイルの合計サイズで数える
       jstMonthRange(deps.now).start,
+      input.isImport ?? Boolean(input.source),
+      input.isOriginal === undefined || input.isOriginal === null ? null : input.isOriginal ? 1 : 0,
     ]
   // 判定に使う値は INSERT の前に読む（同じトランザクション。D1 は書き込みを 1 本ずつ順に実行するのでロックは要らない）
   const [stateResult, insertResult] = await deps.db.batch([
@@ -130,14 +136,14 @@ export const reserveUserModelRow = async (deps: UserModelDeps, input: ReserveUse
         INSERT INTO user_models(
           id, user_id, kind, name, description, base_model, trigger_words, recommended_weight, rating, tags,
           thumbnail_url, sample_image_urls, original_filename, sha256, size_bytes, r2_key, status, created_at, updated_at,
-          source_url, source_creator, source_license, source_base_model, import_status, recommended_settings
+          source_url, source_creator, source_license, source_base_model, import_status, recommended_settings, is_original
         )
         SELECT $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3,
                CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END, $16,
                CASE WHEN EXISTS (SELECT 1 FROM existing) THEN 'READY' ELSE 'UPLOADING' END, $17, $17,
                $20, $21, $22, $23,
-               CASE WHEN $20 IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
-               $24
+               CASE WHEN $20 IS NULL OR NOT $26 THEN NULL WHEN EXISTS (SELECT 1 FROM existing) THEN 'DONE' ELSE 'QUEUED' END,
+               $24, $27
          WHERE (SELECT bytes FROM used)
                + CASE WHEN EXISTS (SELECT 1 FROM existing) THEN (SELECT size_bytes FROM existing) ELSE $15 END <= $18
            AND NOT EXISTS (SELECT 1 FROM mine)
@@ -195,6 +201,7 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
   }
   const editable = parseEditable(input)
   if (!editable.name) throw bad("INVALID_INPUT", "name を入力してください")
+  const authorship = parseAuthorship(input)
 
   const { maxBytes } = await getUserModelSettings(deps.db)
   if (sizeBytes > maxBytes[kind]) {
@@ -204,13 +211,19 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
       `${kind === "LORA" ? "LoRA" : "チェックポイント"} は ${Math.floor(maxBytes[kind] / 1024 / 1024)}MB までです`,
     )
   }
+  // Civitai に同じファイルがあれば、元のモデル・作者・ライセンスを出典として入れる（登録者が作者に見えないように）
+  const found = deps.findBySha256 ? await deps.findBySha256(sha256) : null
+  // それ以外は「自分で作った」か、元のモデルの URL と作者名の申告が要る
+  const manualSource =
+    authorship.isOriginal !== true && authorship.sourceUrl && authorship.sourceCreator
+      ? { url: authorship.sourceUrl, creator: authorship.sourceCreator, license: null, baseModel: null }
+      : null
+  if (!found?.source && authorship.isOriginal !== true && !manualSource) throw sourceRequiredError()
+
   // サムネイルのないモデルを作らない: 選んだ画像 → Civitai の全年齢の作例の順に探す
   const samples = editable.sampleImageUrls ?? []
-  const found =
-    editable.thumbnailUrl || samples.length > 0 || !deps.findImagesBySha256
-      ? null
-      : await deps.findImagesBySha256(sha256)
-  const thumbnailUrl = editable.thumbnailUrl ?? samples[0] ?? found?.thumbnailUrl
+  const foundImages = editable.thumbnailUrl || samples.length > 0 ? null : (found?.images ?? null)
+  const thumbnailUrl = editable.thumbnailUrl ?? samples[0] ?? foundImages?.thumbnailUrl
   if (!thumbnailUrl) {
     throw bad("THUMBNAIL_REQUIRED", "サムネイルにする画像を選んでください")
   }
@@ -233,8 +246,11 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
       ...editable,
       name: editable.name,
       thumbnailUrl,
-      sampleImageUrls: samples.length > 0 ? samples : (found?.sampleImageUrls ?? samples),
+      sampleImageUrls: samples.length > 0 ? samples : (foundImages?.sampleImageUrls ?? samples),
     },
+    source: found?.source ?? manualSource ?? undefined,
+    isImport: false,
+    isOriginal: found?.source ? null : authorship.isOriginal === true ? true : manualSource ? false : null,
   })
   if (inserted === "READY") {
     return {

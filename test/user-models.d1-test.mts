@@ -105,8 +105,14 @@ const call = async (method: string, path: string, body?: unknown, headers: Recor
   const res = await app.request(`/internal/user-models${path}`, init, env)
   return res
 }
+// 既存のアップロードのテストは「自分で作った」として送る（作者の申告のテストでは明示する）
+const withAuthorship = (method: string, path: string, body: unknown) =>
+  method === "POST" && path === "/uploads" && body && typeof body === "object" &&
+  !("isOriginal" in body) && !("sourceUrl" in body) && !("noAuthorship" in body)
+    ? { ...body, isOriginal: true }
+    : body
 const callJson = async (method: string, path: string, body?: unknown) => {
-  const res = await call(method, path, body)
+  const res = await call(method, path, withAuthorship(method, path, body))
   return { status: res.status, body: (await res.json()) as any }
 }
 
@@ -620,6 +626,13 @@ const fakeFetch = async (input: string, init: RequestInit = {}) => {
         ],
       })
     }
+    for (const entry of civitai.models.values()) {
+      for (const v of entry.model.modelVersions) {
+        if (v.files.some((f: any) => String(f.hashes?.SHA256 ?? "").toLowerCase() === m![1])) {
+          return Response.json({ ...v, modelId: entry.model.id })
+        }
+      }
+    }
     return new Response("not found", { status: 404 })
   }
   m = /^\/api\/v1\/model-versions\/(\d+)$/.exec(url.pathname)
@@ -739,7 +752,7 @@ const icall = async (method: string, path: string, body?: unknown) => {
     {
       method,
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(withAuthorship(method, path, body)),
     },
     env,
   )
@@ -819,6 +832,49 @@ await t("アップロード: サムネイルがなければ Civitai の全年齢
   assert.equal(sample.status, 200, JSON.stringify(sample.body))
   const sampleRow = await db.queryOne("SELECT thumbnail_url FROM user_models WHERE id = $1", [sample.body.data.modelId])
   assert.equal(sampleRow.thumbnail_url, "https://example.com/first.png")
+})
+
+await t("アップロード: Civitai に同じファイルがあれば作者・出典・ライセンスを付け、なければ作者の申告が要る", async () => {
+  const base = { kind: "LORA", filename: "x.safetensors", sizeBytes: 1000, name: "x", thumbnailUrl: "https://example.com/t.png" }
+  const sha = await addCivitaiModel({ id: 300, versionId: 301, file: makeSafetensors(3000, undefined, 31) })
+  const matched = await icall("POST", "/uploads", { ...base, userId: "auth1", sha256: sha, noAuthorship: true })
+  assert.equal(matched.status, 200, JSON.stringify(matched.body))
+  const m = (await icall("GET", `/${matched.body.data.modelId}`)).body.data
+  assert.equal(m.sourceUrl, "https://civitai.com/models/300?modelVersionId=301")
+  assert.equal(m.sourceCreator, "alice")
+  assert.deepEqual(m.sourceLicense.allowCommercialUse, ["Image", "RentCivit"])
+  assert.equal(m.importStatus, null)
+  assert.equal(m.isOriginal, null)
+  assert.equal(m.sourceEditable, false)
+  // 見つからず申告もない → 断る
+  const none = await icall("POST", "/uploads", { ...base, userId: "auth2", sha256: "f1".repeat(32), noAuthorship: true })
+  assert.equal(none.body.code, "SOURCE_REQUIRED")
+  const half = await icall("POST", "/uploads", { ...base, userId: "auth2", sha256: "f1".repeat(32), isOriginal: false, sourceUrl: "https://example.com/m" })
+  assert.equal(half.body.code, "SOURCE_REQUIRED")
+  // 元の URL と作者名を申告
+  const manual = await icall("POST", "/uploads", {
+    ...base, userId: "auth2", sha256: "f1".repeat(32), isOriginal: false, sourceUrl: "https://example.com/m", sourceCreator: "bob",
+  })
+  assert.equal(manual.status, 200, JSON.stringify(manual.body))
+  const mm = (await icall("GET", `/${manual.body.data.modelId}`)).body.data
+  assert.equal(mm.sourceUrl, "https://example.com/m")
+  assert.equal(mm.sourceCreator, "bob")
+  assert.equal(mm.isOriginal, false)
+  assert.equal(mm.importStatus, null)
+  assert.equal(mm.sourceEditable, true)
+  // 自分で作った
+  const own = await icall("POST", "/uploads", { ...base, userId: "auth3", sha256: "f2".repeat(32), isOriginal: true })
+  const om = (await icall("GET", `/${own.body.data.modelId}`)).body.data
+  assert.equal(om.isOriginal, true)
+  assert.equal(om.sourceUrl, null)
+  // 編集で申告を直せる（自動で入れた出典は直せない）
+  const edited = await icall("PATCH", `/${own.body.data.modelId}`, { userId: "auth3", isOriginal: false, sourceUrl: "https://example.com/z", sourceCreator: "carol" })
+  assert.equal(edited.status, 200, JSON.stringify(edited.body))
+  assert.equal(edited.body.data.sourceCreator, "carol")
+  assert.equal(edited.body.data.isOriginal, false)
+  const locked = await icall("PATCH", `/${matched.body.data.modelId}`, { userId: "auth1", isOriginal: true })
+  assert.equal(locked.body.data.sourceCreator, "alice")
+  assert.equal(locked.body.data.isOriginal, null)
 })
 
 let importedId = ""

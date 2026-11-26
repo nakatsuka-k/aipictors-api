@@ -15,8 +15,18 @@ export type UserModelDeps = {
   db: Db
   bucket: ModelBucket
   now: number
-  /** ファイルのハッシュから全年齢の作例を探す（サムネイルが未設定の登録で使う） */
-  findImagesBySha256?: (sha256: string) => Promise<{ thumbnailUrl: string; sampleImageUrls: string[] } | null>
+  /** ファイルのハッシュから元のモデル（出典・作者・ライセンス）と全年齢の作例を探す（アップロードで使う） */
+  findBySha256?: (sha256: string) => Promise<{
+    images: { thumbnailUrl: string; sampleImageUrls: string[] } | null
+    source: { url: string; creator: string | null; license: UserModelSourceLicenseInput | null; baseModel: string | null } | null
+  } | null>
+}
+
+type UserModelSourceLicenseInput = {
+  allowCommercialUse: string[]
+  allowDerivatives: boolean | null
+  allowNoCredit: boolean | null
+  allowDifferentLicense: boolean | null
 }
 
 export const USER_MODEL_KINDS = ["LORA", "CHECKPOINT"] as const

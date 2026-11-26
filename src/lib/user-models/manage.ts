@@ -1,7 +1,7 @@
 // 更新・削除・利用の記録・ファイルの配信
 import { UserModelError, isUserModelId } from "./common"
 import type { Db, UserModelDeps } from "./common"
-import { bad, parseEditable, requireUserId } from "./input"
+import { bad, parseAuthorship, parseEditable, requireUserId, sourceRequiredError } from "./input"
 import { requireRow } from "./queries"
 import { parseJsonArray, parseRecommendedSettings, readRecommendedSettings, toUserModel } from "./serialize"
 import type { UserModelRecommendedSettings, UserModelRow } from "./serialize"
@@ -28,6 +28,17 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
     e.recommendedSettings !== undefined &&
     JSON.stringify(withoutSource(e.recommendedSettings)) === JSON.stringify(withoutSource(currentSettings))
   const nextSettings = isSettingsUnchanged ? currentSettings : e.recommendedSettings
+
+  // 作者の申告。Civitai から自動で入れた出典（ライセンスあり・取り込み）は登録者が変えられない
+  const a = parseAuthorship(input)
+  const sourceEditable = !row.source_license && !row.import_status
+  let authorship: { isOriginal: number; url: string | null; creator: string | null } | null = null
+  if (sourceEditable && a.isOriginal === true) {
+    authorship = { isOriginal: 1, url: null, creator: null }
+  } else if (sourceEditable && a.isOriginal === false) {
+    if (!a.sourceUrl || !a.sourceCreator) throw sourceRequiredError()
+    authorship = { isOriginal: 0, url: a.sourceUrl, creator: a.sourceCreator }
+  }
   const updated = await db.queryOne<UserModelRow>(
     `UPDATE user_models SET
         name = COALESCE($2, name),
@@ -41,7 +52,10 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
         sample_image_urls = COALESCE($11, sample_image_urls),
         updated_at = $12,
         recommended_settings = CASE WHEN $13 THEN $14 ELSE recommended_settings END,
-        recommended_settings_auto_at = CASE WHEN $13 THEN COALESCE(recommended_settings_auto_at, $12) ELSE recommended_settings_auto_at END
+        recommended_settings_auto_at = CASE WHEN $13 THEN COALESCE(recommended_settings_auto_at, $12) ELSE recommended_settings_auto_at END,
+        is_original = CASE WHEN $15 THEN $16 ELSE is_original END,
+        source_url = CASE WHEN $15 THEN $17 ELSE source_url END,
+        source_creator = CASE WHEN $15 THEN $18 ELSE source_creator END
       WHERE id = $1 AND status <> 'DELETED'
       RETURNING *`,
     [
@@ -59,6 +73,10 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
       now,
       e.recommendedSettings !== undefined,
       nextSettings ? JSON.stringify(nextSettings) : null,
+      authorship !== null,
+      authorship?.isOriginal ?? null,
+      authorship?.url ?? null,
+      authorship?.creator ?? null,
     ],
   )
   if (!updated) throw new UserModelError(404, "NOT_FOUND", "モデルが見つかりません")

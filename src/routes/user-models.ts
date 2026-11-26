@@ -27,7 +27,7 @@ import {
 import {
   cancelUserModelImport,
   getUserModelImportStatus,
-  findCivitaiImagesBySha256,
+  findCivitaiBySha256,
   previewUserModelImport,
   startUserModelImport,
   type ImportSourceDeps,
@@ -126,7 +126,7 @@ export const createUserModelsRoutes = (
       return createUserModelUpload(
         {
           ...(await getDeps(c)),
-          findImagesBySha256: (sha256) => findCivitaiImagesBySha256(importDeps, sha256),
+          findBySha256: (sha256) => findCivitaiBySha256(importDeps, sha256),
         },
         await readJson(c),
       )
