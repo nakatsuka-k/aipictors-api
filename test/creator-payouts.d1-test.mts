@@ -18,6 +18,9 @@ const CORE = await coreMf.getD1Database("CORE")
 await CORE.prepare("CREATE TABLE wp_users (ID INTEGER PRIMARY KEY, user_registered TEXT NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0)").run()
 await CORE.prepare("CREATE TABLE ip_bindings (ip TEXT NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (ip, user_id))").run()
 await CORE.prepare("CREATE TABLE works (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, ageLimit INTEGER NOT NULL DEFAULT 0, is_deleted INTEGER NOT NULL DEFAULT 0)").run()
+await CORE.prepare("CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE)").run()
+await CORE.prepare("CREATE TABLE work_tags (work_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0)").run()
+await CORE.prepare("INSERT INTO tags(id, name) VALUES (1, 'オリジナル'), (2, '初音ミク')").run()
 
 // ---- Stripe のモック ----
 type Transfer = { id: string; amount: number; destination: string; transfer_group: string; reversed: boolean }
@@ -137,9 +140,11 @@ const newUser = async (daysAgo = 365) => {
   await CORE.prepare("INSERT INTO wp_users(ID, user_registered) VALUES (?, ?)").bind(id, new Date((realNow() - daysAgo * DAY) * 1000).toISOString()).run()
   return String(id)
 }
-const newWork = async (userId: string, ageLimit = 0) => {
+// 作品はふだん「オリジナル」タグ付き（プレミアムコインの推しはオリジナル作品だけ）。original=false で二次創作のタグにする
+const newWork = async (userId: string, ageLimit = 0, original = true) => {
   const id = nextWork++
   await CORE.prepare("INSERT INTO works(id, userId, ageLimit) VALUES (?, ?, ?)").bind(id, Number(userId), ageLimit).run()
+  await CORE.prepare("INSERT INTO work_tags(work_id, tag_id) VALUES (?, ?)").bind(id, original ? 1 : 2).run()
   return String(id)
 }
 // ウェブでコインを買う（coins が有料、bonus がおまけ）
@@ -190,6 +195,20 @@ await t("参加していない人への推しは今までどおり全部コイ�
   assert.equal(r.body.data.earnedCoins, 0)
   assert.equal(await premiumBalance(creator), 100)
   assert.equal((await earnings(creator)).length, 0)
+})
+
+await t("プレミアムコインの推し: 作品を通さないユーザーへの推しはどんな作品の人にも送れる。作品への推しはオリジナル作品だけ", async () => {
+  const fan = await newUser(); const creator = await newUser()
+  const fanWork = await newWork(creator, 0, false)
+  await buy(fan, 1000, 0)
+  const direct = await support(fan, creator, 10)
+  assert.equal(direct.status, 200, JSON.stringify(direct.body))
+  const onFanWork = await support(fan, creator, 10, { workId: fanWork })
+  assert.equal(onFanWork.status, 403)
+  assert.equal(onFanWork.body.code, "PREMIUM_SUPPORT_ORIGINAL_ONLY")
+  const originalWork = await newWork(creator, 0)
+  const onOriginal = await support(fan, creator, 10, { workId: originalWork })
+  assert.equal(onOriginal.status, 200, JSON.stringify(onOriginal.body))
 })
 
 await t("参加者への全年齢作品の推し: 有料コインは報酬（0.5 円/枚）になり、コインでは渡さない。pt は今までどおり", async () => {
@@ -244,7 +263,8 @@ await t("作品コメントの推しは source の作品で判定する。他人
   const own = await newWork(creator, 0)
   assert.equal((await support(fan, creator, 10, { source: `work-comment:${own}:${fan}:1` })).body.data.earnedCoins, 10)
   const others = await newWork(other, 0)
-  assert.equal((await support(fan, creator, 10, { workId: others })).body.data.earnedCoins, 0)
+  // 他人の作品を名乗ったプレミアムの推しは、受け取る人のオリジナル作品ではないので断る（報酬にもコインにもならない）
+  assert.equal((await support(fan, creator, 10, { workId: others })).status, 403)
 })
 
 await t("プロフィールの推し: R18 作品を公開している人には報酬にしない。全年齢だけの人には報酬", async () => {

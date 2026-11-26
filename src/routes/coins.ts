@@ -329,10 +329,10 @@ coinsRoutes.post("/support", async (c) => {
   if (parsed.output.coinType === "PREMIUM" && recipientSettings.rejectPremium) {
     return json({ error: PREMIUM_SUPPORT_REJECTED_MESSAGE, code: "PREMIUM_SUPPORT_REJECTED" }, 403);
   }
-  // プレミアムコインの推しはオリジナル作品（オリジナル系のタグ付き）への推しだけ。作品を通さない推し（プロフィール・アプリ）もプレミアムは不可
+  // 作品への推しのプレミアムコインはオリジナル作品（オリジナル系のタグ付き）だけ。作品を通さない、ユーザーへの推し（プロフィール・アプリ）はどんな作品を投稿している人にもプレミアムで推せる
   if (parsed.output.coinType === "PREMIUM") {
     const supportWorkId = parsed.output.workId === null || parsed.output.workId === void 0 ? workIdFromSupportSource(parsed.output.source) : String(parsed.output.workId);
-    if (!await isOriginalWorkForSupport(c.env.SYSTEM_CORE ?? null, supportWorkId, parsed.output.recipientUserId)) {
+    if (supportWorkId !== null && !await isOriginalWorkForSupport(c.env.SYSTEM_CORE ?? null, supportWorkId, parsed.output.recipientUserId)) {
       return json({ error: PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE, code: "PREMIUM_SUPPORT_ORIGINAL_ONLY" }, 403);
     }
   }
