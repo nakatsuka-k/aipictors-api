@@ -25,6 +25,7 @@ import { userModelsRoutes } from "./routes/user-models"
 import { userModelPickupRoutes } from "./routes/user-model-pickups"
 import { userRoutes } from "./routes/users"
 import { webhookRoutes } from "./routes/webhooks"
+import { workOriginalJudgmentRoutes } from "./routes/work-original-judgments"
 export const app = new Hono2();
 app.get("/healthz", (c) => {
   return json({ ok: true, service: "aipictors-api" });
@@ -34,6 +35,7 @@ app.route("/internal/creator-payouts", creatorPayoutRoutes);
 app.route("/internal/requests", coinRequestRoutes);
 app.route("/internal/open-requests", openRequestRoutes);
 app.route("/internal/comment-reactions", commentReactionRoutes);
+app.route("/internal/work-original-judgments", workOriginalJudgmentRoutes);
 app.route("/internal/app-push", appPushRoutes);
 app.route("/api/coins", publicCoinsRoutes);
 app.route("/internal/image-generation", imageGenerationRoutes);
