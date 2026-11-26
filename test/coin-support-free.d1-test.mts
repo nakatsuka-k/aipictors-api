@@ -131,6 +131,22 @@ assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium:
 assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore(null, true), "12"), { rejectPremium: false, rejectFreeReceive: false, rejectAll: false })
 assert.deepEqual(await recipient.getSupportRecipientSettings(fakeCore({ premium: 0, free: 0, all_support: 1 }), "12"), { rejectPremium: false, rejectFreeReceive: false, rejectAll: true })
 
+// プレミアムコインの推しはオリジナル系のタグ付きの、受け取る人の作品だけ（読めない・作品 id が無いときは不可）
+const tagCore = (row: unknown, fail = false) => {
+  const calls: unknown[][] = []
+  return {
+    calls,
+    prepare: () => ({ bind: (...args: unknown[]) => { calls.push(args); return { first: async () => { if (fail) throw new Error("x"); return row } } } }),
+  }
+}
+const hitCore = tagCore({ hit: 1 })
+assert.equal(await recipient.isOriginalWorkForSupport(hitCore, "100", "12"), true)
+assert.deepEqual(hitCore.calls[0].slice(0, 3), [100, 12, "オリジナル"])
+assert.equal(await recipient.isOriginalWorkForSupport(tagCore(null), "100", "12"), false)
+assert.equal(await recipient.isOriginalWorkForSupport(tagCore(null, true), "100", "12"), false)
+assert.equal(await recipient.isOriginalWorkForSupport(tagCore({ hit: 1 }), null, "12"), false)
+assert.equal(await recipient.isOriginalWorkForSupport(null, "100", "12"), false)
+
 console.log("coin-support-free ok")
 await d1.dispose()
 process.exit(0)

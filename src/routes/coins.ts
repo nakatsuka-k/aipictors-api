@@ -3,7 +3,8 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
-import { PREMIUM_SUPPORT_REJECTED_MESSAGE, SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
+import { PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE, PREMIUM_SUPPORT_REJECTED_MESSAGE, SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus, isOriginalWorkForSupport } from "../lib/coin-support/recipient"
+import { workIdFromSupportSource } from "../lib/creator-payouts/config"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
@@ -327,6 +328,13 @@ coinsRoutes.post("/support", async (c) => {
   // 受け取る人が「プレミアムコインでの推しを受け取らない」設定なら断る（既に受け取った分はそのまま）
   if (parsed.output.coinType === "PREMIUM" && recipientSettings.rejectPremium) {
     return json({ error: PREMIUM_SUPPORT_REJECTED_MESSAGE, code: "PREMIUM_SUPPORT_REJECTED" }, 403);
+  }
+  // プレミアムコインの推しはオリジナル作品（オリジナル系のタグ付き）への推しだけ。作品を通さない推し（プロフィール・アプリ）もプレミアムは不可
+  if (parsed.output.coinType === "PREMIUM") {
+    const supportWorkId = parsed.output.workId === null || parsed.output.workId === void 0 ? workIdFromSupportSource(parsed.output.source) : String(parsed.output.workId);
+    if (!await isOriginalWorkForSupport(c.env.SYSTEM_CORE ?? null, supportWorkId, parsed.output.recipientUserId)) {
+      return json({ error: PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE, code: "PREMIUM_SUPPORT_ORIGINAL_ONLY" }, 403);
+    }
   }
   // クリエイター報酬にするか（参加者・全年齢の作品だけ。読み取りは参加者の 1 行と、参加者のときだけ作品 1 行）
   const decision = await decideSupportEarnings({

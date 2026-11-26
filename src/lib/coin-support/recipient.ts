@@ -4,6 +4,30 @@ import { getCreatorPayoutConfig } from "../creator-payouts/config"
 
 export const PREMIUM_SUPPORT_REJECTED_MESSAGE = "この作者はプレミアムコインでの応援を受け付けていません"
 export const SUPPORT_REJECTED_MESSAGE = "この作者は推しを受け付けていません"
+export const PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE = "プレミアムコインでの推しは、オリジナル作品（「オリジナル」などのタグが付いた作品）だけに使えます"
+
+/**
+ * オリジナル作品とみなすタグ（Web のホーム「オリジナルのみ」の ORIGINAL_WORK_TAG_NAMES と同じ。tags.name は NOCASE）。
+ * 二次創作にお金が動かないよう、プレミアムコインの推しはこのタグが付いた作品だけ（作者の申告）
+ */
+export const ORIGINAL_WORK_TAG_NAMES = ["オリジナル", "オリジナルキャラ", "オリジナルキャラクター", "オリキャラ", "創作", "一次創作", "original"]
+
+/** 受け取る人の作品で、オリジナル系のタグが付いているか（core の works・work_tags を作品 id で読む）。読めないときは付いていない扱い */
+export const isOriginalWorkForSupport = async (core, workId, recipientUserId) => {
+  if (!core || !/^\d+$/.test(String(workId ?? "")) || !/^\d+$/.test(String(recipientUserId ?? ""))) return false
+  try {
+    const row = await core
+      .prepare(
+        `SELECT 1 AS hit FROM works w JOIN work_tags t ON t.work_id = w.id JOIN tags g ON g.id = t.tag_id WHERE w.id = ? AND w.userId = ? AND w.is_deleted = 0 AND t.is_deleted = 0 AND g.name IN (${ORIGINAL_WORK_TAG_NAMES.map(() => "?").join(", ")}) LIMIT 1`,
+      )
+      .bind(Number(workId), Number(recipientUserId), ...ORIGINAL_WORK_TAG_NAMES)
+      .first()
+    return Boolean(row?.hit)
+  } catch (error) {
+    console.log(JSON.stringify({ event: "coin_support.original_check_failed", message: String(error?.message ?? error) }))
+    return false
+  }
+}
 
 /**
  * 受け取る人の推しの設定（core の user_settings、Web・アプリの設定で変える）。
