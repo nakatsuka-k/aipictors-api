@@ -1,6 +1,6 @@
 // @ts-nocheck -- 本番バンドル (aipictors-api 2026-06-20) から復元。型は順次付け直す
 import { Hono as Hono2 } from "hono"
-import { boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
+import { boolean, literal, nullable, number, object, optional, safeParse, string, union, unknown } from "valibot"
 import { requireInternalAuth } from "../lib/auth"
 import { getDb } from "../lib/db"
 import { json } from "../lib/json"
@@ -61,7 +61,15 @@ export var cancelCurrentSchema = object({
   userEmail: optional(nullable(string())),
   // 解約の理由（lib/retention.ts の CANCEL_REASONS）。任意
   reason: optional(nullable(string())),
-  reasonNote: optional(nullable(string()))
+  reasonNote: optional(nullable(string())),
+  // 理由ごとの追加質問の答え（lib/leave-survey.ts の sanitizeLeaveDetails）。任意
+  reasonDetails: optional(nullable(unknown()))
+});
+export var cancelReasonSchema = object({
+  userId: string(),
+  reason: string(),
+  reasonNote: optional(nullable(string())),
+  reasonDetails: optional(nullable(unknown()))
 });
 export var changePlanSchema = object({
   userId: string(),
@@ -124,6 +132,23 @@ subscriptionRoutes.post("/unpause-current", async (c) => {
     return json({ error: result.error }, result.status ?? 500);
   }
   return json({ error: null, data: null });
+});
+// 解約の理由だけを残す（アプリのストア課金は解約をストアの画面でするので、ストアの管理画面を開く前にここへ送る）
+subscriptionRoutes.post("/cancel-reason", async (c) => {
+  const parsed = safeParse(cancelReasonSchema, await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return json({ error: "Invalid body" }, 400);
+  }
+  const db = await getDb(c.env);
+  const current = await getCurrentSubscription(db, parsed.output.userId);
+  await saveCancelReason(db, {
+    userId: parsed.output.userId,
+    current,
+    reason: parsed.output.reason,
+    note: parsed.output.reasonNote,
+    details: parsed.output.reasonDetails
+  });
+  return json({ error: null, data: { ok: true } });
 });
 subscriptionRoutes.get("/current/:userId", async (c) => {
   const db = await getDb(c.env);
@@ -317,7 +342,8 @@ subscriptionRoutes.post("/cancel-current", async (c) => {
       userId: parsed.output.userId,
       current,
       reason: parsed.output.reason,
-      note: parsed.output.reasonNote
+      note: parsed.output.reasonNote,
+      details: parsed.output.reasonDetails
     }).catch((error) => console.error("[subscriptions.cancel-current] failed to save reason", error));
   }
   const stripeSubscriptionId = getString(current, "stripe_subscription_id");

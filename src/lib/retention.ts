@@ -4,6 +4,7 @@ import { getNow } from "./db"
 import { escapeHtml, formatJstDate } from "./subscription-cancellation-email"
 import { RENEWAL_BONUS_COINS } from "./loyalty"
 import { getStripe } from "./subscription-stripe"
+import { sanitizeLeaveDetails } from "./leave-survey"
 
 /**
  * 解約を減らすための仕組み
@@ -32,16 +33,19 @@ export var saveCancelReason = async (db, props) => {
   const months = props.current?.created_at
     ? Math.round(((getNow() - Number(props.current.created_at)) / 86400 / 30) * 10) / 10
     : null;
+  // 理由ごとの追加質問の答え（lib/leave-survey.ts）。古い画面からは来ない
+  const details = sanitizeLeaveDetails(props.details);
   await db.execute(
-    `INSERT INTO subscription_cancel_reasons(user_id, pass_type, reason, note, months, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO subscription_cancel_reasons(user_id, pass_type, reason, note, months, created_at${details ? ", details" : ""})
+     VALUES ($1, $2, $3, $4, $5, $6${details ? ", $7" : ""})`,
     [
       String(props.userId),
       props.current?.type ?? null,
       reason,
       typeof props.note === "string" ? props.note.trim().slice(0, 500) || null : null,
       months,
-      getNow()
+      getNow(),
+      ...(details ? [JSON.stringify(details)] : [])
     ]
   );
 };

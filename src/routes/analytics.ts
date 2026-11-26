@@ -15,6 +15,7 @@ import { listUsersMonths, nextMonth } from "../lib/analytics-users"
 import { getCostBreakdown } from "../lib/cost-breakdown"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
+import { getLeaveReasonStats } from "../lib/leave-survey"
 
 /**
  * 分析ページ（/admin/analytics）と運営の分析用の日別の数字
@@ -43,6 +44,14 @@ analyticsRoutes.get("/daily", async (c) => {
     getCurrentSubscriptionCounts(db, getNow()),
   ]);
   return json({ days: rows, current: { subscriptions: current, at: getNow() } });
+});
+
+/** 解約・退会の理由と追加質問の集計（?days=90、最大 365） */
+analyticsRoutes.get("/leave-reasons", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const days = Math.min(Math.max(Number.parseInt(c.req.query("days") ?? "90", 10) || 90, 1), 365);
+  const db = await getDb(c.env);
+  return json(await getLeaveReasonStats(db, days));
 });
 
 /** 収支（今日のここまで・今月・月末の見込み）。?fresh=1 で 10 分のキャッシュを使わない */
