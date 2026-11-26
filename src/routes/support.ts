@@ -27,7 +27,7 @@ supportRoutes.use("*", requireInternalAuth);
 
 // 有人のサポートはないので、AI で解決できないときは Discord を案内する
 var DISCORD_NOTICE =
-  "AI で解決できないご相談は、Aipictors の Discord サーバー（https://discord.gg/hcQggQEYfn ）でご相談ください。不具合・要望は「🔧欲しい機能・不具合・意見」、使い方の質問は「📋なんでも質問してね」チャンネルへ。ユーザーID・作品の URL・日時・画面のメッセージを書くと早く解決します（カード番号・パスワード・メールアドレスは書かないでください）。";
+  "AI で解決できないご相談は、Aipictors の Discord サーバー（https://discord.gg/7jA2MmtvtR ）でご相談ください。不具合・要望は「🔧欲しい機能・不具合・意見」、使い方の質問は「📋なんでも質問してね」チャンネルへ。ユーザーID・作品の URL・日時・画面のメッセージを書くと早く解決します（カード番号・パスワード・メールアドレスは書かないでください）。";
 
 var loadDb = async (c) => {
   const db = await getDb(c.env);
