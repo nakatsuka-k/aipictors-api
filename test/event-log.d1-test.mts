@@ -78,8 +78,10 @@ assert.equal(firstView.users, 1)
 const sourceRows = [
   // google → 作品 → 生成画面 → コイン不足 → プラン → 決済 → 有料プラン
   ...rows.slice(0, 8).map((r) => (r.event === "purchase" ? { ...r, extra: '{"item":"pass"}' } : r)),
-  // direct で 1 ページだけ
+  // direct で 1 ページだけ（サイドバーのプランのリンク・広告枠が出ただけでは回遊・案内を見たに数えない）
   rows[8],
+  row({ sid: "s2", event: "plus_nav_view", source: "sidebar", page: "top", path: "/", client_ms: 1100, device: "desktop" }),
+  row({ sid: "s2", event: "dlsite_view", source: "r_post_side", page: "top", path: "/", client_ms: 1200, device: "desktop" }),
   // x からプランのページに直接来てお試しを始めた
   row({ sid: "s4", page: "plus", path: "/plus", referrer: "x", client_ms: 1000 }),
   row({ sid: "s4", event: "trial_checkout", source: "plus", page: "plus", path: "/plus", client_ms: 2000, auth: "in", user: "u4" }),

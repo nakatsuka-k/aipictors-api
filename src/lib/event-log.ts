@@ -112,12 +112,16 @@ var subscriptionKind = (e) => {
 };
 export var SOURCE_FUNNEL_STEPS = ["visit", "explore", "upsell_view", "plan", "checkout", "subscribe"];
 export var SOURCE_FUNNEL_KINDS = { pass: 91, prepaid: 92, trial: 93 };
+/** 画面に出ただけの表示（サイドバーのプランのリンク・広告枠など）。回遊・案内を見たには数えない */
+var isImpression = (e) => e.event !== "page_view" && e.event.endsWith("_view");
+/** サイドバー・メニューのプランへのリンクはほぼ全ページに出ているので、案内を見たに数えない */
+var PASSIVE_UPSELL_VIEW = /^plus_nav_view$/;
 var sourceDepth = (e, index) => {
   if (subscriptionKind(e)) return 6;
   if (isPlanCheckout(e)) return 5;
   if (match(UPSELL_CLICK)(e) || view("plus")(e)) return 4;
-  if (match(UPSELL_VIEW)(e)) return 3;
-  if (index > 0) return 2;
+  if (match(UPSELL_VIEW)(e) && !PASSIVE_UPSELL_VIEW.test(e.event)) return 3;
+  if (index > 0 && !isImpression(e)) return 2;
   return e.event === "page_view" ? 1 : 0;
 };
 /** セッションの流入元。サイト内の移動から始まったセッション（30 分空いて切り替わったなど）は internal */
