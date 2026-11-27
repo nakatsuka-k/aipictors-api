@@ -3,7 +3,7 @@ import { Hono as Hono2 } from "hono"
 import { array, boolean, literal, nullable, number, object, optional, safeParse, string, union } from "valibot"
 import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } from "../lib/amazon-exchange"
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
-import { PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE, PREMIUM_SUPPORT_REJECTED_MESSAGE, SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus, isOriginalWorkForSupport } from "../lib/coin-support/recipient"
+import { PREMIUM_SUPPORT_REJECTED_MESSAGE, PREMIUM_SUPPORT_USER_ONLY_MESSAGE, SUPPORT_REJECTED_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
 import { workIdFromSupportSource } from "../lib/creator-payouts/config"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
@@ -329,11 +329,12 @@ coinsRoutes.post("/support", async (c) => {
   if (parsed.output.coinType === "PREMIUM" && recipientSettings.rejectPremium) {
     return json({ error: PREMIUM_SUPPORT_REJECTED_MESSAGE, code: "PREMIUM_SUPPORT_REJECTED" }, 403);
   }
-  // 作品への推しのプレミアムコインはオリジナル作品（運営の判定、未判定ならオリジナル系のタグ付き）だけ。作品を通さない、ユーザーへの推し（プロフィール・アプリ）はどんな作品を投稿している人にもプレミアムで推せる
+  // プレミアムコインの推しはユーザーへの推し（プロフィール・アプリのユーザーの推し）だけ。作品への推しは、オリジナル作品でも二次創作でもフリーコインだけ
+  // （作品にお金が動くと二次創作か・互助会かで揉めるため。すでに受け取った分はそのまま）
   if (parsed.output.coinType === "PREMIUM") {
     const supportWorkId = parsed.output.workId === null || parsed.output.workId === void 0 ? workIdFromSupportSource(parsed.output.source) : String(parsed.output.workId);
-    if (supportWorkId !== null && !await isOriginalWorkForSupport(c.env.SYSTEM_CORE ?? null, supportWorkId, parsed.output.recipientUserId, db)) {
-      return json({ error: PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE, code: "PREMIUM_SUPPORT_ORIGINAL_ONLY" }, 403);
+    if (supportWorkId !== null) {
+      return json({ error: PREMIUM_SUPPORT_USER_ONLY_MESSAGE, code: "PREMIUM_SUPPORT_USER_ONLY" }, 403);
     }
   }
   // クリエイター報酬にするか（参加者・全年齢の作品だけ。読み取りは参加者の 1 行と、参加者のときだけ作品 1 行）

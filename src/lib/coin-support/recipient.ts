@@ -6,6 +6,8 @@ import { getWorkOriginalJudgment } from "../work-original-judgments"
 export const PREMIUM_SUPPORT_REJECTED_MESSAGE = "この作者はプレミアムコインでの応援を受け付けていません"
 export const SUPPORT_REJECTED_MESSAGE = "この作者は推しを受け付けていません"
 export const PREMIUM_SUPPORT_ORIGINAL_ONLY_MESSAGE = "プレミアムコインでの推しは、オリジナル作品だけに使えます"
+/** 作品への推しはフリーコインだけ。旧アプリは文言に「オリジナル作品」があればプレミアムを外して出し直すので、その語を残す */
+export const PREMIUM_SUPPORT_USER_ONLY_MESSAGE = "プレミアムコインでの推しは、作品ではなくユーザー（プロフィール）への推しだけに使えます（オリジナル作品も同じです）"
 
 /**
  * オリジナル作品とみなすタグ（Web のホーム「オリジナルのみ」の ORIGINAL_WORK_TAG_NAMES と同じ。tags.name は NOCASE）。
