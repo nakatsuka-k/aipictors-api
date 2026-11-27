@@ -94,6 +94,39 @@ export var FUNNELS = {
   ],
 };
 
+/**
+ * 流入元ごとのサブスク加入までの到達（event_source_funnel_daily）。
+ * セッションの流入元（最初のページ表示の referrer）× 端末ごとに、どの段階まで進んだかを数える。
+ * 順番は問わず「いちばん先まで進んだ段階」を取り、それより前の段階も通ったものとする
+ * （プランのページに直接来て加入した人も、案内を見た・押したに数える）。コインの購入はサブスクに数えない
+ */
+var COIN_CHECKOUT = /^(member_extra_coins_checkout)$/;
+var isPlanCheckout = (e) => match(CHECKOUT)(e) && !COIN_CHECKOUT.test(e.event) && e.item !== "coins";
+/** サブスク加入の内訳: 有料プラン（月額・年額）・前払いパス・無料お試しの開始 */
+var subscriptionKind = (e) => {
+  if (e.event === "trial_started") return "trial";
+  if (e.event !== "purchase") return null;
+  if (e.item === "pass") return "pass";
+  if (e.item === "prepaid_pass") return "prepaid";
+  return null;
+};
+export var SOURCE_FUNNEL_STEPS = ["visit", "explore", "upsell_view", "plan", "checkout", "subscribe"];
+export var SOURCE_FUNNEL_KINDS = { pass: 91, prepaid: 92, trial: 93 };
+var sourceDepth = (e, index) => {
+  if (subscriptionKind(e)) return 6;
+  if (isPlanCheckout(e)) return 5;
+  if (match(UPSELL_CLICK)(e) || view("plus")(e)) return 4;
+  if (match(UPSELL_VIEW)(e)) return 3;
+  if (index > 0) return 2;
+  return e.event === "page_view" ? 1 : 0;
+};
+/** セッションの流入元。サイト内の移動から始まったセッション（30 分空いて切り替わったなど）は internal */
+var sessionSource = (views) => {
+  if (views.length === 0) return "unknown";
+  const referrer = views[0].referrer || "direct";
+  return referrer.startsWith("nav:") ? "internal" : referrer;
+};
+
 /** Analytics Engine の SQL API（読み取りの権限があるトークン） */
 var queryEvents = async (token, sql) => {
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/analytics_engine/sql`, {
@@ -149,6 +182,13 @@ var toNumber = (value) => {
  * 生のイベントを 1 行ずつ受け取ってまとめる。
  * 1 日 数十万行になるので、まとめに使う列だけを、同じ文字列は 1 つにして持つ（Worker のメモリは 128MB）
  */
+/** extra（JSON）の item（purchase・begin_checkout の pass / prepaid_pass / coins）だけを取り出す */
+var itemOf = (extra) => {
+  if (typeof extra !== "string" || !extra.includes('"item"')) return "";
+  const found = /"item":"([a-z_]{1,32})"/.exec(extra);
+  return found ? found[1] : "";
+};
+
 export var createEventSummarizer = () => {
   const sessions = new Map();
   const strings = new Map();
@@ -178,6 +218,7 @@ export var createEventSummarizer = () => {
       user: intern(raw.user),
       auth: intern(raw.auth),
       device: intern(raw.device),
+      item: intern(itemOf(raw.extra)),
     };
     let session = sessions.get(sid);
     if (!session) {
@@ -203,6 +244,7 @@ var finishSummary = (sessions, dcEvents) => {
   const pages = new Map();
   const paths = new Map();
   const entries = new Map();
+  const sources = new Map();
   const funnels = Object.fromEntries(
     Object.entries(FUNNELS).map(([name, steps]) => [name, steps.map(() => ({ sessions: 0, users: new Set() }))])
   );
@@ -250,6 +292,28 @@ var finishSummary = (sessions, dcEvents) => {
       entry.sessions += 1;
       if (bounce) entry.bounces += 1;
     }
+    let depth = 0;
+    const kinds = new Set();
+    session.events.forEach((e, index) => {
+      depth = Math.max(depth, sourceDepth(e, index));
+      const kind = subscriptionKind(e);
+      if (kind) kinds.add(kind);
+    });
+    if (depth > 0) {
+      const sourceKey = [sessionSource(views), session.device || ""].join("\u0001");
+      const steps = bump(sources, sourceKey, () => ({
+        steps: SOURCE_FUNNEL_STEPS.map(() => ({ sessions: 0, users: new Set() })),
+        kinds: Object.fromEntries(Object.keys(SOURCE_FUNNEL_KINDS).map((kind) => [kind, { sessions: 0, users: new Set() }])),
+      }));
+      for (let i = 0; i < depth; i++) {
+        steps.steps[i].sessions += 1;
+        if (session.user) steps.steps[i].users.add(session.user);
+      }
+      for (const kind of kinds) {
+        steps.kinds[kind].sessions += 1;
+        if (session.user) steps.kinds[kind].users.add(session.user);
+      }
+    }
     for (const [name, steps] of Object.entries(FUNNELS)) {
       let reached = 0;
       for (const e of session.events) {
@@ -285,6 +349,29 @@ var finishSummary = (sessions, dcEvents) => {
       const [referrer, page, device] = key.split("\u0001");
       return { referrer, page, device, sessions: v.sessions, bounces: v.bounces };
     }),
+    sources: [...sources.entries()].flatMap(([key, value]) => {
+      const [referrer, device] = key.split("\u0001");
+      return [
+        ...value.steps.map((step, i) => ({
+          referrer,
+          device,
+          step: i + 1,
+          stepName: SOURCE_FUNNEL_STEPS[i],
+          sessions: step.sessions,
+          users: step.users.size,
+        })),
+        ...Object.entries(SOURCE_FUNNEL_KINDS)
+          .filter(([kind]) => value.kinds[kind].sessions > 0)
+          .map(([kind, step]) => ({
+            referrer,
+            device,
+            step,
+            stepName: kind,
+            sessions: value.kinds[kind].sessions,
+            users: value.kinds[kind].users.size,
+          })),
+      ];
+    }),
     funnels: Object.entries(funnels).flatMap(([funnel, steps]) =>
       steps.map((step, i) => ({ funnel, step: i + 1, stepName: FUNNELS[funnel][i][0], sessions: step.sessions, users: step.users.size }))
     ),
@@ -314,7 +401,14 @@ var insertStatements = (table, columns, rows) => {
 export var saveEventSummary = async (db, day, summary, archiveKey) => {
   const withDay = (rows) => rows.map((row) => ({ ...row, day }));
   const statements = [
-    ...["event_daily", "event_page_daily", "event_path_daily", "event_funnel_daily", "event_entry_daily"].map((table) => ({
+    ...[
+      "event_daily",
+      "event_page_daily",
+      "event_path_daily",
+      "event_funnel_daily",
+      "event_entry_daily",
+      "event_source_funnel_daily",
+    ].map((table) => ({
       text: `DELETE FROM ${table} WHERE day = $1`,
       params: [day],
     })),
@@ -331,6 +425,11 @@ export var saveEventSummary = async (db, day, summary, archiveKey) => {
       withDay(summary.funnels.map((row) => ({ ...row, step_name: row.stepName })))
     ),
     ...insertStatements("event_entry_daily", ["day", "referrer", "page", "device", "sessions", "bounces"], withDay(summary.entries)),
+    ...insertStatements(
+      "event_source_funnel_daily",
+      ["day", "referrer", "device", "step", "step_name", "sessions", "users"],
+      withDay((summary.sources ?? []).map((row) => ({ ...row, step_name: row.stepName })))
+    ),
     {
       text: `INSERT INTO event_rollup_runs (day, events, dc_events, sessions, users, archive_key, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (day) DO UPDATE SET events = EXCLUDED.events, dc_events = EXCLUDED.dc_events, sessions = EXCLUDED.sessions,
@@ -428,6 +527,13 @@ export var listEventSummary = async (db, { from, to, kind, event }) => {
   if (kind === "entries") {
     return db.query(
       `SELECT day, referrer, page, device, sessions, bounces FROM event_entry_daily WHERE day BETWEEN $1 AND $2 ORDER BY day, sessions DESC`,
+      range
+    );
+  }
+  if (kind === "sources") {
+    return db.query(
+      `SELECT referrer, device, step, step_name, SUM(sessions) AS sessions, SUM(users) AS users, COUNT(DISTINCT day) AS days
+      FROM event_source_funnel_daily WHERE day BETWEEN $1 AND $2 GROUP BY referrer, device, step, step_name ORDER BY referrer, device, step`,
       range
     );
   }

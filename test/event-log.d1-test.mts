@@ -74,6 +74,40 @@ assert.deepEqual(
 const firstView = summary.events.find((e: any) => e.event === "page_view" && e.page === "post")
 assert.equal(firstView.users, 1)
 
+// 流入元ごとのサブスクまでの到達: いちばん先まで進んだ段階まで数える（順番は問わない）
+const sourceRows = [
+  // google → 作品 → 生成画面 → コイン不足 → プラン → 決済 → 有料プラン
+  ...rows.slice(0, 8).map((r) => (r.event === "purchase" ? { ...r, extra: '{"item":"pass"}' } : r)),
+  // direct で 1 ページだけ
+  rows[8],
+  // x からプランのページに直接来てお試しを始めた
+  row({ sid: "s4", page: "plus", path: "/plus", referrer: "x", client_ms: 1000 }),
+  row({ sid: "s4", event: "trial_checkout", source: "plus", page: "plus", path: "/plus", client_ms: 2000, auth: "in", user: "u4" }),
+  row({ sid: "s4", event: "trial_started", source: "success", page: "plus", path: "/plus/success", client_ms: 3000, auth: "in", user: "u4" }),
+  // x から来てコインだけ買った（サブスクに数えない。決済もコインは数えない）
+  row({ sid: "s5", page: "post", path: "/posts/2", referrer: "x", client_ms: 1000 }),
+  row({ sid: "s5", event: "shortage_view", page: "generation", path: "/generation", client_ms: 2000 }),
+  row({ sid: "s5", event: "begin_checkout", page: "generation", path: "/generation", client_ms: 3000, extra: '{"item":"coins"}' }),
+  row({ sid: "s5", event: "purchase", page: "generation", path: "/generation", client_ms: 4000, extra: '{"item":"coins"}' }),
+  // 30 分空いてサイト内の移動から始まったセッションは internal
+  row({ sid: "s6", page: "post", path: "/posts/3", referrer: "nav:top", client_ms: 1000 }),
+]
+const sourceSummary = summarizeEvents(sourceRows)
+const sourceSteps = (referrer: string) =>
+  sourceSummary.sources
+    .filter((r: any) => r.referrer === referrer)
+    .map((r: any) => [r.stepName, r.sessions])
+assert.deepEqual(sourceSteps("google"), [
+  ["visit", 1], ["explore", 1], ["upsell_view", 1], ["plan", 1], ["checkout", 1], ["subscribe", 1], ["pass", 1],
+])
+assert.deepEqual(sourceSteps("direct"), [
+  ["visit", 1], ["explore", 0], ["upsell_view", 0], ["plan", 0], ["checkout", 0], ["subscribe", 0],
+])
+assert.deepEqual(sourceSteps("x"), [
+  ["visit", 2], ["explore", 2], ["upsell_view", 2], ["plan", 1], ["checkout", 1], ["subscribe", 1], ["trial", 1],
+])
+assert.deepEqual(sourceSteps("internal").map((r: any[]) => r[1]), [1, 0, 0, 0, 0, 0])
+
 // rollup: SQL API と R2 の代わり
 const day = "2026-11-27"
 const lines = rows.map((r) => JSON.stringify(r)).join("\n") + "\n"
@@ -157,6 +191,21 @@ assert.deepEqual(
     ["shortage_view", "free", 1],
   ].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
 )
+res = await call(`/internal/analytics/events?from=${day}&to=${day}&kind=sources`)
+assert.equal(res.status, 200)
+// rows の purchase は item が無いのでサブスクには数えない（決済を始めたところまで）
+assert.deepEqual(
+  res.body.rows.filter((r: any) => r.referrer === "google").map((r: any) => [r.step_name, r.sessions, r.users, r.days]),
+  [
+    ["visit", 1, 1, 1],
+    ["explore", 1, 1, 1],
+    ["upsell_view", 1, 1, 1],
+    ["plan", 1, 1, 1],
+    ["checkout", 1, 1, 1],
+    ["subscribe", 0, 0, 1],
+  ],
+)
+assert.equal(res.body.rows.filter((r: any) => r.referrer === "direct" && r.device === "desktop").length, 6)
 res = await call(`/internal/analytics/events?from=${day}&to=${day}&kind=runs`)
 assert.equal(res.body.rows[0].events, 9)
 assert.equal(res.body.rows[0].dc_events, 1)

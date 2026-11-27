@@ -145,7 +145,7 @@ analyticsRoutes.post("/users/collect", async (c) => {
 
 /**
  * 操作の記録の日別のまとめ（lib/event-log.ts）。?from=YYYY-MM-DD&to=YYYY-MM-DD（既定は直近 30 日）
- * &kind=events（既定。&event= で前方一致）| funnels | pages | paths | entries | runs
+ * &kind=events（既定。&event= で前方一致）| funnels | pages | paths | entries | sources（流入元ごとのサブスクまでの到達、期間の合計）| runs
  */
 analyticsRoutes.get("/events", async (c) => {
   if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
@@ -153,7 +153,7 @@ analyticsRoutes.get("/events", async (c) => {
   const to = pattern.test(c.req.query("to") ?? "") ? c.req.query("to") : jstDayBefore(getNow(), 1);
   const from = pattern.test(c.req.query("from") ?? "") ? c.req.query("from") : jstDayBefore(getNow(), 30);
   const kind = c.req.query("kind") ?? "events";
-  if (!["events", "funnels", "pages", "paths", "entries", "runs"].includes(kind)) return json({ error: "Invalid kind" }, 400);
+  if (!["events", "funnels", "pages", "paths", "entries", "sources", "runs"].includes(kind)) return json({ error: "Invalid kind" }, 400);
   const db = await getDb(c.env);
   const rows = await listEventSummary(db, { from, to, kind, event: c.req.query("event") ?? "" });
   return json({ from, to, kind, rows });
