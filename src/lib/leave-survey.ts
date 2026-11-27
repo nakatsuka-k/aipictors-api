@@ -14,7 +14,10 @@ export var ACCOUNT_LEAVE_REASONS = {
   harassment: "嫌なコメント・やりとりがあった",
   community: "サイトの雰囲気・ルールが合わない",
   not_popular: "作品を見てもらえない・反応が少ない",
-  quality: "生成の品質・不具合が気になった",
+  image_quality: "生成した絵の品質が合わなかった",
+  bugs: "不具合・エラーで使えなかった",
+  // 11/27 までの選択肢（品質と不具合を分ける前）。古いアプリ（1.7.9 まで）からはまだ来る
+  quality: "品質・不具合（分ける前の回答）",
   cost: "料金・コインが合わない",
   other_service: "ほかのサービスに移る",
   new_account: "アカウントを作り直したい",
