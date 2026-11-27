@@ -197,24 +197,23 @@ await t("参加していない人への推しは今までどおり全部コイ�
   assert.equal((await earnings(creator)).length, 0)
 })
 
-await t("プレミアムコインの推し: ユーザーへの推しはどんな作品の人にも送れる。作品への推し（作品 ID・コメントの source）はオリジナル作品でも断り、コインは動かない", async () => {
+await t("推しはユーザーへの推しだけ: 作品への推し（作品 ID・コメントの source）はフリー・プレミアムとも断り、コインは動かない", async () => {
   const fan = await newUser(); const creator = await newUser()
   const fanWork = await newWork(creator, 0, false)
   const originalWork = await newWork(creator, 0)
   await buy(fan, 1000, 0)
+  await call("POST", "/internal/coins/grant", { userId: fan, freeCoins: 10, reason: "test" })
   const direct = await support(fan, creator, 10)
   assert.equal(direct.status, 200, JSON.stringify(direct.body))
-  for (const opts of [{ workId: fanWork }, { workId: originalWork }, { source: `work-comment:${originalWork}:${fan}:1` }]) {
-    const r = await support(fan, creator, 10, opts)
-    assert.equal(r.status, 403)
-    assert.equal(r.body.code, "PREMIUM_SUPPORT_USER_ONLY")
-    // 旧アプリは文言の「オリジナル作品」でプレミアムを外して出し直す
-    assert.ok(String(r.body.error).includes("オリジナル作品"))
+  assert.equal((await support(fan, creator, 1, { coinType: "FREE", source: `profile-support:f-${fan}:FREE` })).status, 200)
+  for (const coinType of ["PREMIUM", "FREE"]) {
+    for (const opts of [{ workId: fanWork }, { workId: originalWork }, { source: `work-comment:${originalWork}:${fan}:1` }]) {
+      const r = await support(fan, creator, 1, { ...opts, coinType })
+      assert.equal(r.status, 403)
+      assert.equal(r.body.code, "SUPPORT_USER_ONLY")
+    }
   }
   assert.equal(await premiumBalance(fan), 990)
-  // フリーコインなら作品へも推せる
-  await call("POST", "/internal/coins/grant", { userId: fan, freeCoins: 10, reason: "test" })
-  assert.equal((await support(fan, creator, 1, { workId: fanWork, coinType: "FREE" })).status, 200)
 })
 
 await t("参加者へのユーザーの推し: 有料コインは報酬（0.5 円/枚）になり、コインでは渡さない。pt は今までどおり", async () => {
@@ -736,7 +735,7 @@ await t("プレミアムコインでの推しを受け取らない設定: プレ
   assert.equal(rejected.body.error, "この作者はプレミアムコインでの応援を受け付けていません")
   assert.equal(await premiumBalance(sender), before)
   assert.equal((await earnings(creator)).length, earningsBefore)
-  const free = await support(sender, creator, 1, { workId: work, coinType: "FREE", source: `profile-support:free-${creator}:FREE` })
+  const free = await support(sender, creator, 1, { coinType: "FREE", source: `profile-support:free-${creator}:FREE` })
   assert.notEqual(free.status, 403)
   // 自分自身・相手なしのときは supportTarget を返さない
   const self = await call("POST", "/internal/coins/ensure-initial-grant", { userId: sender, supportTargetUserId: sender })
@@ -759,7 +758,7 @@ await t("推しを受け付けない設定: プレミアム・無料とも断り
   assert.equal(premium.status, 403)
   assert.equal(premium.body.code, "SUPPORT_REJECTED")
   assert.equal(premium.body.error, "この作者は推しを受け付けていません")
-  const free = await support(sender, creator, 1, { workId: work, coinType: "FREE", source: `profile-support:free-${creator}:FREE` })
+  const free = await support(sender, creator, 1, { coinType: "FREE", source: `profile-support:free-${creator}:FREE` })
   assert.equal(free.status, 403)
   assert.equal(await premiumBalance(sender), before)
   await CORE.prepare("UPDATE user_settings SET reject_coin_support = 0 WHERE userId = ?").bind(Number(creator)).run()
