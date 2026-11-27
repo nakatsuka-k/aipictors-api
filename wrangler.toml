@@ -80,6 +80,12 @@ bucket_name = "generative-files"
 binding = "USER_MODELS"
 bucket_name = "aipictors-user-models"
 
+# 操作の記録の生のイベント（1 日 1 ファイル events/YYYY/MM/DD.ndjson.gz、lib/event-log.ts）。期限なしで残す
+# 読み取り（Analytics Engine の SQL API）は secret CF_EVENTS_TOKEN（無ければ CF_ANALYTICS_TOKEN）
+[[r2_buckets]]
+binding = "EVENT_ARCHIVE"
+bucket_name = "aipictors-analytics"
+
 # URL（Civitai）からのモデル取り込み。50MB ずつ Range で取得して USER_MODELS に multipart で保存する
 # 任意 secret: CIVITAI_API_TOKEN（ログインが必要な LoRA の取り込みに使う。無ければそのモデルは取り込めないと表示する）
 [[workflows]]

@@ -16,6 +16,7 @@ import { getCostBreakdown } from "../lib/cost-breakdown"
 import { getDb, getNow } from "../lib/db"
 import { json } from "../lib/json"
 import { getLeaveReasonStats } from "../lib/leave-survey"
+import { listEventSummary, rollupEventDay } from "../lib/event-log"
 
 /**
  * 分析ページ（/admin/analytics）と運営の分析用の日別の数字
@@ -140,4 +141,33 @@ analyticsRoutes.post("/users/collect", async (c) => {
     results.push(await collectAnalyticsUsersDay(c.env, db, new Date(t).toISOString().slice(0, 10)));
   }
   return json({ results });
+});
+
+/**
+ * 操作の記録の日別のまとめ（lib/event-log.ts）。?from=YYYY-MM-DD&to=YYYY-MM-DD（既定は直近 30 日）
+ * &kind=events（既定。&event= で前方一致）| funnels | pages | paths | entries | runs
+ */
+analyticsRoutes.get("/events", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const pattern = /^\d{4}-\d{2}-\d{2}$/;
+  const to = pattern.test(c.req.query("to") ?? "") ? c.req.query("to") : jstDayBefore(getNow(), 1);
+  const from = pattern.test(c.req.query("from") ?? "") ? c.req.query("from") : jstDayBefore(getNow(), 30);
+  const kind = c.req.query("kind") ?? "events";
+  if (!["events", "funnels", "pages", "paths", "entries", "runs"].includes(kind)) return json({ error: "Invalid kind" }, 400);
+  const db = await getDb(c.env);
+  const rows = await listEventSummary(db, { from, to, kind, event: c.req.query("event") ?? "" });
+  return json({ from, to, kind, rows });
+});
+
+/** 操作の記録のまとめを作り直す { day: "YYYY-MM-DD" }（既定は前日。生が残っている 90 日まで） */
+analyticsRoutes.post("/events/rollup", async (c) => {
+  if (!canRead(c)) return json({ error: "Unauthorized" }, 401);
+  const body = await c.req.json().catch(() => ({}));
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(body.day ?? "") ? body.day : jstDayBefore(getNow(), 1);
+  const db = await getDb(c.env);
+  try {
+    return json(await rollupEventDay(c.env, db, day));
+  } catch (error) {
+    return json({ error: String(error?.message ?? error).slice(0, 300) }, 502);
+  }
 });
