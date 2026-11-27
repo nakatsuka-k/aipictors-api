@@ -56,6 +56,9 @@ const claimSend = async (db, userId, kind, key, now, minInterval = 0) => {
   return Number(result?.rowCount ?? 0) > 0
 }
 
+/** ほかのファイルから使う名前（推しの通知: coin-support/notify.ts） */
+export const claimPushSend = claimSend
+
 const readAppTokens = async (core, userIds) => {
   const tokens = new Map()
   const ids = [...new Set(userIds.map(String))].filter((id) => /^\d+$/.test(id))
@@ -282,13 +285,14 @@ export const runWeeklyDigestPush = async ({ env, db, core, activity, now, limit 
   for (const userId of users) {
     const token = tokens.get(userId)
     if (!token) continue
-    // 索引 (userId, notifyType, notifyTime) で種類ごとに数える
+    // 索引 (userId, notifyType, notifyTime) で種類ごとに数える。作品のない notifyType 0 はお知らせ（コイン・推しなど）なので、いいねに数えない
     const rows =
       (
         await activity
           .prepare(
             `SELECT notifyType, COUNT(*) AS count FROM notifications
-              WHERE userId = ?1 AND notifyType IN (0, 1, 2, 3) AND notifyTime > ?2 GROUP BY notifyType`,
+              WHERE userId = ?1 AND notifyType IN (0, 1, 2, 3) AND notifyTime > ?2
+                AND NOT (notifyType = 0 AND workId = 0) GROUP BY notifyType`,
           )
           .bind(Number(userId), since)
           .all()

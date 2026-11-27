@@ -5,6 +5,7 @@ import { listAmazonExchangeRequestsByUser, listAmazonExchangeRequestsForAdmin } 
 import { decideSupportEarnings } from "../lib/creator-payouts/eligibility"
 import { PREMIUM_SUPPORT_REJECTED_MESSAGE, SUPPORT_REJECTED_MESSAGE, SUPPORT_USER_ONLY_MESSAGE, getSupportRecipientSettings, getSupportRecipientStatus } from "../lib/coin-support/recipient"
 import { workIdFromSupportSource } from "../lib/creator-payouts/config"
+import { notifySupportReceived } from "../lib/coin-support/notify"
 import { requireInternalAuth } from "../lib/auth"
 import { getSupportAvailableWeekStartDates, getSupportPeriodRanking, getSupportSummary, getSupportTotals, getSupportWeeklyRanking, grantSupportCoinsAdmin, revertSupportTransferBySource, transferSupportCoins } from "../lib/coin-support"
 import { getGeminiAllowance } from "../lib/gemini-allowance";
@@ -363,6 +364,24 @@ coinsRoutes.post("/support", async (c) => {
     const status = result.code === "INSUFFICIENT_COINS" ? 409 : 400;
     const error = result.code === "INVALID_AMOUNT" ? "Invalid amount" : result.code === "INVALID_RECIPIENT" ? "Cannot support yourself" : "Insufficient coins";
     return json({ error }, status);
+  }
+  // 受け取った人へのお知らせ（サイト内通知とプッシュ）。応答は待たせない。同じ source の送り直しでは出さない
+  const notifying = result.replayed ? Promise.resolve(null) : notifySupportReceived({
+    env: c.env,
+    db,
+    core: c.env.SYSTEM_CORE ?? null,
+    activity: c.env.SYSTEM_ACTIVITY ?? null,
+    senderUserId: parsed.output.senderUserId,
+    recipientUserId: parsed.output.recipientUserId,
+    coinType: parsed.output.coinType,
+    amount: result.transferredAmount ?? parsed.output.amount,
+    isAnonymous: parsed.output.isAnonymous ?? false,
+    now: getNow()
+  });
+  try {
+    c.executionCtx.waitUntil(notifying);
+  } catch {
+    await notifying;
   }
   return json({
     error: null,

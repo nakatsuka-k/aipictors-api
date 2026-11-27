@@ -16,7 +16,7 @@ await CORE.prepare("CREATE TABLE works (id INTEGER PRIMARY KEY, title TEXT)").ru
 await CORE.prepare(
   "CREATE TABLE work_rankings (favDate TEXT, rankingType TEXT, posttype TEXT, worksR18 INTEGER, worksId INTEGER, userId INTEGER, rank INTEGER, favCount INTEGER, event_id INTEGER, PRIMARY KEY (favDate, rankingType, posttype, worksR18, worksId))",
 ).run()
-await ACTIVITY.prepare("CREATE TABLE notifications (id INTEGER PRIMARY KEY, userId INTEGER, notifyType INTEGER, notifyTime TEXT)").run()
+await ACTIVITY.prepare("CREATE TABLE notifications (id INTEGER PRIMARY KEY, userId INTEGER, notifyType INTEGER, notifyTime TEXT, workId INTEGER DEFAULT 1)").run()
 
 const TOKEN = (n: number) => `token-${n}-xxxxxxxxxxxxxxxxxxxxxxxx`
 await CORE.prepare("INSERT INTO user_profiles VALUES (1, ?1), (2, ?2), (3, NULL), (4, ?3)").bind(TOKEN(1), TOKEN(2), TOKEN(4)).run()
@@ -103,6 +103,8 @@ try {
      (1, 0, '2026-11-28T10:00:00.000+00:00'), (1, 0, '2026-11-27T10:00:00.000+00:00'), (1, 1, '2026-11-27T10:00:00.000+00:00'),
      (1, 2, '2026-11-26T10:00:00.000+00:00'), (1, 0, '2026-11-10T10:00:00.000+00:00')`,
   ).run()
+  // 作品のない notifyType 0（コイン・推しのお知らせ）はいいねに数えない
+  await ACTIVITY.prepare("INSERT INTO notifications (userId, notifyType, notifyTime, workId) VALUES (1, 0, '2026-11-28T11:00:00.000+00:00', 0)").run()
   sent.length = 0
   const digest = await push.runWeeklyDigestPush({ env, db: d1.db, core: CORE, activity: ACTIVITY, now: sunday })
   // 行があるのは 2（反応なし）と 1（下で作る）

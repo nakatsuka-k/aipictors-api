@@ -53,7 +53,9 @@ export var transferSupportCoins = async (props) => {
         transferredAmount: amount,
         senderPtAdded: ptAmount,
         recipientPtAdded: ptAmount,
-        weekStartDate
+        weekStartDate,
+        // 同じ source の送り直し（前の推しがすでに通っていた）。お知らせを二度出さない目印
+        replayed: true
       };
     }
   }
@@ -268,7 +270,9 @@ export var transferSupportCoins = async (props) => {
           transferredAmount: amount,
           senderPtAdded: ptAmount,
           recipientPtAdded: ptAmount,
-          weekStartDate
+          weekStartDate,
+          // 同じ source の送り直し（前の推しがすでに通っていた）。お知らせを二度出さない目印
+          replayed: true
         };
       }
     }
