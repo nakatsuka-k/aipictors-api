@@ -17,10 +17,21 @@ const isLoraKey = (key: string) => /lora|hada_|lokr_|\.oft_|^oft_/i.test(key)
 const isFullModelKey = (key: string) =>
   key.startsWith("model.diffusion_model.") || key.startsWith("first_stage_model.") || key.startsWith("conditioner.")
 
+// MOSS Image（OpenMOSS の DiT）の拡散モデル。ComfyUI 向けの書き出しは接頭辞なし、元の形式は model.diffusion_model. 付き
+const MOSS_MARKER_KEYS = ["video_embedder.weight", "final_linear_video.weight", "shared_block_modulation"]
+const stripDiffusionPrefix = (key: string) => key.replace(/^(model\.)?diffusion_model\./, "")
+
+/** キーの名前から MOSS Image の拡散モデルか判定する */
+export const isMossCheckpointKeys = (keys: string[]) => {
+  const stripped = new Set(keys.map(stripDiffusionPrefix))
+  return MOSS_MARKER_KEYS.every((marker) => [...stripped].some((key) => key === marker || key.startsWith(`${marker}.`)))
+}
+
 // 先頭 8 バイト（ヘッダー長, u64 LE）＋ヘッダー JSON を検証する。ヘッダーの data_offsets から求めたサイズが totalSize と一致すること。
 // strictKind=false のときは種類違いを KIND_MISMATCH にせず warnings に入れるだけ（Civitai から取り込む SDXL 以外の系統など、
 // キーの名前から種類を判定できないことがあるため）
-export type SafetensorsCheckOptions = { strictKind?: boolean; onWarning?: (message: string) => void }
+// baseModel: 登録時に選んだベースモデル。MOSS とそれ以外の取り違えは、作り直さないと生成で使えないので常に弾く
+export type SafetensorsCheckOptions = { strictKind?: boolean; baseModel?: string | null; onWarning?: (message: string) => void }
 
 export const validateSafetensorsHeader = (
   header: Uint8Array,
@@ -80,7 +91,18 @@ export const validateSafetensorsHeader = (
     if (strictKind) throw new UserModelError(400, "KIND_MISMATCH", mismatch)
     options.onWarning?.(mismatch)
   }
-  return { tensorCount: keys.length }
+  const isMoss = kind === "CHECKPOINT" && isMossCheckpointKeys(keys)
+  if (options.baseModel === "MOSS" && !isMoss) {
+    throw new UserModelError(
+      400,
+      "BASE_MODEL_MISMATCH",
+      "MOSS Image のチェックポイント（拡散モデルのファイル）ではないようです。ベースモデルを選び直してください",
+    )
+  }
+  if (isMoss && options.baseModel && options.baseModel !== "MOSS" && options.baseModel !== "OTHER") {
+    throw new UserModelError(400, "BASE_MODEL_MISMATCH", "MOSS Image のモデルのようです。ベースモデルに「MOSS Image」を選んでください")
+  }
+  return { tensorCount: keys.length, isMoss }
 }
 
 // 流れてくるバイト列をそのまま通しながら safetensors のヘッダーを検証する TransformStream。

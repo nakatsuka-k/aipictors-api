@@ -6,6 +6,8 @@ import {
   UserModelError,
   formatGb,
   getUserModelSettings,
+  userModelMaxBytes,
+  userModelTooLargeMessage,
   jstMonthRange,
   newUserModelId,
   userModelPartCount,
@@ -203,13 +205,15 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
   if (!editable.name) throw bad("INVALID_INPUT", "name を入力してください")
   const authorship = parseAuthorship(input)
 
-  const { maxBytes } = await getUserModelSettings(deps.db)
-  if (sizeBytes > maxBytes[kind]) {
-    throw new UserModelError(
-      400,
-      "TOO_LARGE",
-      `${kind === "LORA" ? "LoRA" : "チェックポイント"} は ${Math.floor(maxBytes[kind] / 1024 / 1024)}MB までです`,
-    )
+  if (editable.baseModel === "MOSS" && kind !== "CHECKPOINT") {
+    throw bad("UNSUPPORTED_BASE_MODEL", "MOSS Image はチェックポイントだけ登録できます（LoRA にはまだ対応していません）")
+  }
+  const [settings, limit] = await Promise.all([
+    getUserModelSettings(deps.db),
+    getUserModelLimit(deps.db, userId, input.planType, deps.now),
+  ])
+  if (sizeBytes > userModelMaxBytes(settings, kind, limit.planType)) {
+    throw new UserModelError(400, "TOO_LARGE", userModelTooLargeMessage(settings, kind, limit.planType))
   }
   // Civitai に同じファイルがあれば、元のモデル・作者・ライセンスを出典として入れる（登録者が作者に見えないように）
   const found = deps.findBySha256 ? await deps.findBySha256(sha256) : null
@@ -228,7 +232,7 @@ export const createUserModelUpload = async (deps: UserModelDeps, input: Record<s
     throw bad("THUMBNAIL_REQUIRED", "サムネイルにする画像を選んでください")
   }
 
-  const { planType, limitBytes } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
+  const { planType, limitBytes } = limit
   await cleanupStaleUploads(deps, userId)
 
   const id = newUserModelId()
@@ -317,9 +321,14 @@ export const uploadUserModelPart = async (
   let validationError: UserModelError | null = null
   if (input.partNumber === 1) {
     stream = stream.pipeThrough(
-      createSafetensorsValidator(size, row.kind, (e) => {
-        validationError = e
-      }),
+      createSafetensorsValidator(
+        size,
+        row.kind,
+        (e) => {
+          validationError = e
+        },
+        { baseModel: row.base_model },
+      ),
     )
     // R2 は長さの分かる stream しか受け付けない
     if (typeof FixedLengthStream !== "undefined") {

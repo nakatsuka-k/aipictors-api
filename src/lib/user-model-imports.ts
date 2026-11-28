@@ -18,6 +18,8 @@ import {
   getUserModelLimit,
   getUserModelSettings,
   newUserModelId,
+  userModelMaxBytes,
+  userModelTooLargeMessage,
   oneOf,
   optionalString,
   parseThumbnail,
@@ -33,6 +35,8 @@ import {
   type UserModelKind,
   type UserModelSourceLicense,
 } from "./user-models"
+import { resolveCoinPlanType, toPlanType } from "./daily-coins"
+import type { Db } from "./user-models/common"
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -188,6 +192,7 @@ export const mapCivitaiBaseModel = (raw: string | undefined | null) => {
   if (/^Pony$/i.test(value)) return "PONY" as const
   if (/^Illustrious$/i.test(value)) return "ILLUSTRIOUS" as const
   if (/^NoobAI$/i.test(value)) return "NOOBAI" as const
+  if (/^MOSS( Image)?$/i.test(value)) return "MOSS" as const
   return "OTHER" as const
 }
 
@@ -374,7 +379,8 @@ export const buildImportPlan = (model: CivitaiModel, version: CivitaiVersion) =>
     creatorUrl: creator ? `https://civitai.com/user/${encodeURIComponent(creator)}` : null,
     baseModel,
     sourceBaseModel,
-    baseModelSupported: baseModel !== "OTHER",
+    // MOSS Image はチェックポイントだけ（LoRA は生成で使えない）
+    baseModelSupported: baseModel !== "OTHER" && !(baseModel === "MOSS" && kind === "LORA"),
     triggerWords,
     tags,
     rating: model.nsfw ? ("R18" as const) : ("G" as const),
@@ -423,12 +429,20 @@ const loadPlan = async (deps: ImportSourceDeps, url: unknown) => {
   return buildImportPlan(model, version)
 }
 
-const tooLargeMessage = (kind: UserModelKind, maxBytes: number) =>
-  `${kind === "LORA" ? "LoRA" : "チェックポイント"} は ${Math.floor(maxBytes / 1024 / 1024)}MB までです`
+// 1 ファイルの上限はプランで変わる（チェックポイントはサブスクだけ大きい）。ログインしていないときは無料プランで見る
+const resolveImportPlanType = async (db: Db, userId: unknown, callerPlan: unknown, now: number) =>
+  typeof userId === "string" && userId ? resolveCoinPlanType(db, userId, callerPlan, now) : toPlanType(callerPlan)
 
-export const previewUserModelImport = async (deps: Pick<UserModelImportDeps, "db" | "fetch" | "civitaiToken">, input: Record<string, unknown>) => {
+export const previewUserModelImport = async (
+  deps: Pick<UserModelImportDeps, "db" | "fetch" | "civitaiToken"> & { now?: number },
+  input: Record<string, unknown>,
+) => {
   const plan = await loadPlan(deps, input.url)
-  const { maxBytes } = await getUserModelSettings(deps.db)
+  const [settings, planType] = await Promise.all([
+    getUserModelSettings(deps.db),
+    resolveImportPlanType(deps.db, input.userId, input.planType, deps.now ?? Math.floor(Date.now() / 1000)),
+  ])
+  const maxBytes = userModelMaxBytes(settings, plan.kind, planType)
   const existing = await deps.db.queryOne<{ id: string }>(
     "SELECT id FROM user_models WHERE sha256 = $1 AND status = 'READY' LIMIT 1",
     [plan.sha256],
@@ -436,8 +450,9 @@ export const previewUserModelImport = async (deps: Pick<UserModelImportDeps, "db
   const { downloadUrl: _downloadUrl, ...rest } = plan
   return {
     ...rest,
-    maxBytes: maxBytes[plan.kind],
-    tooLarge: plan.sizeBytes > maxBytes[plan.kind],
+    maxBytes,
+    tooLarge: plan.sizeBytes > maxBytes,
+    tooLargeMessage: plan.sizeBytes > maxBytes ? userModelTooLargeMessage(settings, plan.kind, planType) : null,
     // 同じファイルがすでにあれば転送せずにすぐ使える
     alreadyStored: Boolean(existing),
   }
@@ -456,9 +471,16 @@ export const startUserModelImport = async (
   if (!thumbnailUrl) {
     throw bad("THUMBNAIL_REQUIRED", "このモデルには全年齢の作例がありません。サムネイルにする画像を選んでください")
   }
-  const { maxBytes } = await getUserModelSettings(deps.db)
-  if (plan.sizeBytes > maxBytes[plan.kind]) throw new UserModelError(400, "TOO_LARGE", tooLargeMessage(plan.kind, maxBytes[plan.kind]))
-  const { planType, limitBytes } = await getUserModelLimit(deps.db, userId, input.planType, deps.now)
+  if (plan.baseModel === "MOSS" && plan.kind !== "CHECKPOINT") {
+    throw bad("UNSUPPORTED_BASE_MODEL", "MOSS Image はチェックポイントだけ取り込めます（LoRA にはまだ対応していません）")
+  }
+  const [settings, { planType, limitBytes }] = await Promise.all([
+    getUserModelSettings(deps.db),
+    getUserModelLimit(deps.db, userId, input.planType, deps.now),
+  ])
+  if (plan.sizeBytes > userModelMaxBytes(settings, plan.kind, planType)) {
+    throw new UserModelError(400, "TOO_LARGE", userModelTooLargeMessage(settings, plan.kind, planType))
+  }
   await cleanupStaleUploads(deps, userId)
 
   const existing = await deps.db.queryOne<{ id: string }>(
@@ -615,8 +637,13 @@ export const importStepStart = async (deps: UserModelImportDeps, params: UserMod
   }
   const sizeBytes = parseContentRangeTotal(probe.headers.get("content-range"))
   if (!sizeBytes || sizeBytes <= 16) throw fatal("SOURCE_ERROR", "ファイルのサイズを確認できませんでした")
-  const { maxBytes } = await getUserModelSettings(deps.db)
-  if (sizeBytes > maxBytes[row.kind]) throw fatal("TOO_LARGE", tooLargeMessage(row.kind, maxBytes[row.kind]))
+  const [settings, planType] = await Promise.all([
+    getUserModelSettings(deps.db),
+    resolveCoinPlanType(deps.db, row.user_id, null, deps.now),
+  ])
+  if (sizeBytes > userModelMaxBytes(settings, row.kind, planType)) {
+    throw fatal("TOO_LARGE", userModelTooLargeMessage(settings, row.kind, planType))
+  }
   let uploadId = row.upload_id
   if (!uploadId) {
     const upload = await deps.bucket.createMultipartUpload(row.r2_key, {
@@ -680,7 +707,7 @@ export const importStepPart = async (deps: UserModelImportDeps, input: ImportPar
         (e) => {
           validationError = e
         },
-        { strictKind: input.strictKind, onWarning: (m) => warnings.push(m) },
+        { strictKind: input.strictKind, baseModel: row.base_model, onWarning: (m) => warnings.push(m) },
       ),
     )
   }

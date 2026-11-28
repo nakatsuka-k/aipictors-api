@@ -12,6 +12,9 @@ export const updateUserModel = async (db: Db, id: string, input: Record<string, 
   const userId = requireUserId(input.userId)
   const row = await requireRow(db, id, { userId })
   const e = parseEditable(input)
+  if (e.baseModel === "MOSS" && row.kind !== "CHECKPOINT") {
+    throw bad("UNSUPPORTED_BASE_MODEL", "MOSS Image はチェックポイントだけ選べます（LoRA にはまだ対応していません）")
+  }
   // サムネイルは消せない。残っている画像があればその 1 枚目にする
   const nextSamples = e.sampleImageUrls ?? parseJsonArray(row.sample_image_urls)
   const nextThumbnailUrl =

@@ -31,7 +31,8 @@ type UserModelSourceLicenseInput = {
 
 export const USER_MODEL_KINDS = ["LORA", "CHECKPOINT"] as const
 
-export const USER_MODEL_BASE_MODELS = ["SD1.5", "SDXL", "PONY", "ILLUSTRIOUS", "NOOBAI", "OTHER"] as const
+// MOSS: MOSS Image（OpenMOSS の DiT）の派生のチェックポイント。拡散モデルだけのファイルで、テキストエンコーダー・VAE は公式の MOSS Image と共通
+export const USER_MODEL_BASE_MODELS = ["SD1.5", "SDXL", "PONY", "ILLUSTRIOUS", "NOOBAI", "MOSS", "OTHER"] as const
 
 export const USER_MODEL_RATINGS = ["G", "R15", "R18", "R18G"] as const
 
@@ -73,6 +74,9 @@ export const defaultUserModelMaxBytes: Record<UserModelKind, number> = {
   CHECKPOINT: Math.floor(7.5 * 1024 * 1024 * 1024),
 }
 
+// サブスク（LITE / STANDARD / PREMIUM）の人のチェックポイントの上限。MOSS Image の派生の bf16 は 9.5GB 前後ある
+export const defaultSubscriberCheckpointMaxBytes = 10 * GB
+
 export class UserModelError extends Error {
   constructor(
     readonly status: 400 | 403 | 404 | 409 | 411 | 416 | 500 | 502 | 503,
@@ -103,7 +107,30 @@ export const getUserModelSettings = async (db: Db) => {
   for (const kind of USER_MODEL_KINDS) {
     maxBytes[kind] = parseIntSetting(map.get(`user_models.max_bytes.${kind}`), maxBytes[kind])
   }
-  return { limitBytes, maxBytes }
+  const subscriberCheckpointMaxBytes = parseIntSetting(
+    map.get("user_models.max_bytes.CHECKPOINT.SUBSCRIPTION"),
+    defaultSubscriberCheckpointMaxBytes,
+  )
+  return { limitBytes, maxBytes, subscriberCheckpointMaxBytes }
+}
+
+type UserModelSizeSettings = Pick<Awaited<ReturnType<typeof getUserModelSettings>>, "maxBytes" | "subscriberCheckpointMaxBytes">
+
+/** 1 ファイルの上限（バイト）。チェックポイントはサブスクの人だけ大きい */
+export const userModelMaxBytes = (settings: UserModelSizeSettings, kind: UserModelKind, planType: CoinPlanType) =>
+  kind === "CHECKPOINT" && planType !== "FREE"
+    ? Math.max(settings.maxBytes.CHECKPOINT, settings.subscriberCheckpointMaxBytes)
+    : settings.maxBytes[kind]
+
+/** 上限を超えたときの文。無料プランのチェックポイントには、サブスクなら大きいものも登録できることを添える */
+export const userModelTooLargeMessage = (settings: UserModelSizeSettings, kind: UserModelKind, planType: CoinPlanType) => {
+  const max = userModelMaxBytes(settings, kind, planType)
+  const label = kind === "LORA" ? "LoRA" : "チェックポイント"
+  const sizeText = max >= GB ? formatGb(max) : `${Math.floor(max / 1024 / 1024)}MB`
+  const subscriber = userModelMaxBytes(settings, kind, "LITE")
+  return subscriber > max
+    ? `${label} は ${sizeText} までです（サブスクに加入すると ${formatGb(subscriber)} まで登録できます）`
+    : `${label} は ${sizeText} までです`
 }
 
 // 12 文字の英小文字＋数字（LoRA のファイル名 user_<id> に使うので記号と大文字を避ける）
