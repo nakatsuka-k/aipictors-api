@@ -6,6 +6,8 @@
 // - プッシュ: アプリ・ブラウザに FCM で（有料リクエストと同じ sendPush）。金額は書かず、1 人に 1 時間に 1 通まで
 // - 受け取る人が「推しを表示しない」（hide_coin_support）か、コメントの通知をオフ（notNotificationComment。推し付きコメントの通知と同じ項目）なら何もしない
 // - 匿名の推しは送った人の名前を出さない
+// - 送った人のユーザー ID を commentId に入れる（匿名は -1）。通知の行にアイコンとプロフィールへのリンクを出すため
+//   （aipictors-system の WorkAwardNotificationNode.user）。ownerUserId を -1 のままにして、古いアプリでも今までどおりコインのお知らせとして出す
 // 失敗しても推しそのものは止めない（呼ぶ側は waitUntil で投げる）
 import { claimPushSend } from "../app-push"
 import { sendPush } from "../coin-requests/notify"
@@ -45,6 +47,10 @@ const shouldNotify = async (core, recipientUserId) => {
   }
 }
 
+/** 通知の commentId に入れる送った人の ID（匿名・数字でない ID は -1） */
+export const toSenderColumn = ({ senderUserId, isAnonymous }) =>
+  !isAnonymous && /^\d+$/.test(String(senderUserId ?? "")) ? Number(senderUserId) : -1
+
 const loadUserName = async (core, userId) => {
   try {
     const row = await core
@@ -70,9 +76,9 @@ export const notifySupportReceived = async ({ env, db, core, activity, senderUse
     await activity
       .prepare(
         `INSERT INTO notifications (userId, workId, comment, stampId, ownerUserId, notifyInnerCount, notifyType, notifyTime, commentId)
-         VALUES (?1, 0, ?2, -1, -1, 0, 0, ?3, -1)`,
+         VALUES (?1, 0, ?2, -1, -1, 0, 0, ?3, ?4)`,
       )
-      .bind(Number(recipientUserId), message, notifyTime)
+      .bind(Number(recipientUserId), message, notifyTime, toSenderColumn({ senderUserId, isAnonymous }))
       .run()
     let pushed = 0
     if (db && (await claimPushSend(db, recipientUserId, "support", `${now}:${senderUserId}`, now, SUPPORT_PUSH_INTERVAL))) {

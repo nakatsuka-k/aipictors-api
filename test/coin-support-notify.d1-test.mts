@@ -81,7 +81,7 @@ try {
 
   // ふつうの推し: コインのお知らせの形で 1 行、プッシュ 1 通（金額なし）
   assert.equal(await support({ senderUserId: "100", recipientUserId: "101", coinType: "FREE", amount: 5 }), 200)
-  assert.deepEqual(await rows(101), [{ workId: 0, comment: "user100さんがあなたを推しました（フリーコイン 5）", ownerUserId: -1, notifyType: 0, commentId: -1 }])
+  assert.deepEqual(await rows(101), [{ workId: 0, comment: "user100さんがあなたを推しました（フリーコイン 5）", ownerUserId: -1, notifyType: 0, commentId: 100 }])
   assert.equal(pushes.length, 1)
   assert.equal(pushes[0].token, TOKEN)
   assert.equal(pushes[0].notification.body, "user100さんがあなたを推しました")
@@ -93,6 +93,7 @@ try {
   assert.equal(after.length, 2)
   assert.equal(after[1].comment, "匿名のユーザーがあなたを推しました（フリーコイン 2）")
   assert.doesNotMatch(after[1].comment, /user100/)
+  assert.equal(after[1].commentId, -1)
   assert.equal(pushes.length, 1)
 
   // 同じ source の送り直し（推しは二重にならない）ではお知らせも出さない
