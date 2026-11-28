@@ -48,7 +48,8 @@ export type ImportSourceDeps = {
 
 export type UserModelImportDeps = UserModelDeps & ImportSourceDeps
 
-export type UserModelImportParams = { modelId: string; downloadUrl: string }
+// planType: 取り込みを始めたときのプラン（1 ファイルの上限をそのときと同じにする。古い実行には無い）
+export type UserModelImportParams = { modelId: string; downloadUrl: string; planType?: string }
 
 export type StartImportWorkflow = (params: UserModelImportParams) => Promise<void>
 
@@ -523,7 +524,7 @@ export const startUserModelImport = async (
   })
   if (inserted === "UPLOADING") {
     try {
-      await deps.startWorkflow!({ modelId: id, downloadUrl: plan.downloadUrl })
+      await deps.startWorkflow!({ modelId: id, downloadUrl: plan.downloadUrl, planType })
     } catch (e) {
       await failUserModelImport(deps, { modelId: id, error: `workflow start failed: ${String(e)}` })
       throw new UserModelError(503, "IMPORT_UNAVAILABLE", "取り込みを開始できませんでした。しばらくしてからお試しください")
@@ -639,7 +640,7 @@ export const importStepStart = async (deps: UserModelImportDeps, params: UserMod
   if (!sizeBytes || sizeBytes <= 16) throw fatal("SOURCE_ERROR", "ファイルのサイズを確認できませんでした")
   const [settings, planType] = await Promise.all([
     getUserModelSettings(deps.db),
-    resolveCoinPlanType(deps.db, row.user_id, null, deps.now),
+    resolveCoinPlanType(deps.db, row.user_id, params.planType ?? null, deps.now),
   ])
   if (sizeBytes > userModelMaxBytes(settings, row.kind, planType)) {
     throw fatal("TOO_LARGE", userModelTooLargeMessage(settings, row.kind, planType))

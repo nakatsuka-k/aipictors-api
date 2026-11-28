@@ -884,7 +884,11 @@ await t("取り込み: QUEUED → Workflow で 3 パート転送（途中で署�
   assert.equal(r.body.data.status, "QUEUED")
   assert.equal(r.body.data.deduplicated, false)
   importedId = r.body.data.modelId
-  assert.deepEqual(startedImports.at(-1), { modelId: importedId, downloadUrl: "https://civitai.com/api/download/models/201" })
+  assert.deepEqual(startedImports.at(-1), {
+    modelId: importedId,
+    downloadUrl: "https://civitai.com/api/download/models/201",
+    planType: "FREE",
+  })
   const queued = await icall("GET", `/imports/${importedId}?userId=imp1`)
   assert.equal(queued.body.data.status, "QUEUED")
   assert.equal((await icall("GET", `/imports/${importedId}?userId=other`)).status, 404)
